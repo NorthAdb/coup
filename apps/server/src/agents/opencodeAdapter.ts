@@ -45,7 +45,7 @@ export function createOpenCodeAdapter(
         "utf8",
       );
 
-      const prompt = buildSeatDecisionUserPrompt(input.view);
+      const prompt = buildSeatDecisionUserPrompt(input.view, input.retry);
       const args = buildOpenCodeArgs({
         modelId: input.modelId,
         title: `coup-${input.view.seatId}-${input.view.requestId}`,

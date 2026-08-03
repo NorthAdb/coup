@@ -144,10 +144,28 @@ function phaseHint(phase: SeatView["publicState"]["phase"]): string {
   }
 }
 
+type AgentPhase = "idle" | "thinking" | "validating" | "retrying" | "failed";
+
+function agentPhaseLabel(phase: AgentPhase): string {
+  switch (phase) {
+    case "thinking":
+      return "Agent 思考中…";
+    case "validating":
+      return "正在校验决策…";
+    case "retrying":
+      return "正在重试…";
+    case "failed":
+      return "调用失败";
+    default:
+      return "准备中…";
+  }
+}
+
 export function App() {
   const [view, setView] = useState<SeatView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [agentPhase, setAgentPhase] = useState<AgentPhase>("idle");
   const [setupDraft, setSetupDraft] = useState<MatchSetupDraft>(() =>
     loadSetupDraft(),
   );
@@ -174,6 +192,31 @@ export function App() {
     null,
   );
   const [exchangeSelected, setExchangeSelected] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!busy || !view) {
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const response = await fetch("/api/matches/current/agent-phase");
+        if (!response.ok || cancelled) return;
+        const body = (await response.json()) as { phase?: AgentPhase };
+        if (body.phase && !cancelled) {
+          setAgentPhase(body.phase);
+        }
+      } catch {
+        /* ignore polling errors */
+      }
+    };
+    void tick();
+    const id = window.setInterval(() => void tick(), 400);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [busy, view]);
 
   async function refreshMatchList() {
     try {
@@ -379,6 +422,7 @@ export function App() {
   async function submitDecision(decision: LegalDecision, label: string) {
     if (!view) return;
     setBusy(true);
+    setAgentPhase("thinking");
     setError(null);
     try {
       const response = await fetch("/api/matches/current/decision", {
@@ -400,6 +444,7 @@ export function App() {
         if (body?.aborted && body.matchId) {
           setView(null);
           setResumableMatchId(null);
+          setAgentPhase("failed");
           await refreshMatchList();
           throw new Error(
             `技术中止（无胜者）：${body.error ?? "agent_failed"}。可在开局页从快照恢复。`,
@@ -411,6 +456,7 @@ export function App() {
       setView(body.view);
       setPendingTarget(null);
       setExchangeSelected([]);
+      setAgentPhase("idle");
     } catch (err) {
       setError(err instanceof Error ? err.message : "提交失败");
     } finally {
@@ -781,6 +827,12 @@ export function App() {
               返回开局
             </button>
           </section>
+
+          {busy ? (
+            <p className="hint" aria-live="polite">
+              {agentPhaseLabel(agentPhase)}
+            </p>
+          ) : null}
 
           {pendingTarget && activeTargetIds.length > 0 ? (
             <p className="hint">

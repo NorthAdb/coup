@@ -20,6 +20,7 @@ import {
   type ActiveMatch,
   type MatchPersistence,
 } from "./matchRuntime.js";
+import type { AgentDecisionPhase } from "./agentDecision.js";
 import { parseMatchSetup } from "./matchSetup.js";
 import {
   openMatchStore,
@@ -81,6 +82,8 @@ function abortReasonFrom(error: unknown): string {
     return "agent_failed";
   }
   const message = error.message;
+  const colon = message.indexOf(":");
+  const head = (colon >= 0 ? message.slice(0, colon) : message).trim();
   const known = new Set([
     "agent_unsupported_protocol",
     "agent_request_id_mismatch",
@@ -91,9 +94,33 @@ function abortReasonFrom(error: unknown): string {
     "agent_resume_failed",
     "agent_decision_failed",
     "agent_illegal_decision",
+    "agent_timeout",
+    "agent_cli_not_installed",
+    "agent_cli_unsupported",
+    "agent_auth_failed",
+    "agent_credentials_missing",
+    "agent_billing_unavailable",
+    "agent_model_unavailable",
+    "agent_model_forbidden",
+    "agent_tools_not_denied",
+    "agent_tool_permission_requested",
+    "agent_isolation_violated",
+    "agent_persist_failed",
+    "agent_empty_output",
+    "agent_invalid_json",
+    "agent_schema_mismatch",
+    "agent_subprocess_exited",
+    "agent_session_error",
+    "agent_rate_limited",
+    "agent_provider_transient",
   ]);
+  if (known.has(head)) return head;
   if (known.has(message)) return message;
-  if (message.startsWith("agent ")) {
+  if (
+    head.startsWith("opencode_") ||
+    head.startsWith("claude_") ||
+    message.startsWith("agent ")
+  ) {
     return "agent_failed";
   }
   // Never persist raw CLI/model text — only a stable category token.
@@ -114,6 +141,17 @@ export async function createApp(options: CreateAppOptions) {
   let activeMatch: ActiveMatch | null = resumable
     ? activeMatchFromRun(resumable)
     : null;
+  let agentPhase: AgentDecisionPhase | "idle" = "idle";
+
+  function runtimeOptions() {
+    return {
+      agentRuntime,
+      persistence,
+      onAgentPhase: (phase: AgentDecisionPhase) => {
+        agentPhase = phase;
+      },
+    };
+  }
 
   async function advanceActiveOrAbort(
     match: ActiveMatch,
@@ -121,13 +159,13 @@ export async function createApp(options: CreateAppOptions) {
     | { ok: true; match: ActiveMatch }
     | { ok: false; matchId: string; error: string }
   > {
+    agentPhase = "thinking";
     try {
-      const next = await advanceAgentSeats(match, {
-        agentRuntime,
-        persistence,
-      });
+      const next = await advanceAgentSeats(match, runtimeOptions());
+      agentPhase = "idle";
       return { ok: true, match: next };
     } catch (error) {
+      agentPhase = "failed";
       const matchId = match.state.matchId;
       const run = store.getRun(matchId);
       if (run && run.runStatus === "in_progress") {
@@ -152,6 +190,10 @@ export async function createApp(options: CreateAppOptions) {
 
   app.get("/api/matches", async (_request, reply) => {
     return reply.send({ matches: store.listRuns() });
+  });
+
+  app.get("/api/matches/current/agent-phase", async (_request, reply) => {
+    return reply.send({ phase: agentPhase });
   });
 
   app.get<{ Params: { matchId: string } }>(
@@ -193,17 +235,16 @@ export async function createApp(options: CreateAppOptions) {
         `match-${Date.now()}`,
       );
       activeMatch = activeMatchFromRun(resumed);
+      agentPhase = "thinking";
       try {
-        activeMatch = await advanceAgentSeats(activeMatch, {
-          agentRuntime,
-          persistence,
-        });
+        activeMatch = await advanceAgentSeats(activeMatch, runtimeOptions());
+        agentPhase = "idle";
       } catch (error) {
+        agentPhase = "failed";
         store.technicalAbort(activeMatch.state.matchId, abortReasonFrom(error));
         activeMatch = null;
         return reply.code(502).send({
-          error:
-            error instanceof Error ? error.message : "agent_resume_failed",
+          error: abortReasonFrom(error),
           aborted: true,
           matchId: resumed.matchId,
         });
@@ -251,20 +292,21 @@ export async function createApp(options: CreateAppOptions) {
     }
 
     try {
+      agentPhase = "thinking";
       activeMatch = await startMatch({
         seats: parsed.setup.seats,
-        agentRuntime,
-        persistence,
+        ...runtimeOptions(),
       });
+      agentPhase = "idle";
     } catch (error) {
+      agentPhase = "failed";
       const startedId = store.findResumableRun()?.matchId;
       if (startedId) {
         store.technicalAbort(startedId, abortReasonFrom(error));
       }
       activeMatch = null;
       return reply.code(502).send({
-        error:
-          error instanceof Error ? error.message : "agent_start_failed",
+        error: abortReasonFrom(error),
         aborted: Boolean(startedId),
         matchId: startedId ?? null,
       });
@@ -309,19 +351,18 @@ export async function createApp(options: CreateAppOptions) {
     const matchId = activeMatch.state.matchId;
     let result: Awaited<ReturnType<typeof submitHumanDecision>>;
     try {
-      result = await submitHumanDecision(activeMatch, body, {
-        agentRuntime,
-        persistence,
-      });
+      agentPhase = "thinking";
+      result = await submitHumanDecision(activeMatch, body, runtimeOptions());
+      agentPhase = "idle";
     } catch (error) {
+      agentPhase = "failed";
       const run = store.getRun(matchId);
       if (run && run.runStatus === "in_progress") {
         store.technicalAbort(matchId, abortReasonFrom(error));
       }
       activeMatch = null;
       return reply.code(502).send({
-        error:
-          error instanceof Error ? error.message : "agent_decision_failed",
+        error: abortReasonFrom(error),
         aborted: true,
         matchId,
       });

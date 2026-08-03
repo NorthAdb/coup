@@ -29,7 +29,7 @@ export function createClaudeAdapter(
   return {
     kind: "claude",
     async decide(input: AgentDecideInput) {
-      const prompt = buildSeatDecisionUserPrompt(input.view);
+      const prompt = buildSeatDecisionUserPrompt(input.view, input.retry);
       const args = buildClaudeArgs({
         modelId: input.modelId,
         prompt,

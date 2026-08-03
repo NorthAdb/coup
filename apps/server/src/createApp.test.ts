@@ -286,7 +286,9 @@ describe("match persistence API", () => {
           kind: "opencode",
           async decide(input) {
             decideCalls += 1;
-            if (decideCalls === 1) {
+            // First decision: two recoverable failures → technical abort.
+            // Resume then advances the same agent seat and must succeed.
+            if (decideCalls <= 2) {
               throw new Error("agent_decision_not_legal");
             }
             const decision = input.view.legalDecisions[0];
@@ -356,6 +358,8 @@ describe("match persistence API", () => {
       };
       assert.equal(failed.aborted, true);
       assert.equal(failed.matchId, matchId);
+      assert.equal(failed.error, "agent_decision_failed");
+      assert.equal(decideCalls, 2);
 
       const listed = await app.inject({ method: "GET", url: "/api/matches" });
       const matches = listed.json() as {

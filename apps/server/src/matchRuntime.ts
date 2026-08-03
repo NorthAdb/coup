@@ -15,6 +15,10 @@ import {
 } from "@coup/domain";
 import type { LegalDecision, SeatDecision, SeatView } from "@coup/protocol";
 import {
+  decideWithBoundedRetry,
+  type AgentDecisionPhase,
+} from "./agentDecision.js";
+import {
   createAgentRuntime,
   isLegalDecisionListed,
   type AgentRuntime,
@@ -45,6 +49,7 @@ export type MatchPersistence = {
 export type MatchRuntimeOptions = {
   agentRuntime?: AgentRuntime;
   persistence?: MatchPersistence;
+  onAgentPhase?: (phase: AgentDecisionPhase) => void;
 };
 
 function displayNameFor(match: ActiveMatch, seatId: string): string {
@@ -236,29 +241,39 @@ export async function advanceAgentSeats(
       continue;
     }
 
-    const view = toSeatView(current, seat.seatId);
     const cwd = await ensureSeatWorkspace(current, seat.seatId);
     const adapter = runtime.getAdapter(config.cli);
-    const seatDecision = await adapter.decide({
-      view,
-      modelId: config.modelId,
-      cwd,
+    const seatDecision = await decideWithBoundedRetry({
+      buildView: (requestId) => toSeatView(current, seat.seatId, requestId),
+      decide: async (view, signal) => {
+        const raw = await adapter.decide({
+          view,
+          modelId: config.modelId,
+          cwd,
+          retry: signal.previousErrorCategory
+            ? { previousErrorCategory: signal.previousErrorCategory }
+            : undefined,
+        });
+        options.onAgentPhase?.("validating");
+        if (raw.protocolVersion !== 1) {
+          throw new Error("agent_unsupported_protocol");
+        }
+        if (raw.requestId !== view.requestId) {
+          throw new Error("agent_request_id_mismatch");
+        }
+        if (raw.stateVersion !== current.state.stateVersion) {
+          throw new Error("agent_version_mismatch");
+        }
+        if (!isLegalDecisionListed(view.legalDecisions, raw.decision)) {
+          throw new Error("agent_decision_not_legal");
+        }
+        return raw;
+      },
+      attemptIndexBase: 1,
+      stateVersion: current.state.stateVersion,
+      seatId: seat.seatId,
+      onPhase: options.onAgentPhase,
     });
-
-    if (seatDecision.protocolVersion !== 1) {
-      throw new Error("agent_unsupported_protocol");
-    }
-    if (seatDecision.requestId !== view.requestId) {
-      throw new Error("agent_request_id_mismatch");
-    }
-    if (seatDecision.stateVersion !== current.state.stateVersion) {
-      throw new Error("agent_version_mismatch");
-    }
-    if (
-      !isLegalDecisionListed(view.legalDecisions, seatDecision.decision)
-    ) {
-      throw new Error("agent_decision_not_legal");
-    }
 
     const previous = current;
     current = commitApplied(
@@ -332,6 +347,7 @@ export async function startMatch(
   return advanceAgentSeats(match, {
     agentRuntime: options?.agentRuntime,
     persistence: options?.persistence,
+    onAgentPhase: options?.onAgentPhase,
   });
 }
 

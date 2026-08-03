@@ -22,17 +22,26 @@ export type LegalDecisionChoice = {
  * User-message payload only. Display names and history stay out of system
  * instruction regions (issue 04).
  */
-export function buildSeatDecisionUserPrompt(view: SeatView): string {
-  return [
+export function buildSeatDecisionUserPrompt(
+  view: SeatView,
+  retry?: { previousErrorCategory: string },
+): string {
+  const lines = [
     "You are a Coup seat controller.",
     "Choose exactly one entry from legalDecisions by 0-based index.",
     "Do not invent actions, targets, characters, or card ids.",
     "Do not call tools, read files, run shell commands, or use the network.",
     "Return only structured output matching the provided JSON schema.",
-    "",
-    "SeatView JSON:",
-    JSON.stringify(view),
-  ].join("\n");
+  ];
+  if (retry) {
+    lines.push(
+      "",
+      `Previous attempt failed (${retry.previousErrorCategory}). Choose again from the legalDecisions listed below.`,
+      "Do not repeat an illegal choice.",
+    );
+  }
+  lines.push("", "SeatView JSON:", JSON.stringify(view));
+  return lines.join("\n");
 }
 
 export function parseLegalDecisionChoice(

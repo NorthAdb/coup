@@ -7,6 +7,8 @@ export type AgentDecideInput = {
   modelId: string | null;
   /** Isolated working directory for this seat/session. */
   cwd: string;
+  /** Present on the bounded retry attempt only. */
+  retry?: { previousErrorCategory: string };
 };
 
 export type AgentSeatAdapter = {

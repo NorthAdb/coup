@@ -1,12 +1,51 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  startMatch,
   startTwoSeatMatch,
   submitHumanDecision,
   toSeatView,
 } from "./matchRuntime.js";
+import { defaultAgentDisplayName } from "./matchSetup.js";
 
 describe("stub match runtime", () => {
+  it("starts a multi-seat match with clockwise agent display names", () => {
+    const started = startMatch({
+      matchId: "match-four",
+      seed: "four-seed",
+      seats: [
+        {
+          seatId: "seat-1",
+          controller: "local_human",
+          displayName: "你",
+        },
+        {
+          seatId: "seat-2",
+          controller: "stub_agent",
+          displayName: defaultAgentDisplayName(0),
+        },
+        {
+          seatId: "seat-3",
+          controller: "stub_agent",
+          displayName: defaultAgentDisplayName(1),
+        },
+        {
+          seatId: "seat-4",
+          controller: "stub_agent",
+          displayName: defaultAgentDisplayName(2),
+        },
+      ],
+    });
+    const view = toSeatView(started, started.humanSeatId);
+    assert.equal(view.publicState.seats.length, 4);
+    assert.equal(view.publicState.seats[0]?.displayName, "你");
+    assert.equal(view.publicState.seats[1]?.displayName, "灰狐");
+    assert.equal(view.publicState.seats[2]?.displayName, "白塔");
+    assert.equal(view.publicState.seats[3]?.displayName, "夜枭");
+    assert.equal(view.publicState.currentSeatId, "seat-1");
+    assert.equal(view.publicState.seats[0]?.coins, 2);
+  });
+
   it("auto-plays stub income after the human declares income", () => {
     const started = startTwoSeatMatch({
       matchId: "match-runtime",

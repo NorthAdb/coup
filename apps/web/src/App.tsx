@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
 import type { LegalDecision, SeatView } from "@coup/protocol";
+import { SetupPage } from "./SetupPage";
+import {
+  buildCreateMatchPayload,
+  loadSetupDraft,
+  saveSetupDraft,
+  type MatchSetupDraft,
+} from "./matchSetup";
 
 const CHARACTER_LABEL: Record<string, string> = {
   duke: "公爵",
@@ -139,6 +146,9 @@ export function App() {
   const [view, setView] = useState<SeatView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [setupDraft, setSetupDraft] = useState<MatchSetupDraft>(() =>
+    loadSetupDraft(),
+  );
   const [pendingTarget, setPendingTarget] = useState<TargetAction | null>(
     null,
   );
@@ -158,15 +168,28 @@ export function App() {
     })();
   }, []);
 
+  function updateSetupDraft(draft: MatchSetupDraft) {
+    setSetupDraft(draft);
+    saveSetupDraft(draft);
+  }
+
   async function startMatch() {
     setBusy(true);
     setError(null);
     setPendingTarget(null);
     setExchangeSelected([]);
+    saveSetupDraft(setupDraft);
     try {
-      const response = await fetch("/api/matches", { method: "POST" });
+      const response = await fetch("/api/matches", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(buildCreateMatchPayload(setupDraft)),
+      });
       if (!response.ok) {
-        throw new Error("无法创建对局");
+        const body = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(body?.error ?? "无法创建对局");
       }
       const body = (await response.json()) as { view: SeatView };
       setView(body.view);
@@ -175,6 +198,13 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function returnToSetup() {
+    setView(null);
+    setPendingTarget(null);
+    setExchangeSelected([]);
+    setError(null);
   }
 
   async function submitDecision(decision: LegalDecision, label: string) {
@@ -278,16 +308,19 @@ export function App() {
         <p className="eyebrow">本机自用</p>
         <h1>政变</h1>
         <p className="lede">
-          2 座练习桌：你 vs Stub。完整基础行动、质疑/阻挡与终局。
+          {view
+            ? `${view.publicState.seats.length} 人桌 · 本地玩家先手，按座位顺时针。`
+            : "配置 2–6 人桌：座位 1 固定为你，其余 Agent 座位选择 CLI 与模型后开局。"}
         </p>
       </header>
 
       {!view ? (
-        <section className="panel">
-          <button type="button" disabled={busy} onClick={() => void startMatch()}>
-            开始对局
-          </button>
-        </section>
+        <SetupPage
+          draft={setupDraft}
+          busy={busy}
+          onChange={updateSetupDraft}
+          onStart={() => void startMatch()}
+        />
       ) : (
         <>
           {finished ? (
@@ -555,9 +588,9 @@ export function App() {
               type="button"
               className="ghost"
               disabled={busy}
-              onClick={() => void startMatch()}
+              onClick={() => returnToSetup()}
             >
-              重新开局
+              返回开局
             </button>
           </section>
 

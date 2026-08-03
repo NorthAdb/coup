@@ -2,7 +2,6 @@ import type {
   DomainCommand,
   DomainEvent,
   MatchState,
-  SeatController,
 } from "@coup/domain";
 import {
   activeDecidingSeatId,
@@ -12,22 +11,20 @@ import {
   projectForSeat,
 } from "@coup/domain";
 import type { LegalDecision, SeatDecision, SeatView } from "@coup/protocol";
+import {
+  defaultAgentDisplayName,
+  type MatchSetupSeatInput,
+} from "./matchSetup.js";
 
 export type ActiveMatch = {
   state: MatchState;
   events: DomainEvent[];
   humanSeatId: string;
+  displayNames: Record<string, string>;
 };
 
-function displayNameFor(
-  seatId: string,
-  controller: SeatController,
-  index: number,
-): string {
-  if (controller === "local_human") {
-    return "你";
-  }
-  return `Stub ${index}`;
+function displayNameFor(match: ActiveMatch, seatId: string): string {
+  return match.displayNames[seatId] ?? seatId;
 }
 
 export function toSeatView(
@@ -50,10 +47,10 @@ export function toSeatView(
       currentSeatId: projection.currentSeatId,
       activeSeatId: projection.activeSeatId,
       pendingAction: projection.pendingAction,
-      seats: projection.seats.map((seat, index) => ({
+      seats: projection.seats.map((seat) => ({
         seatId: seat.seatId,
         controller: seat.controller,
-        displayName: displayNameFor(seat.seatId, seat.controller, index),
+        displayName: displayNameFor(match, seat.seatId),
         coins: seat.coins,
         eliminated: seat.eliminated,
         revealedCharacters: seat.revealedCharacters,
@@ -168,25 +165,60 @@ export function advanceStubSeats(match: ActiveMatch): ActiveMatch {
   throw new Error("stub advance exceeded guard");
 }
 
-export function startTwoSeatMatch(options?: {
+export function startMatch(options?: {
   matchId?: string;
   seed?: string;
+  seats?: MatchSetupSeatInput[];
 }): ActiveMatch {
+  const seats =
+    options?.seats ??
+    ([
+      {
+        seatId: "seat-human",
+        controller: "local_human",
+        displayName: "你",
+      },
+      {
+        seatId: "seat-stub",
+        controller: "stub_agent",
+        displayName: defaultAgentDisplayName(0),
+      },
+    ] satisfies MatchSetupSeatInput[]);
+
   const created = createMatch({
     matchId: options?.matchId ?? `match-${Date.now()}`,
     seed: options?.seed ?? `seed-${Date.now()}`,
-    seats: [
-      { seatId: "seat-human", controller: "local_human" },
-      { seatId: "seat-stub", controller: "stub_agent" },
-    ],
+    seats: seats.map((seat) => ({
+      seatId: seat.seatId,
+      controller: seat.controller,
+    })),
   });
+
+  const displayNames: Record<string, string> = {};
+  for (const seat of seats) {
+    displayNames[seat.seatId] = seat.displayName;
+  }
+
+  const humanSeat = seats.find((seat) => seat.controller === "local_human");
+  if (!humanSeat) {
+    throw new Error("match requires a local human seat");
+  }
 
   const match: ActiveMatch = {
     state: created.state,
     events: created.events,
-    humanSeatId: "seat-human",
+    humanSeatId: humanSeat.seatId,
+    displayNames,
   };
   return advanceStubSeats(match);
+}
+
+/** @deprecated Prefer startMatch; kept for existing two-seat runtime tests. */
+export function startTwoSeatMatch(options?: {
+  matchId?: string;
+  seed?: string;
+}): ActiveMatch {
+  return startMatch(options);
 }
 
 export function submitHumanDecision(

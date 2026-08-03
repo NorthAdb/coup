@@ -2,7 +2,6 @@ import {
   AGENT_DISPLAY_NAMES,
   PLACEHOLDER_MODELS,
   setupReady,
-  type AgentCli,
   type MatchSetupDraft,
 } from "./matchSetup";
 
@@ -24,11 +23,9 @@ export function SetupPage({
   function setSeatCount(seatCount: number) {
     const agents = [...draft.agents];
     while (agents.length < seatCount - 1) {
-      const index = agents.length;
-      const cli: AgentCli = index % 2 === 0 ? "opencode" : "claude";
       agents.push({
-        cli,
-        modelId: PLACEHOLDER_MODELS[cli][0]!.id,
+        cli: "stub",
+        modelId: PLACEHOLDER_MODELS.stub[0]!.id,
       });
     }
     onChange({
@@ -56,9 +53,8 @@ export function SetupPage({
     <section className="panel setup" aria-label="开局配置">
       <p className="boundary">
         本机自用 MVP：复用本机已安装 OpenCode / Claude Code
-        的登录状态；应用内不配置、不存储 API key。真 CLI
-        探测与模型目录由后续能力探测接入；当前 Agent 座位以 Stub
-        占位开局。
+        的登录状态；应用内不配置、不存储 API key。所选 CLI
+        将由本地服务调用；完整就绪探测与模型目录由后续能力探测接入。
       </p>
 
       <div className="setup-row">
@@ -94,7 +90,13 @@ export function SetupPage({
                   座位 {index + 2} ·{" "}
                   {AGENT_DISPLAY_NAMES[index] ?? `Agent ${index + 1}`}
                 </strong>
-                <span className="status ready">Stub 占位 · 就绪</span>
+                <span className="status ready">
+                  {agent.cli === "opencode"
+                    ? "OpenCode · 待探测"
+                    : agent.cli === "claude"
+                      ? "Claude Code · 待探测"
+                      : "Stub · 就绪"}
+                </span>
               </div>
               <div className="setup-fields">
                 <label>
@@ -104,10 +106,11 @@ export function SetupPage({
                     disabled={busy}
                     onChange={(event) =>
                       updateAgent(index, {
-                        cli: event.target.value as AgentCli,
+                        cli: event.target.value as MatchSetupDraft["agents"][number]["cli"],
                       })
                     }
                   >
+                    <option value="stub">Stub（本地回退）</option>
                     <option value="opencode">OpenCode</option>
                     <option value="claude">Claude Code</option>
                   </select>
@@ -130,8 +133,8 @@ export function SetupPage({
                 </label>
               </div>
               <p className="meta">
-                顺时针第 {index + 2} 席；所选 CLI/模型将记住，真探测接入前以
-                Stub 对弈。
+                顺时针第 {index + 2} 席；OpenCode / Claude Code
+                走本机 CLI，Stub 为本地回退。完整门禁见后续票。
               </p>
             </li>
           );

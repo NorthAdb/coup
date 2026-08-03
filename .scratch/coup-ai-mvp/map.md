@@ -31,6 +31,8 @@
 - [汇总 MVP 规格与验收边界](issues/10-define-mvp-acceptance-spec.md) — 交付索引型 [`spec.md`](spec.md)：验收清单 + 决策链接；Chrome/Edge 桌面浏览器适配；事件列表回放与快照恢复；不做牌力评测。
 - [完整角色行动与规则边界（Stub）](issues/15-full-role-actions-stub.md) — 征税/刺杀/偷窃/交换、行动质疑窗、刺杀费用退回与阻挡不退、失败阻挡不重开、交换保密选牌、淘汰与获胜；领域确定性测试 + Stub 可打到终局。
 - [开局配置页](issues/16-match-setup-page.md) — 2–6 人、座位 1 固定人类、Agent 自动显示名、localStorage 记住人数/CLI/模型占位、Stub 开局；本机自用边界文案；真探测归 19。
+- [OpenCode 真 Agent 座位](issues/17-opencode-agent-seat.md) — 统一 `AgentSeatAdapter`；`opencode run` + 座位 cwd `permission:* deny`；SeatView→校验→领域命令；浏览器无凭据。
+- [Claude Code 真 Agent 座位](issues/18-claude-agent-seat.md) — 对等协议路径；`claude -p` JSON schema + 全工具禁用；与 OpenCode 可混座。
 
 ## Not yet specified
 

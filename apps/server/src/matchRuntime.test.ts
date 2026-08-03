@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { SeatDecision, SeatView } from "@coup/protocol";
+import { createAgentRuntime } from "./agents/index.js";
 import {
   startMatch,
   startTwoSeatMatch,
   submitHumanDecision,
   toSeatView,
+  type ActiveMatch,
 } from "./matchRuntime.js";
 import { defaultAgentDisplayName } from "./matchSetup.js";
 
 describe("stub match runtime", () => {
-  it("starts a multi-seat match with clockwise agent display names", () => {
-    const started = startMatch({
+  it("starts a multi-seat match with clockwise agent display names", async () => {
+    const started = await startMatch({
       matchId: "match-four",
       seed: "four-seed",
       seats: [
@@ -23,16 +26,19 @@ describe("stub match runtime", () => {
           seatId: "seat-2",
           controller: "stub_agent",
           displayName: defaultAgentDisplayName(0),
+          cli: "stub",
         },
         {
           seatId: "seat-3",
           controller: "stub_agent",
           displayName: defaultAgentDisplayName(1),
+          cli: "stub",
         },
         {
           seatId: "seat-4",
           controller: "stub_agent",
           displayName: defaultAgentDisplayName(2),
+          cli: "stub",
         },
       ],
     });
@@ -46,8 +52,8 @@ describe("stub match runtime", () => {
     assert.equal(view.publicState.seats[0]?.coins, 2);
   });
 
-  it("auto-plays stub income after the human declares income", () => {
-    const started = startTwoSeatMatch({
+  it("auto-plays stub income after the human declares income", async () => {
+    const started = await startTwoSeatMatch({
       matchId: "match-runtime",
       seed: "runtime-seed",
     });
@@ -63,7 +69,7 @@ describe("stub match runtime", () => {
       ),
     );
 
-    const result = submitHumanDecision(started, {
+    const result = await submitHumanDecision(started, {
       protocolVersion: 1,
       requestId: "req-human-1",
       stateVersion: started.state.stateVersion,
@@ -84,13 +90,13 @@ describe("stub match runtime", () => {
     );
   });
 
-  it("auto-passes stub block after the human declares foreign aid", () => {
-    const started = startTwoSeatMatch({
+  it("auto-passes stub block after the human declares foreign aid", async () => {
+    const started = await startTwoSeatMatch({
       matchId: "match-fa-runtime",
       seed: "runtime-seed",
     });
 
-    const result = submitHumanDecision(started, {
+    const result = await submitHumanDecision(started, {
       protocolVersion: 1,
       requestId: "req-fa-1",
       stateVersion: started.state.stateVersion,
@@ -119,14 +125,14 @@ describe("stub match runtime", () => {
     );
   });
 
-  it("can finish a match when the human assassinates twice and stub auto-plays", () => {
-    let match = startTwoSeatMatch({
+  it("can finish a match when the human assassinates twice and stub auto-plays", async () => {
+    let match: ActiveMatch = await startTwoSeatMatch({
       matchId: "match-finish-runtime",
       seed: "runtime-seed",
     });
 
-    function humanIncome() {
-      const result = submitHumanDecision(match, {
+    async function humanIncome() {
+      const result = await submitHumanDecision(match, {
         protocolVersion: 1,
         requestId: `req-income-${match.state.stateVersion}`,
         stateVersion: match.state.stateVersion,
@@ -137,8 +143,8 @@ describe("stub match runtime", () => {
       match = result.match;
     }
 
-    function humanAssassinate() {
-      const result = submitHumanDecision(match, {
+    async function humanAssassinate() {
+      const result = await submitHumanDecision(match, {
         protocolVersion: 1,
         requestId: `req-assassinate-${match.state.stateVersion}`,
         stateVersion: match.state.stateVersion,
@@ -153,9 +159,9 @@ describe("stub match runtime", () => {
     }
 
     while (match.state.seats[0]!.coins < 3) {
-      humanIncome();
+      await humanIncome();
     }
-    humanAssassinate();
+    await humanAssassinate();
     assert.equal(
       match.state.seats[1]!.influences.filter((card) => !card.revealed).length,
       1,
@@ -165,10 +171,10 @@ describe("stub match runtime", () => {
       match.state.status === "in_progress" &&
       match.state.seats[0]!.coins < 3
     ) {
-      humanIncome();
+      await humanIncome();
     }
     if (match.state.status === "in_progress") {
-      humanAssassinate();
+      await humanAssassinate();
     }
 
     const view = toSeatView(match, match.humanSeatId);
@@ -179,6 +185,91 @@ describe("stub match runtime", () => {
           event.type === "match_finished" &&
           event.winnerSeatId === "seat-human",
       ),
+    );
+  });
+
+  it("advances OpenCode and Claude seats through injected adapters", async () => {
+    const seen: Array<{ kind: string; seatId: string }> = [];
+    const fakeDecide = async (input: {
+      view: SeatView;
+    }): Promise<SeatDecision> => {
+      const legal = input.view.legalDecisions[0];
+      if (!legal) throw new Error("no legal decisions");
+      return {
+        protocolVersion: 1,
+        requestId: input.view.requestId,
+        stateVersion: input.view.stateVersion,
+        decision: legal,
+      };
+    };
+    const agentRuntime = createAgentRuntime({
+      adapters: {
+        opencode: {
+          kind: "opencode",
+          async decide(input) {
+            seen.push({ kind: "opencode", seatId: input.view.seatId });
+            return fakeDecide(input);
+          },
+        },
+        claude: {
+          kind: "claude",
+          async decide(input) {
+            seen.push({ kind: "claude", seatId: input.view.seatId });
+            return fakeDecide(input);
+          },
+        },
+      },
+    });
+
+    const started = await startMatch({
+      matchId: "match-mixed-agents",
+      seed: "runtime-seed",
+      agentRuntime,
+      seats: [
+        {
+          seatId: "seat-1",
+          controller: "local_human",
+          displayName: "你",
+        },
+        {
+          seatId: "seat-2",
+          controller: "stub_agent",
+          displayName: "灰狐",
+          cli: "opencode",
+          modelId: "opencode/placeholder",
+        },
+        {
+          seatId: "seat-3",
+          controller: "stub_agent",
+          displayName: "白塔",
+          cli: "claude",
+          modelId: "claude/placeholder",
+        },
+      ],
+    });
+
+    const result = await submitHumanDecision(
+      started,
+      {
+        protocolVersion: 1,
+        requestId: "req-mixed-1",
+        stateVersion: started.state.stateVersion,
+        decision: { type: "declare_action", action: { type: "income" } },
+      },
+      { agentRuntime },
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+
+    assert.ok(seen.some((entry) => entry.kind === "opencode"));
+    assert.ok(seen.some((entry) => entry.kind === "claude"));
+    const view = toSeatView(result.match, result.match.humanSeatId);
+    assert.equal(view.publicState.currentSeatId, "seat-1");
+    assert.ok(
+      view.projectedHistory.filter(
+        (event) =>
+          event.type === "action_resolved" && event.actionType === "income",
+      ).length >= 3,
     );
   });
 });

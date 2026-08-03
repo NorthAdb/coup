@@ -1,3 +1,6 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type {
   DomainCommand,
   DomainEvent,
@@ -12,15 +15,33 @@ import {
 } from "@coup/domain";
 import type { LegalDecision, SeatDecision, SeatView } from "@coup/protocol";
 import {
+  createAgentRuntime,
+  isLegalDecisionListed,
+  type AgentRuntime,
+} from "./agents/index.js";
+import {
   defaultAgentDisplayName,
+  type CliKind,
   type MatchSetupSeatInput,
 } from "./matchSetup.js";
+
+export type SeatAgentConfig = {
+  cli: CliKind;
+  modelId: string | null;
+};
 
 export type ActiveMatch = {
   state: MatchState;
   events: DomainEvent[];
   humanSeatId: string;
   displayNames: Record<string, string>;
+  seatAgents: Record<string, SeatAgentConfig>;
+  /** Per-seat isolated cwd for CLI sessions. */
+  seatWorkspaces: Record<string, string>;
+};
+
+export type MatchRuntimeOptions = {
+  agentRuntime?: AgentRuntime;
 };
 
 function displayNameFor(match: ActiveMatch, seatId: string): string {
@@ -126,13 +147,54 @@ function decisionToCommand(
   }
 }
 
+function agentConfigFor(
+  match: ActiveMatch,
+  seatId: string,
+): SeatAgentConfig {
+  return match.seatAgents[seatId] ?? { cli: "stub", modelId: null };
+}
+
 /** Stub always picks the first enumerated legal decision. */
 export function pickStubDecision(match: ActiveMatch, seatId: string) {
   const legal = legalDecisionsFor(match.state, seatId);
   return legal[0] ?? null;
 }
 
-export function advanceStubSeats(match: ActiveMatch): ActiveMatch {
+function applySeatDecision(
+  match: ActiveMatch,
+  seatId: string,
+  decision: LegalDecision,
+): ActiveMatch {
+  const result = applyCommand(
+    match.state,
+    decisionToCommand(seatId, decision, match.state.stateVersion),
+  );
+  if (!result.ok) {
+    throw new Error(`agent illegal decision: ${result.reason}`);
+  }
+  return {
+    ...match,
+    state: result.state,
+    events: [...match.events, ...result.events],
+  };
+}
+
+async function ensureSeatWorkspace(
+  match: ActiveMatch,
+  seatId: string,
+): Promise<string> {
+  const existing = match.seatWorkspaces[seatId];
+  if (existing) return existing;
+  const dir = await mkdtemp(path.join(tmpdir(), `coup-${seatId}-`));
+  match.seatWorkspaces[seatId] = dir;
+  return dir;
+}
+
+export async function advanceAgentSeats(
+  match: ActiveMatch,
+  options: MatchRuntimeOptions = {},
+): Promise<ActiveMatch> {
+  const runtime = options.agentRuntime ?? createAgentRuntime();
   let current = match;
   for (let guard = 0; guard < 256; guard += 1) {
     const activeSeatId = activeDecidingSeatId(current.state);
@@ -145,31 +207,53 @@ export function advanceStubSeats(match: ActiveMatch): ActiveMatch {
     if (!seat || seat.controller !== "stub_agent") {
       return current;
     }
-    const decision = pickStubDecision(current, seat.seatId);
-    if (!decision) {
-      return current;
+
+    const config = agentConfigFor(current, seat.seatId);
+    if (config.cli === "stub") {
+      const decision = pickStubDecision(current, seat.seatId);
+      if (!decision) {
+        return current;
+      }
+      current = applySeatDecision(current, seat.seatId, decision);
+      continue;
     }
-    const result = applyCommand(
-      current.state,
-      decisionToCommand(seat.seatId, decision, current.state.stateVersion),
-    );
-    if (!result.ok) {
-      throw new Error(`stub illegal decision: ${result.reason}`);
+
+    const view = toSeatView(current, seat.seatId);
+    const cwd = await ensureSeatWorkspace(current, seat.seatId);
+    const adapter = runtime.getAdapter(config.cli);
+    const seatDecision = await adapter.decide({
+      view,
+      modelId: config.modelId,
+      cwd,
+    });
+
+    if (seatDecision.protocolVersion !== 1) {
+      throw new Error("agent_unsupported_protocol");
     }
-    current = {
-      ...current,
-      state: result.state,
-      events: [...current.events, ...result.events],
-    };
+    if (seatDecision.requestId !== view.requestId) {
+      throw new Error("agent_request_id_mismatch");
+    }
+    if (seatDecision.stateVersion !== current.state.stateVersion) {
+      throw new Error("agent_version_mismatch");
+    }
+    if (
+      !isLegalDecisionListed(view.legalDecisions, seatDecision.decision)
+    ) {
+      throw new Error("agent_decision_not_legal");
+    }
+
+    current = applySeatDecision(current, seat.seatId, seatDecision.decision);
   }
-  throw new Error("stub advance exceeded guard");
+  throw new Error("agent advance exceeded guard");
 }
 
-export function startMatch(options?: {
-  matchId?: string;
-  seed?: string;
-  seats?: MatchSetupSeatInput[];
-}): ActiveMatch {
+export async function startMatch(
+  options?: {
+    matchId?: string;
+    seed?: string;
+    seats?: MatchSetupSeatInput[];
+  } & MatchRuntimeOptions,
+): Promise<ActiveMatch> {
   const seats =
     options?.seats ??
     ([
@@ -182,6 +266,8 @@ export function startMatch(options?: {
         seatId: "seat-stub",
         controller: "stub_agent",
         displayName: defaultAgentDisplayName(0),
+        cli: "stub",
+        modelId: "stub/placeholder",
       },
     ] satisfies MatchSetupSeatInput[]);
 
@@ -195,8 +281,15 @@ export function startMatch(options?: {
   });
 
   const displayNames: Record<string, string> = {};
+  const seatAgents: Record<string, SeatAgentConfig> = {};
   for (const seat of seats) {
     displayNames[seat.seatId] = seat.displayName;
+    if (seat.controller === "stub_agent") {
+      seatAgents[seat.seatId] = {
+        cli: seat.cli ?? "stub",
+        modelId: seat.modelId ?? null,
+      };
+    }
   }
 
   const humanSeat = seats.find((seat) => seat.controller === "local_human");
@@ -209,22 +302,26 @@ export function startMatch(options?: {
     events: created.events,
     humanSeatId: humanSeat.seatId,
     displayNames,
+    seatAgents,
+    seatWorkspaces: {},
   };
-  return advanceStubSeats(match);
+  return advanceAgentSeats(match, { agentRuntime: options?.agentRuntime });
 }
 
 /** @deprecated Prefer startMatch; kept for existing two-seat runtime tests. */
-export function startTwoSeatMatch(options?: {
+export async function startTwoSeatMatch(options?: {
   matchId?: string;
   seed?: string;
-}): ActiveMatch {
+  agentRuntime?: AgentRuntime;
+}): Promise<ActiveMatch> {
   return startMatch(options);
 }
 
-export function submitHumanDecision(
+export async function submitHumanDecision(
   match: ActiveMatch,
   decision: SeatDecision,
-): { ok: true; match: ActiveMatch } | { ok: false; reason: string } {
+  options: MatchRuntimeOptions = {},
+): Promise<{ ok: true; match: ActiveMatch } | { ok: false; reason: string }> {
   if (decision.protocolVersion !== 1) {
     return { ok: false, reason: "unsupported_protocol" };
   }
@@ -252,5 +349,8 @@ export function submitHumanDecision(
     state: result.state,
     events: [...match.events, ...result.events],
   };
-  return { ok: true, match: advanceStubSeats(updated) };
+  return {
+    ok: true,
+    match: await advanceAgentSeats(updated, options),
+  };
 }

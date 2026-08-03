@@ -1,4 +1,4 @@
-export type AgentCli = "opencode" | "claude";
+export type AgentCli = "opencode" | "claude" | "stub";
 
 export type AgentSeatDraft = {
   cli: AgentCli;
@@ -24,8 +24,9 @@ export const PLACEHOLDER_MODELS: Record<
   AgentCli,
   Array<{ id: string; label: string }>
 > = {
-  opencode: [{ id: "opencode/placeholder", label: "占位模型（Stub）" }],
-  claude: [{ id: "claude/placeholder", label: "占位模型（Stub）" }],
+  opencode: [{ id: "opencode/placeholder", label: "CLI 默认模型" }],
+  claude: [{ id: "claude/placeholder", label: "CLI 默认模型" }],
+  stub: [{ id: "stub/placeholder", label: "本地 Stub" }],
 };
 
 export function defaultAgentDisplayName(agentIndex: number): string {
@@ -37,11 +38,8 @@ export function defaultSetup(seatCount = 2): MatchSetupDraft {
   const agents: AgentSeatDraft[] = [];
   for (let i = 0; i < count - 1; i += 1) {
     agents.push({
-      cli: i % 2 === 0 ? "opencode" : "claude",
-      modelId:
-        i % 2 === 0
-          ? PLACEHOLDER_MODELS.opencode[0]!.id
-          : PLACEHOLDER_MODELS.claude[0]!.id,
+      cli: "stub",
+      modelId: PLACEHOLDER_MODELS.stub[0]!.id,
     });
   }
   return { seatCount: count, agents };
@@ -63,7 +61,9 @@ export function loadSetupDraft(): MatchSetupDraft {
       const saved = parsed.agents?.[index];
       if (!saved) return fallback;
       const cli: AgentCli =
-        saved.cli === "claude" || saved.cli === "opencode"
+        saved.cli === "claude" ||
+        saved.cli === "opencode" ||
+        saved.cli === "stub"
           ? saved.cli
           : fallback.cli;
       const models = PLACEHOLDER_MODELS[cli];
@@ -103,7 +103,7 @@ export function buildCreateMatchPayload(draft: MatchSetupDraft) {
   };
 }
 
-/** Stub MVP: every configured agent seat is treated as ready. */
+/** Until ticket 19: selecting a CLI + model is enough to enable start. */
 export function setupReady(draft: MatchSetupDraft): boolean {
   if (draft.seatCount < 2 || draft.seatCount > 6) return false;
   if (draft.agents.length !== draft.seatCount - 1) return false;

@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { SeatDecision } from "@coup/protocol";
+import { createAgentRuntime, type AgentRuntime } from "./agents/index.js";
 import {
   startMatch,
   submitHumanDecision,
@@ -11,11 +12,13 @@ import { parseMatchSetup } from "./matchSetup.js";
 
 export type CreateAppOptions = {
   webRoot: string;
+  agentRuntime?: AgentRuntime;
 };
 
 export async function createApp(options: CreateAppOptions) {
   const app = Fastify({ logger: false });
   let activeMatch: ActiveMatch | null = null;
+  const agentRuntime = options.agentRuntime ?? createAgentRuntime();
 
   app.post("/api/matches", async (request, reply) => {
     const body =
@@ -43,7 +46,17 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(400).send({ error: parsed.reason });
     }
 
-    activeMatch = startMatch({ seats: parsed.setup.seats });
+    try {
+      activeMatch = await startMatch({
+        seats: parsed.setup.seats,
+        agentRuntime,
+      });
+    } catch (error) {
+      return reply.code(502).send({
+        error:
+          error instanceof Error ? error.message : "agent_start_failed",
+      });
+    }
     const view = toSeatView(activeMatch, activeMatch.humanSeatId);
     return reply.send({ view });
   });
@@ -62,7 +75,15 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(404).send({ error: "no_active_match" });
     }
     const body = request.body as SeatDecision;
-    const result = submitHumanDecision(activeMatch, body);
+    let result: Awaited<ReturnType<typeof submitHumanDecision>>;
+    try {
+      result = await submitHumanDecision(activeMatch, body, { agentRuntime });
+    } catch (error) {
+      return reply.code(502).send({
+        error:
+          error instanceof Error ? error.message : "agent_decision_failed",
+      });
+    }
     if (!result.ok) {
       return reply.code(409).send({ error: result.reason });
     }

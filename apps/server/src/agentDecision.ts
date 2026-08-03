@@ -9,6 +9,8 @@ export type AgentAttemptSignal = {
   /** Soft deadline budget for this attempt (not wall-clock absolute). */
   deadlineMs: number;
   aborted: boolean;
+  /** Abort in-flight CLI work when the attempt deadline fires. */
+  abortSignal: AbortSignal;
   /** Set on the retry attempt with a sanitized prior error category. */
   previousErrorCategory?: string;
 };
@@ -123,6 +125,7 @@ async function raceWithDeadline<T>(
   work: Promise<T>,
   deadlineMs: number,
   signal: AgentAttemptSignal,
+  abortController: AbortController,
 ): Promise<T> {
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -130,6 +133,7 @@ async function raceWithDeadline<T>(
     timer = setTimeout(() => {
       if (!settled) {
         signal.aborted = true;
+        abortController.abort();
         reject(new Error("agent_timeout"));
       }
     }, deadlineMs);
@@ -141,6 +145,10 @@ async function raceWithDeadline<T>(
     return result;
   } catch (error) {
     settled = true;
+    signal.aborted = true;
+    if (!abortController.signal.aborted) {
+      abortController.abort();
+    }
     throw error;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -169,9 +177,11 @@ export async function decideWithBoundedRetry(
     );
     const view = input.buildView(requestId);
     const deadlineMs = deadlines[attempt]!;
+    const abortController = new AbortController();
     const signal: AgentAttemptSignal = {
       deadlineMs,
       aborted: false,
+      abortSignal: abortController.signal,
       previousErrorCategory:
         attempt === 0 ? undefined : errorCode(lastError),
     };
@@ -195,7 +205,7 @@ export async function decideWithBoundedRetry(
       // Late losers must not surface as unhandled rejections.
       void work.catch(() => undefined);
 
-      return await raceWithDeadline(work, deadlineMs, signal);
+      return await raceWithDeadline(work, deadlineMs, signal, abortController);
     } catch (error) {
       lastError = error;
       const kind = classifyAgentError(error);

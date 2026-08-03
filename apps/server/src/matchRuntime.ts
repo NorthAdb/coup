@@ -250,6 +250,7 @@ export async function advanceAgentSeats(
           view,
           modelId: config.modelId,
           cwd,
+          abortSignal: signal.abortSignal,
           retry: signal.previousErrorCategory
             ? { previousErrorCategory: signal.previousErrorCategory }
             : undefined,

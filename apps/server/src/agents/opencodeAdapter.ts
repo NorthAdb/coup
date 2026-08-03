@@ -45,17 +45,20 @@ export function createOpenCodeAdapter(
         "utf8",
       );
 
-      const prompt = buildSeatDecisionUserPrompt(input.view, input.retry);
+      const prompt = buildOpenCodeStdinPrompt(input.view, input.retry);
       const args = buildOpenCodeArgs({
         modelId: input.modelId,
         title: `coup-${input.view.seatId}-${input.view.requestId}`,
-        prompt,
       });
 
+      // Windows cmd argv length / escaping mangles large SeatView prompts when
+      // passed as positional args under `shell: true`. Send the body on stdin.
       const result = await options.runner({
         command,
         args,
         cwd: input.cwd,
+        stdin: prompt,
+        abortSignal: input.abortSignal,
       });
       if (result.exitCode !== 0) {
         throw new Error(
@@ -63,8 +66,16 @@ export function createOpenCodeAdapter(
         );
       }
 
-      const text = parseOpenCodeRunTextEvents(result.stdout);
-      const raw = extractJsonObject(text);
+      let text: string;
+      let raw: unknown;
+      try {
+        text = parseOpenCodeRunTextEvents(result.stdout);
+        raw = extractJsonObject(text);
+      } catch (error) {
+        const reason =
+          error instanceof Error ? error.message : "parse_failed";
+        throw new Error(`opencode_choice_${reason}`);
+      }
       const parsed = parseLegalDecisionChoice(raw);
       if (!parsed.ok) {
         throw new Error(`opencode_choice_${parsed.reason}`);
@@ -78,23 +89,26 @@ export function createOpenCodeAdapter(
   };
 }
 
+export function buildOpenCodeStdinPrompt(
+  view: AgentDecideInput["view"],
+  retry?: AgentDecideInput["retry"],
+): string {
+  return [
+    buildSeatDecisionUserPrompt(view, retry),
+    "",
+    "JSON Schema for your answer:",
+    JSON.stringify(LEGAL_DECISION_CHOICE_SCHEMA),
+  ].join("\n");
+}
+
 export function buildOpenCodeArgs(input: {
   modelId: string | null;
   title: string;
-  prompt: string;
 }): string[] {
   const args = ["run", "--format", "json", "--title", input.title];
   if (input.modelId && !input.modelId.endsWith("/placeholder")) {
     args.push("--model", input.modelId);
   }
-  args.push(
-    [
-      input.prompt,
-      "",
-      "JSON Schema for your answer:",
-      JSON.stringify(LEGAL_DECISION_CHOICE_SCHEMA),
-    ].join("\n"),
-  );
   return args;
 }
 

@@ -66,13 +66,17 @@ describe("Claude Code agent seat adapter", () => {
     assert.ok(args.includes("*"));
     assert.equal(args.includes("--dangerously-skip-permissions"), false);
     assert.equal(args.includes("bypassPermissions"), false);
+    assert.ok(calls[0]?.stdin?.includes("SeatView JSON:"));
+    assert.equal(
+      args.some((arg) => arg.includes("SeatView JSON:")),
+      false,
+    );
     assert.deepEqual(decision.decision, { type: "challenge_claim" });
   });
 
   it("assembles locked-down argv without bypass flags", () => {
     const args = buildClaudeArgs({
       modelId: null,
-      prompt: "choose",
     });
     assert.ok(args.includes("--tools"));
     assert.ok(args.includes(""));
@@ -81,5 +85,6 @@ describe("Claude Code agent seat adapter", () => {
     assert.ok(args.includes("dontAsk"));
     assert.equal(args.includes("--dangerously-skip-permissions"), false);
     assert.equal(args.includes("bypassPermissions"), false);
+    assert.equal(args.includes("choose"), false);
   });
 });

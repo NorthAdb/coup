@@ -9,6 +9,8 @@ export type AgentDecideInput = {
   cwd: string;
   /** Present on the bounded retry attempt only. */
   retry?: { previousErrorCategory: string };
+  /** Cancel in-flight CLI when the attempt deadline fires. */
+  abortSignal?: AbortSignal;
 };
 
 export type AgentSeatAdapter = {
@@ -22,6 +24,8 @@ export type CliRunRequest = {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   stdin?: string;
+  /** When aborted, the runner must kill the process tree and reject. */
+  abortSignal?: AbortSignal;
 };
 
 export type CliRunResult = {

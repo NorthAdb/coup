@@ -71,6 +71,12 @@ describe("OpenCode agent seat adapter", () => {
     assert.ok(calls[0]?.args.includes("json"));
     assert.equal(calls[0]?.args.includes("--auto"), false);
     assert.equal(calls[0]?.args.includes("--model"), false);
+    assert.ok(calls[0]?.stdin?.includes("SeatView JSON:"));
+    assert.ok(calls[0]?.stdin?.includes("legalDecisionIndex"));
+    assert.equal(
+      calls[0]?.args.some((arg) => arg.includes("SeatView JSON:")),
+      false,
+    );
     assert.deepEqual(decision.decision, {
       type: "declare_action",
       action: { type: "income" },
@@ -101,5 +107,6 @@ describe("OpenCode agent seat adapter", () => {
 
     assert.ok(calls[0]?.args.includes("--model"));
     assert.ok(calls[0]?.args.includes("openai/gpt-test"));
+    assert.ok(calls[0]?.stdin?.includes('"requestId":"req-oc-1"'));
   });
 });

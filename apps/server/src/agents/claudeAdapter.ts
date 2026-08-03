@@ -30,15 +30,15 @@ export function createClaudeAdapter(
     kind: "claude",
     async decide(input: AgentDecideInput) {
       const prompt = buildSeatDecisionUserPrompt(input.view, input.retry);
-      const args = buildClaudeArgs({
-        modelId: input.modelId,
-        prompt,
-      });
+      const args = buildClaudeArgs({ modelId: input.modelId });
 
+      // Same Windows argv limit as OpenCode: keep flags short, prompt on stdin.
       const result = await options.runner({
         command,
         args,
         cwd: input.cwd,
+        stdin: prompt,
+        abortSignal: input.abortSignal,
       });
       if (result.exitCode !== 0) {
         throw new Error(
@@ -46,7 +46,14 @@ export function createClaudeAdapter(
         );
       }
 
-      const raw = parseClaudeStructuredOutput(result.stdout);
+      let raw: unknown;
+      try {
+        raw = parseClaudeStructuredOutput(result.stdout);
+      } catch (error) {
+        const reason =
+          error instanceof Error ? error.message : "parse_failed";
+        throw new Error(`claude_choice_${reason}`);
+      }
       const parsed = parseLegalDecisionChoice(raw);
       if (!parsed.ok) {
         throw new Error(`claude_choice_${parsed.reason}`);
@@ -60,13 +67,9 @@ export function createClaudeAdapter(
   };
 }
 
-export function buildClaudeArgs(input: {
-  modelId: string | null;
-  prompt: string;
-}): string[] {
+export function buildClaudeArgs(input: { modelId: string | null }): string[] {
   const args = [
     "-p",
-    input.prompt,
     "--output-format",
     "json",
     "--json-schema",

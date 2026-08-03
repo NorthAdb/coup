@@ -12,14 +12,32 @@ import {
   type MatchSetupDraft,
 } from "./matchSetup";
 
+type MatchListItem = {
+  matchId: string;
+  runStatus: string;
+  winnerSeatId: string | null;
+  resumedFromMatchId: string | null;
+  stateVersion: number;
+};
+
 type SetupPageProps = {
   draft: MatchSetupDraft;
   capabilities: CapabilityReport | null;
   probing: boolean;
   busy: boolean;
+  resumableMatchId: string | null;
+  matches: MatchListItem[];
+  eventBrowse: {
+    matchId: string;
+    runStatus: string;
+    events: Array<{ seq: number; event: { type: string } }>;
+  } | null;
   onChange: (draft: MatchSetupDraft) => void;
   onStart: () => void;
   onProbe: () => void;
+  onContinue: () => void;
+  onBrowseEvents: (matchId: string) => void;
+  onResume: (matchId: string) => void;
 };
 
 export function SetupPage({
@@ -27,9 +45,15 @@ export function SetupPage({
   capabilities,
   probing,
   busy,
+  resumableMatchId,
+  matches,
+  eventBrowse,
   onChange,
   onStart,
   onProbe,
+  onContinue,
+  onBrowseEvents,
+  onResume,
 }: SetupPageProps) {
   const canStart = setupReady(draft, capabilities) && !busy && !probing;
   const blockHint = setupBlockHint(draft, capabilities);
@@ -169,8 +193,17 @@ export function SetupPage({
 
       <div className="setup-actions">
         <div className="setup-action-row">
+          {resumableMatchId ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onContinue()}
+            >
+              继续未结束对局
+            </button>
+          ) : null}
           <button type="button" disabled={!canStart} onClick={() => onStart()}>
-            开始对局
+            {resumableMatchId ? "放弃并开新局" : "开始对局"}
           </button>
           <button
             type="button"
@@ -181,12 +214,66 @@ export function SetupPage({
             {probing ? "检测中…" : "重新检测"}
           </button>
         </div>
-        {blockHint ? (
+        {resumableMatchId ? (
+          <p className="hint">
+            服务端仍有未结束对局（{resumableMatchId}）。「返回开局」不会丢进度；开新局会中止旧局。
+          </p>
+        ) : blockHint ? (
           <p className="hint">{blockHint}</p>
         ) : (
           <p className="hint">本地玩家固定先手，其余按座位列表顺时针行动。</p>
         )}
       </div>
+
+      {matches.length > 0 ? (
+        <section className="panel" aria-label="对局记录">
+          <h2>对局列表</h2>
+          <ul className="match-list">
+            {matches.map((match) => (
+              <li key={match.matchId}>
+                <span>
+                  {match.matchId} · {match.runStatus}
+                  {match.winnerSeatId ? ` · 胜者 ${match.winnerSeatId}` : ""}
+                </span>
+                <span className="setup-action-row">
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy}
+                    onClick={() => onBrowseEvents(match.matchId)}
+                  >
+                    事件列表
+                  </button>
+                  {match.runStatus === "technical_abort" ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={busy}
+                      onClick={() => onResume(match.matchId)}
+                    >
+                      从快照恢复
+                    </button>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {eventBrowse ? (
+            <div className="event-browse">
+              <h3>
+                {eventBrowse.matchId} · {eventBrowse.runStatus}
+              </h3>
+              <ol>
+                {eventBrowse.events.map((entry) => (
+                  <li key={entry.seq}>
+                    #{entry.seq} {entry.event.type}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
     </section>
   );
 }

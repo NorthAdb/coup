@@ -34,6 +34,7 @@
 - [OpenCode 真 Agent 座位](issues/17-opencode-agent-seat.md) — 统一 `AgentSeatAdapter`；`opencode run` + 座位 cwd `permission:* deny`；SeatView→校验→领域命令；浏览器无凭据。
 - [Claude Code 真 Agent 座位](issues/18-claude-agent-seat.md) — 对等协议路径；`claude -p` JSON schema + 全工具禁用；与 OpenCode 可混座。
 - [开局能力探测与就绪门禁](issues/19-capability-probe-gate.md) — 进页探测 CLI/认证/模型；座位就绪状态与「重新检测」；未就绪不可开局；开始时服务端复检；响应脱敏。
+- [持久化、事件回放与快照恢复](issues/20-persistence-replay-resume.md) — SQLite 事务追加事件+快照；事件列表回放；重启恢复未结束对局；技术中止无胜者并可从快照开恢复运行；不落凭据/transcript。
 
 ## Not yet specified
 

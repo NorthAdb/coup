@@ -8,6 +8,7 @@ export type StartServerOptions = {
   webRoot: string;
   openBrowser?: boolean;
   port?: number;
+  dbPath?: string;
 };
 
 export type StartedServer = {
@@ -21,7 +22,10 @@ export type StartedServer = {
 export async function startServer(
   options: StartServerOptions,
 ): Promise<StartedServer> {
-  const app = await createApp({ webRoot: options.webRoot });
+  const app = await createApp({
+    webRoot: options.webRoot,
+    dbPath: options.dbPath,
+  });
 
   await app.listen({ host: LOOPBACK_HOST, port: options.port ?? 0 });
 

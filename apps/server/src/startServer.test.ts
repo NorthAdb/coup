@@ -16,6 +16,7 @@ describe("local launch shell", () => {
     const started = await startServer({
       webRoot,
       openBrowser: false,
+      dbPath: path.join(webRoot, "coup.sqlite"),
     });
 
     try {

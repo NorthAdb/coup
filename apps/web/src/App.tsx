@@ -155,10 +155,44 @@ export function App() {
     null,
   );
   const [probing, setProbing] = useState(false);
+  const [resumableMatchId, setResumableMatchId] = useState<string | null>(null);
+  const [matches, setMatches] = useState<
+    Array<{
+      matchId: string;
+      runStatus: string;
+      winnerSeatId: string | null;
+      resumedFromMatchId: string | null;
+      stateVersion: number;
+    }>
+  >([]);
+  const [eventBrowse, setEventBrowse] = useState<{
+    matchId: string;
+    runStatus: string;
+    events: Array<{ seq: number; event: { type: string } }>;
+  } | null>(null);
   const [pendingTarget, setPendingTarget] = useState<TargetAction | null>(
     null,
   );
   const [exchangeSelected, setExchangeSelected] = useState<string[]>([]);
+
+  async function refreshMatchList() {
+    try {
+      const response = await fetch("/api/matches");
+      if (!response.ok) return;
+      const body = (await response.json()) as {
+        matches: Array<{
+          matchId: string;
+          runStatus: string;
+          winnerSeatId: string | null;
+          resumedFromMatchId: string | null;
+          stateVersion: number;
+        }>;
+      };
+      setMatches(body.matches);
+    } catch {
+      // ignore list failures on setup
+    }
+  }
 
   async function refreshCapabilities() {
     setProbing(true);
@@ -187,20 +221,101 @@ export function App() {
       try {
         const response = await fetch("/api/matches/current");
         if (response.ok) {
-          const body = (await response.json()) as { view: SeatView };
+          const body = (await response.json()) as {
+            view: SeatView;
+            matchId: string;
+          };
           setView(body.view);
+          setResumableMatchId(body.matchId);
           return;
         }
+        setResumableMatchId(null);
       } catch {
-        // no active match yet
+        setResumableMatchId(null);
       }
       await refreshCapabilities();
+      await refreshMatchList();
     })();
   }, []);
 
   function updateSetupDraft(draft: MatchSetupDraft) {
     setSetupDraft(draft);
     saveSetupDraft(draft);
+  }
+
+  async function continueMatch() {
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/matches/current");
+      if (!response.ok) {
+        setResumableMatchId(null);
+        throw new Error("没有可继续的对局");
+      }
+      const body = (await response.json()) as {
+        view: SeatView;
+        matchId: string;
+      };
+      setView(body.view);
+      setResumableMatchId(body.matchId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "无法继续对局");
+      await refreshMatchList();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function browseEvents(matchId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/matches/${matchId}/events`);
+      if (!response.ok) {
+        throw new Error("无法加载事件列表");
+      }
+      const body = (await response.json()) as {
+        matchId: string;
+        runStatus: string;
+        events: Array<{ seq: number; event: { type: string } }>;
+      };
+      setEventBrowse(body);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "无法加载事件列表");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resumeMatch(matchId: string) {
+    setBusy(true);
+    setError(null);
+    setPendingTarget(null);
+    setExchangeSelected([]);
+    try {
+      const response = await fetch(`/api/matches/${matchId}/resume`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(body?.error ?? "无法从快照恢复");
+      }
+      const body = (await response.json()) as {
+        view: SeatView;
+        resumedFromMatchId: string;
+      };
+      setView(body.view);
+      setResumableMatchId(body.view.matchId);
+      setEventBrowse(null);
+      await refreshMatchList();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "恢复失败");
+      await refreshMatchList();
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function startMatch() {
@@ -219,13 +334,18 @@ export function App() {
         const body = (await response.json().catch(() => null)) as {
           error?: string;
           hint?: string;
+          aborted?: boolean;
+          matchId?: string | null;
         } | null;
-        // Refresh probe UI when the start-time gate rejects.
         void refreshCapabilities();
+        await refreshMatchList();
         throw new Error(body?.hint ?? body?.error ?? "无法创建对局");
       }
       const body = (await response.json()) as { view: SeatView };
       setView(body.view);
+      setResumableMatchId(body.view.matchId);
+      setEventBrowse(null);
+      await refreshMatchList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建失败");
     } finally {
@@ -234,11 +354,26 @@ export function App() {
   }
 
   function returnToSetup() {
+    // Clear client view only; server keeps the in-progress run for resume.
     setView(null);
     setPendingTarget(null);
     setExchangeSelected([]);
     setError(null);
-    void refreshCapabilities();
+    void (async () => {
+      try {
+        const response = await fetch("/api/matches/current");
+        if (response.ok) {
+          const body = (await response.json()) as { matchId: string };
+          setResumableMatchId(body.matchId);
+        } else {
+          setResumableMatchId(null);
+        }
+      } catch {
+        setResumableMatchId(null);
+      }
+      await refreshCapabilities();
+      await refreshMatchList();
+    })();
   }
 
   async function submitDecision(decision: LegalDecision, label: string) {
@@ -259,7 +394,17 @@ export function App() {
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as {
           error?: string;
+          aborted?: boolean;
+          matchId?: string;
         } | null;
+        if (body?.aborted && body.matchId) {
+          setView(null);
+          setResumableMatchId(null);
+          await refreshMatchList();
+          throw new Error(
+            `技术中止（无胜者）：${body.error ?? "agent_failed"}。可在开局页从快照恢复。`,
+          );
+        }
         throw new Error(body?.error ?? "提交失败");
       }
       const body = (await response.json()) as { view: SeatView };
@@ -354,9 +499,15 @@ export function App() {
           capabilities={capabilities}
           probing={probing}
           busy={busy}
+          resumableMatchId={resumableMatchId}
+          matches={matches}
+          eventBrowse={eventBrowse}
           onChange={updateSetupDraft}
           onStart={() => void startMatch()}
           onProbe={() => void refreshCapabilities()}
+          onContinue={() => void continueMatch()}
+          onBrowseEvents={(matchId) => void browseEvents(matchId)}
+          onResume={(matchId) => void resumeMatch(matchId)}
         />
       ) : (
         <>

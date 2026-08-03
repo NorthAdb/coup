@@ -1,15 +1,17 @@
 import type {
+  DomainCommand,
   DomainEvent,
   MatchState,
   SeatController,
 } from "@coup/domain";
 import {
+  activeDecidingSeatId,
   applyCommand,
   createMatch,
   legalDecisionsFor,
   projectForSeat,
 } from "@coup/domain";
-import type { SeatDecision, SeatView } from "@coup/protocol";
+import type { LegalDecision, SeatDecision, SeatView } from "@coup/protocol";
 
 export type ActiveMatch = {
   state: MatchState;
@@ -46,6 +48,8 @@ export function toSeatView(
       stateVersion: projection.stateVersion,
       phase: projection.phase,
       currentSeatId: projection.currentSeatId,
+      activeSeatId: projection.activeSeatId,
+      pendingAction: projection.pendingAction,
       seats: projection.seats.map((seat, index) => ({
         seatId: seat.seatId,
         controller: seat.controller,
@@ -66,15 +70,55 @@ export function toSeatView(
 
 function decisionToCommand(
   seatId: string,
-  decision: SeatDecision["decision"],
+  decision: LegalDecision,
   stateVersion: number,
-) {
-  return {
-    type: "declare_action" as const,
-    expectedVersion: stateVersion,
-    seatId,
-    action: decision.action,
-  };
+): DomainCommand {
+  switch (decision.type) {
+    case "declare_action":
+      return {
+        type: "declare_action",
+        expectedVersion: stateVersion,
+        seatId,
+        action: decision.action,
+      };
+    case "pass_block":
+      return { type: "pass_block", expectedVersion: stateVersion, seatId };
+    case "declare_block":
+      return {
+        type: "declare_block",
+        expectedVersion: stateVersion,
+        seatId,
+        claimedCharacter: decision.claimedCharacter,
+      };
+    case "pass_challenge":
+      return { type: "pass_challenge", expectedVersion: stateVersion, seatId };
+    case "challenge_claim":
+      return {
+        type: "challenge_claim",
+        expectedVersion: stateVersion,
+        seatId,
+      };
+    case "prove_claim":
+      return {
+        type: "prove_claim",
+        expectedVersion: stateVersion,
+        seatId,
+        cardId: decision.cardId,
+      };
+    case "concede_claim":
+      return {
+        type: "concede_claim",
+        expectedVersion: stateVersion,
+        seatId,
+      };
+    case "choose_influence_to_reveal":
+      return {
+        type: "choose_influence_to_reveal",
+        expectedVersion: stateVersion,
+        seatId,
+        cardId: decision.cardId,
+      };
+  }
 }
 
 /** Stub always picks the first enumerated legal decision. */
@@ -85,9 +129,13 @@ export function pickStubDecision(match: ActiveMatch, seatId: string) {
 
 export function advanceStubSeats(match: ActiveMatch): ActiveMatch {
   let current = match;
-  for (let guard = 0; guard < 32; guard += 1) {
+  for (let guard = 0; guard < 64; guard += 1) {
+    const activeSeatId = activeDecidingSeatId(current.state);
+    if (!activeSeatId) {
+      return current;
+    }
     const seat = current.state.seats.find(
-      (entry) => entry.seatId === current.state.currentSeatId,
+      (entry) => entry.seatId === activeSeatId,
     );
     if (!seat || seat.controller !== "stub_agent") {
       return current;

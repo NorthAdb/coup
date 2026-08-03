@@ -44,4 +44,39 @@ describe("stub match runtime", () => {
       ).length >= 2,
     );
   });
+
+  it("auto-passes stub block after the human declares foreign aid", () => {
+    const started = startTwoSeatMatch({
+      matchId: "match-fa-runtime",
+      seed: "runtime-seed",
+    });
+
+    const result = submitHumanDecision(started, {
+      protocolVersion: 1,
+      requestId: "req-fa-1",
+      stateVersion: started.state.stateVersion,
+      decision: { type: "declare_action", action: { type: "foreign_aid" } },
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+
+    const view = toSeatView(result.match, result.match.humanSeatId);
+    assert.equal(view.publicState.seats[0]?.coins, 3);
+    assert.equal(view.publicState.phase, "await_action");
+    assert.equal(view.publicState.currentSeatId, "seat-human");
+    assert.ok(
+      view.projectedHistory.some(
+        (event) =>
+          event.type === "action_resolved" &&
+          event.actionType === "foreign_aid" &&
+          event.coinsGained === 2,
+      ),
+    );
+    assert.ok(
+      view.projectedHistory.some(
+        (event) =>
+          event.type === "action_resolved" && event.actionType === "income",
+      ),
+    );
+  });
 });

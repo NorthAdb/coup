@@ -140,6 +140,55 @@ button.ghost {
   margin-top: 0.25rem;
 }
 
+.seat.targetable {
+  border-color: #c85f63;
+  box-shadow: inset 0 0 0 1px rgba(200, 95, 99, 0.35);
+}
+
+.seat.active:not(.current) {
+  border-color: rgba(154, 163, 181, 0.7);
+}
+
+.response-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  background: rgba(36, 28, 34, 0.95);
+  padding: 0.85rem 1rem;
+  border-radius: 4px;
+}
+
+.response-bar span {
+  color: #e8e2d6;
+  font-size: 0.95rem;
+}
+
+.response-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.response-button {
+  border-color: rgba(154, 163, 181, 0.55);
+  background: rgba(154, 163, 181, 0.08);
+}
+
+.response-button.primary {
+  border-color: #c85f63;
+  background: rgba(200, 95, 99, 0.18);
+  color: #f4ead8;
+}
+
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .error {
   margin: 0;
   color: #c85f63;

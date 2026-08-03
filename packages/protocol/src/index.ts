@@ -4,6 +4,7 @@ import type {
   LegalDecision,
   MatchPhase,
   MatchStatus,
+  PendingAction,
   SeatController,
 } from "@coup/domain";
 
@@ -29,10 +30,12 @@ export type MatchPublicState = {
   stateVersion: number;
   phase: MatchPhase;
   currentSeatId: string;
+  activeSeatId: string | null;
+  pendingAction: PendingAction | null;
   seats: PublicSeatView[];
 };
 
-/** Wire projection for one seat — ticket 13 subset. */
+/** Wire projection for one seat. */
 export type SeatView = {
   protocolVersion: ProtocolVersion;
   requestId: string;
@@ -58,5 +61,6 @@ export type {
   LegalDecision,
   MatchPhase,
   MatchStatus,
+  PendingAction,
   SeatController,
 };

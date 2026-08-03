@@ -2,6 +2,14 @@ import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { SeatDecision } from "@coup/protocol";
 import { createAgentRuntime, type AgentRuntime } from "./agents/index.js";
+import { createProcessCliRunner } from "./agents/cliRunner.js";
+import {
+  probeCapabilities,
+  recheckSetupSeats,
+  sanitizeCapabilityReport,
+  type CapabilityProbeOptions,
+  type CapabilityReport,
+} from "./capabilityProbe.js";
 import {
   startMatch,
   submitHumanDecision,
@@ -13,12 +21,22 @@ import { parseMatchSetup } from "./matchSetup.js";
 export type CreateAppOptions = {
   webRoot: string;
   agentRuntime?: AgentRuntime;
+  /** Override capability probing (tests / fixtures). */
+  probe?: (options?: CapabilityProbeOptions) => Promise<CapabilityReport>;
 };
 
 export async function createApp(options: CreateAppOptions) {
   const app = Fastify({ logger: false });
   let activeMatch: ActiveMatch | null = null;
   const agentRuntime = options.agentRuntime ?? createAgentRuntime();
+  const runProbe =
+    options.probe ??
+    (() => probeCapabilities({ runner: createProcessCliRunner() }));
+
+  app.get("/api/capabilities", async (_request, reply) => {
+    const report = sanitizeCapabilityReport(await runProbe());
+    return reply.send(report);
+  });
 
   app.post("/api/matches", async (request, reply) => {
     const body =
@@ -44,6 +62,15 @@ export async function createApp(options: CreateAppOptions) {
     const parsed = parseMatchSetup(body);
     if (!parsed.ok) {
       return reply.code(400).send({ error: parsed.reason });
+    }
+
+    const report = await runProbe();
+    const gate = recheckSetupSeats(parsed.setup.seats, report);
+    if (!gate.ok) {
+      return reply.code(400).send({
+        error: gate.reason,
+        hint: gate.hint,
+      });
     }
 
     try {

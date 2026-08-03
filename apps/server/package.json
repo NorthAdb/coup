@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "npm run build && node dist/main.js",
-    "test": "npm run build && node --test dist/startServer.test.js dist/matchRuntime.test.js dist/matchSetup.test.js dist/createApp.test.js dist/agents/protocol.test.js dist/agents/opencodeAdapter.test.js dist/agents/claudeAdapter.test.js"
+    "test": "npm run build && node --test dist/startServer.test.js dist/matchRuntime.test.js dist/matchSetup.test.js dist/createApp.test.js dist/capabilityProbe.test.js dist/agents/protocol.test.js dist/agents/opencodeAdapter.test.js dist/agents/claudeAdapter.test.js"
   },
   "dependencies": {
     "@coup/domain": "0.0.0",

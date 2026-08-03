@@ -1,31 +1,45 @@
 import {
   AGENT_DISPLAY_NAMES,
-  PLACEHOLDER_MODELS,
+  modelsForCli,
+  readinessLabel,
+  seatHint,
+  seatReadiness,
+  setupBlockHint,
   setupReady,
+  STUB_MODELS,
+  type AgentCli,
+  type CapabilityReport,
   type MatchSetupDraft,
 } from "./matchSetup";
 
 type SetupPageProps = {
   draft: MatchSetupDraft;
+  capabilities: CapabilityReport | null;
+  probing: boolean;
   busy: boolean;
   onChange: (draft: MatchSetupDraft) => void;
   onStart: () => void;
+  onProbe: () => void;
 };
 
 export function SetupPage({
   draft,
+  capabilities,
+  probing,
   busy,
   onChange,
   onStart,
+  onProbe,
 }: SetupPageProps) {
-  const canStart = setupReady(draft) && !busy;
+  const canStart = setupReady(draft, capabilities) && !busy && !probing;
+  const blockHint = setupBlockHint(draft, capabilities);
 
   function setSeatCount(seatCount: number) {
     const agents = [...draft.agents];
     while (agents.length < seatCount - 1) {
       agents.push({
         cli: "stub",
-        modelId: PLACEHOLDER_MODELS.stub[0]!.id,
+        modelId: STUB_MODELS[0]!.id,
       });
     }
     onChange({
@@ -42,7 +56,8 @@ export function SetupPage({
       if (agentIndex !== index) return agent;
       const next = { ...agent, ...patch };
       if (patch.cli && patch.cli !== agent.cli) {
-        next.modelId = PLACEHOLDER_MODELS[patch.cli][0]!.id;
+        const models = modelsForCli(patch.cli, capabilities);
+        next.modelId = models[0]?.id ?? "";
       }
       return next;
     });
@@ -53,8 +68,8 @@ export function SetupPage({
     <section className="panel setup" aria-label="开局配置">
       <p className="boundary">
         本机自用 MVP：复用本机已安装 OpenCode / Claude Code
-        的登录状态；应用内不配置、不存储 API key。所选 CLI
-        将由本地服务调用；完整就绪探测与模型目录由后续能力探测接入。
+        的登录状态；应用内不配置、不存储 API
+        key。探测只返回脱敏就绪状态与模型目录。
       </p>
 
       <div className="setup-row">
@@ -82,7 +97,14 @@ export function SetupPage({
           <p className="meta">固定本地人类，不可改为 Agent。</p>
         </li>
         {draft.agents.map((agent, index) => {
-          const models = PLACEHOLDER_MODELS[agent.cli];
+          const models = modelsForCli(agent.cli, capabilities);
+          const status = seatReadiness(agent, capabilities);
+          const statusClass =
+            status === "ready"
+              ? "ready"
+              : status === "probing"
+                ? "probing"
+                : "blocked";
           return (
             <li key={`agent-${index}`} className="setup-seat">
               <div className="setup-seat-head">
@@ -90,12 +112,13 @@ export function SetupPage({
                   座位 {index + 2} ·{" "}
                   {AGENT_DISPLAY_NAMES[index] ?? `Agent ${index + 1}`}
                 </strong>
-                <span className="status ready">
+                <span className={`status ${statusClass}`}>
                   {agent.cli === "opencode"
-                    ? "OpenCode · 待探测"
+                    ? "OpenCode"
                     : agent.cli === "claude"
-                      ? "Claude Code · 待探测"
-                      : "Stub · 就绪"}
+                      ? "Claude Code"
+                      : "Stub"}{" "}
+                  · {readinessLabel(status)}
                 </span>
               </div>
               <div className="setup-fields">
@@ -106,7 +129,7 @@ export function SetupPage({
                     disabled={busy}
                     onChange={(event) =>
                       updateAgent(index, {
-                        cli: event.target.value as MatchSetupDraft["agents"][number]["cli"],
+                        cli: event.target.value as AgentCli,
                       })
                     }
                   >
@@ -119,34 +142,47 @@ export function SetupPage({
                   模型
                   <select
                     value={agent.modelId}
-                    disabled={busy}
+                    disabled={busy || models.length === 0}
                     onChange={(event) =>
                       updateAgent(index, { modelId: event.target.value })
                     }
                   >
-                    {models.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.label}
+                    {models.length === 0 ? (
+                      <option value={agent.modelId}>
+                        {status === "probing" ? "探测中…" : "无可用模型"}
                       </option>
-                    ))}
+                    ) : (
+                      models.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.label}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </label>
               </div>
-              <p className="meta">
-                顺时针第 {index + 2} 席；OpenCode / Claude Code
-                走本机 CLI，Stub 为本地回退。完整门禁见后续票。
-              </p>
+              <p className="meta">{seatHint(agent, capabilities)}</p>
             </li>
           );
         })}
       </ol>
 
       <div className="setup-actions">
-        <button type="button" disabled={!canStart} onClick={() => onStart()}>
-          开始对局
-        </button>
-        {!canStart && !busy ? (
-          <p className="hint">请为每个 Agent 座位选择 CLI 与模型后再开始。</p>
+        <div className="setup-action-row">
+          <button type="button" disabled={!canStart} onClick={() => onStart()}>
+            开始对局
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            disabled={busy || probing}
+            onClick={() => onProbe()}
+          >
+            {probing ? "检测中…" : "重新检测"}
+          </button>
+        </div>
+        {blockHint ? (
+          <p className="hint">{blockHint}</p>
         ) : (
           <p className="hint">本地玩家固定先手，其余按座位列表顺时针行动。</p>
         )}

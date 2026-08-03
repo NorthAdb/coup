@@ -4,7 +4,9 @@ import { SetupPage } from "./SetupPage";
 import {
   buildCreateMatchPayload,
   loadSetupDraft,
+  reconcileDraftModels,
   saveSetupDraft,
+  type CapabilityReport,
   type MatchSetupDraft,
 } from "./matchSetup";
 
@@ -149,10 +151,36 @@ export function App() {
   const [setupDraft, setSetupDraft] = useState<MatchSetupDraft>(() =>
     loadSetupDraft(),
   );
+  const [capabilities, setCapabilities] = useState<CapabilityReport | null>(
+    null,
+  );
+  const [probing, setProbing] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<TargetAction | null>(
     null,
   );
   const [exchangeSelected, setExchangeSelected] = useState<string[]>([]);
+
+  async function refreshCapabilities() {
+    setProbing(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/capabilities");
+      if (!response.ok) {
+        throw new Error("能力探测失败");
+      }
+      const body = (await response.json()) as CapabilityReport;
+      setCapabilities(body);
+      setSetupDraft((current) => {
+        const next = reconcileDraftModels(current, body);
+        saveSetupDraft(next);
+        return next;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "能力探测失败");
+    } finally {
+      setProbing(false);
+    }
+  }
 
   useEffect(() => {
     void (async () => {
@@ -161,10 +189,12 @@ export function App() {
         if (response.ok) {
           const body = (await response.json()) as { view: SeatView };
           setView(body.view);
+          return;
         }
       } catch {
         // no active match yet
       }
+      await refreshCapabilities();
     })();
   }, []);
 
@@ -188,8 +218,11 @@ export function App() {
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as {
           error?: string;
+          hint?: string;
         } | null;
-        throw new Error(body?.error ?? "无法创建对局");
+        // Refresh probe UI when the start-time gate rejects.
+        void refreshCapabilities();
+        throw new Error(body?.hint ?? body?.error ?? "无法创建对局");
       }
       const body = (await response.json()) as { view: SeatView };
       setView(body.view);
@@ -205,6 +238,7 @@ export function App() {
     setPendingTarget(null);
     setExchangeSelected([]);
     setError(null);
+    void refreshCapabilities();
   }
 
   async function submitDecision(decision: LegalDecision, label: string) {
@@ -317,9 +351,12 @@ export function App() {
       {!view ? (
         <SetupPage
           draft={setupDraft}
+          capabilities={capabilities}
+          probing={probing}
           busy={busy}
           onChange={updateSetupDraft}
           onStart={() => void startMatch()}
+          onProbe={() => void refreshCapabilities()}
         />
       ) : (
         <>

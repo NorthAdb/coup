@@ -266,6 +266,14 @@ button.ghost {
   color: #8fbf8a;
 }
 
+.status.probing {
+  color: #c2b280;
+}
+
+.status.blocked {
+  color: #d9897a;
+}
+
 .setup-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
@@ -291,4 +299,11 @@ select {
   display: grid;
   gap: 0.55rem;
   justify-items: start;
+}
+
+.setup-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
 }

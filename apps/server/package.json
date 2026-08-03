@@ -7,9 +7,11 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "npm run build && node dist/main.js",
-    "test": "npm run build && node --test dist/startServer.test.js"
+    "test": "npm run build && node --test dist/startServer.test.js dist/matchRuntime.test.js"
   },
   "dependencies": {
+    "@coup/domain": "0.0.0",
+    "@coup/protocol": "0.0.0",
     "@fastify/static": "^8.2.0",
     "fastify": "^5.5.0",
     "open": "^10.2.0"

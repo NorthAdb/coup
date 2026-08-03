@@ -10,7 +10,7 @@
     "build": "npm run build -w @coup/protocol && npm run build -w @coup/domain && npm run build -w @coup/web && npm run build -w @coup/server",
     "start": "npm run build -w @coup/web && npm run start -w @coup/server",
     "typecheck": "npm run typecheck -w @coup/protocol && npm run typecheck -w @coup/domain && npm run typecheck -w @coup/web && npm run typecheck -w @coup/server",
-    "test": "npm run test -w @coup/domain && npm run test -w @coup/server"
+    "test": "npm run test -w @coup/domain && npm run test -w @coup/server && npm run test -w @coup/web"
   },
   "engines": {
     "node": ">=22"

@@ -36,6 +36,7 @@
 - [开局能力探测与就绪门禁](issues/19-capability-probe-gate.md) — 进页探测 CLI/认证/模型；座位就绪状态与「重新检测」；未就绪不可开局；开始时服务端复检；响应脱敏。
 - [持久化、事件回放与快照恢复](issues/20-persistence-replay-resume.md) — SQLite 事务追加事件+快照；事件列表回放；重启恢复未结束对局；技术中止无胜者并可从快照开恢复运行；不落凭据/transcript。
 - [Agent 超时重试与中止节奏](issues/21-agent-timeout-abort.md) — 30s+可恢复再试 15s；新 requestId；迟到丢弃；不可恢复立即 technical_abort；UI 仅有限相位；复用票 20 快照恢复。
+- [策划桌 UI 打磨](issues/22-desk-ui-polish.md) — 左座位/中舞台+响应条/右记录/底行动栏/顶栏规则；克制亮牌与补牌；平衡/快速节奏与 reduced-motion；深色权谋占位卡。
 
 ## Not yet specified
 

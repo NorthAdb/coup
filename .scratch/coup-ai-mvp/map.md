@@ -29,6 +29,7 @@
 - [定义对局创建与 Agent 配置体验](issues/08-define-match-setup-experience.md) — 先选 2–6 人再逐座位配置 OpenCode/Claude 与模型；进入页面即探测就绪状态，全部就绪才可开局；记住上次配置；复用本机 CLI 登录态，不内置 API key。
 - [确定局域网演进边界](issues/09-preserve-lan-evolution-boundary.md) — 未来为创建房间/房间号加入的主机权威模型；MVP 保持领域与协议不绑定 loopback，座位控制器可扩展到远程人类；本轮不实现发现、房间与断线恢复。
 - [汇总 MVP 规格与验收边界](issues/10-define-mvp-acceptance-spec.md) — 交付索引型 [`spec.md`](spec.md)：验收清单 + 决策链接；Chrome/Edge 桌面浏览器适配；事件列表回放与快照恢复；不做牌力评测。
+- [完整角色行动与规则边界（Stub）](issues/15-full-role-actions-stub.md) — 征税/刺杀/偷窃/交换、行动质疑窗、刺杀费用退回与阻挡不退、失败阻挡不重开、交换保密选牌、淘汰与获胜；领域确定性测试 + Stub 可打到终局。
 
 ## Not yet specified
 

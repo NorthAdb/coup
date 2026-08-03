@@ -62,6 +62,7 @@ export function toSeatView(
     },
     privateState: {
       hiddenCharacters: projection.hiddenCharacters,
+      exchangeHand: projection.exchangeHand,
     },
     projectedHistory: match.events,
     legalDecisions: projection.legalDecisions,
@@ -118,6 +119,13 @@ function decisionToCommand(
         seatId,
         cardId: decision.cardId,
       };
+    case "choose_exchange_cards":
+      return {
+        type: "choose_exchange_cards",
+        expectedVersion: stateVersion,
+        seatId,
+        returnCardIds: decision.returnCardIds,
+      };
   }
 }
 
@@ -129,7 +137,7 @@ export function pickStubDecision(match: ActiveMatch, seatId: string) {
 
 export function advanceStubSeats(match: ActiveMatch): ActiveMatch {
   let current = match;
-  for (let guard = 0; guard < 64; guard += 1) {
+  for (let guard = 0; guard < 256; guard += 1) {
     const activeSeatId = activeDecidingSeatId(current.state);
     if (!activeSeatId) {
       return current;

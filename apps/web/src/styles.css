@@ -145,6 +145,10 @@ button.ghost {
   box-shadow: inset 0 0 0 1px rgba(200, 95, 99, 0.35);
 }
 
+.seat.eliminated {
+  opacity: 0.55;
+}
+
 .seat.active:not(.current) {
   border-color: rgba(154, 163, 181, 0.7);
 }

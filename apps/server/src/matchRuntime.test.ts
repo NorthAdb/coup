@@ -79,4 +79,67 @@ describe("stub match runtime", () => {
       ),
     );
   });
+
+  it("can finish a match when the human assassinates twice and stub auto-plays", () => {
+    let match = startTwoSeatMatch({
+      matchId: "match-finish-runtime",
+      seed: "runtime-seed",
+    });
+
+    function humanIncome() {
+      const result = submitHumanDecision(match, {
+        protocolVersion: 1,
+        requestId: `req-income-${match.state.stateVersion}`,
+        stateVersion: match.state.stateVersion,
+        decision: { type: "declare_action", action: { type: "income" } },
+      });
+      assert.equal(result.ok, true);
+      if (!result.ok) throw new Error("income failed");
+      match = result.match;
+    }
+
+    function humanAssassinate() {
+      const result = submitHumanDecision(match, {
+        protocolVersion: 1,
+        requestId: `req-assassinate-${match.state.stateVersion}`,
+        stateVersion: match.state.stateVersion,
+        decision: {
+          type: "declare_action",
+          action: { type: "assassinate", targetSeatId: "seat-stub" },
+        },
+      });
+      assert.equal(result.ok, true);
+      if (!result.ok) throw new Error("assassinate failed");
+      match = result.match;
+    }
+
+    while (match.state.seats[0]!.coins < 3) {
+      humanIncome();
+    }
+    humanAssassinate();
+    assert.equal(
+      match.state.seats[1]!.influences.filter((card) => !card.revealed).length,
+      1,
+    );
+
+    while (
+      match.state.status === "in_progress" &&
+      match.state.seats[0]!.coins < 3
+    ) {
+      humanIncome();
+    }
+    if (match.state.status === "in_progress") {
+      humanAssassinate();
+    }
+
+    const view = toSeatView(match, match.humanSeatId);
+    assert.equal(view.publicState.status, "finished");
+    assert.ok(
+      view.projectedHistory.some(
+        (event) =>
+          event.type === "match_finished" &&
+          event.winnerSeatId === "seat-human",
+      ),
+    );
+  });
 });

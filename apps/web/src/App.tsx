@@ -9,6 +9,18 @@ const CHARACTER_LABEL: Record<string, string> = {
   contessa: "伯爵夫人",
 };
 
+const ACTION_LABEL: Record<string, string> = {
+  income: "收入",
+  foreign_aid: "外援",
+  coup: "政变",
+  tax: "征税",
+  assassinate: "刺杀",
+  steal: "偷窃",
+  exchange: "交换",
+};
+
+type TargetAction = "coup" | "assassinate" | "steal";
+
 function eventText(
   event: SeatView["projectedHistory"][number],
   seats: SeatView["publicState"]["seats"],
@@ -22,24 +34,30 @@ function eventText(
     case "action_declared": {
       const target =
         event.targetSeatId != null ? ` → ${name(event.targetSeatId)}` : "";
-      const labels: Record<string, string> = {
-        income: "收入",
-        foreign_aid: "外援",
-        coup: "政变",
-      };
-      return `${name(event.seatId)} 声明${labels[event.actionType] ?? event.actionType}${target}`;
+      return `${name(event.seatId)} 声明${ACTION_LABEL[event.actionType] ?? event.actionType}${target}`;
     }
     case "action_resolved": {
       if (event.actionType === "coup" && event.targetSeatId) {
         return `${name(event.seatId)} 政变命中 ${name(event.targetSeatId)}`;
+      }
+      if (event.actionType === "assassinate" && event.targetSeatId) {
+        return `${name(event.seatId)} 刺杀命中 ${name(event.targetSeatId)}`;
+      }
+      if (event.actionType === "steal" && event.coinsStolen != null) {
+        return `${name(event.seatId)} 偷走 ${event.coinsStolen} 枚（${name(event.targetSeatId ?? "")}）`;
+      }
+      if (event.actionType === "exchange") {
+        return `${name(event.seatId)} 完成交换`;
       }
       if (event.coinsGained != null) {
         return `${name(event.seatId)} 获得 ${event.coinsGained} 枚钱币`;
       }
       return `${name(event.seatId)} 行动结算`;
     }
-    case "action_failed":
-      return `${name(event.seatId)} 的外援被阻挡`;
+    case "action_failed": {
+      const why = event.reason === "blocked" ? "被阻挡" : "被质疑推翻";
+      return `${name(event.seatId)} 的${ACTION_LABEL[event.actionType] ?? event.actionType}${why}`;
+    }
     case "block_declared":
       return `${name(event.seatId)} 声明阻挡（${CHARACTER_LABEL[event.claimedCharacter] ?? event.claimedCharacter}）`;
     case "response_passed":
@@ -65,7 +83,7 @@ function eventText(
 
 function hasAction(
   decisions: LegalDecision[],
-  actionType: "income" | "foreign_aid",
+  actionType: "income" | "foreign_aid" | "tax" | "exchange",
 ): boolean {
   return decisions.some(
     (decision) =>
@@ -74,23 +92,57 @@ function hasAction(
   );
 }
 
-function coupTargets(decisions: LegalDecision[]): string[] {
+function targetsFor(
+  decisions: LegalDecision[],
+  actionType: TargetAction,
+): string[] {
   return decisions
     .filter(
       (decision): decision is Extract<LegalDecision, { type: "declare_action" }> =>
-        decision.type === "declare_action" && decision.action.type === "coup",
+        decision.type === "declare_action" &&
+        decision.action.type === actionType,
     )
-    .map((decision) =>
-      decision.action.type === "coup" ? decision.action.targetSeatId : "",
-    )
+    .map((decision) => {
+      const action = decision.action;
+      if (
+        action.type === "coup" ||
+        action.type === "assassinate" ||
+        action.type === "steal"
+      ) {
+        return action.targetSeatId;
+      }
+      return "";
+    })
     .filter(Boolean);
+}
+
+function phaseHint(phase: SeatView["publicState"]["phase"]): string {
+  switch (phase) {
+    case "await_action_challenge":
+      return "可质疑此次角色声明";
+    case "await_block":
+      return "可声明阻挡或放弃";
+    case "await_block_challenge":
+      return "可质疑此次阻挡";
+    case "await_claim_defense":
+      return "证明或放弃证明";
+    case "await_influence_reveal":
+      return "选择失去的影响力";
+    case "await_exchange_selection":
+      return "选择归还宫廷的两张牌";
+    default:
+      return "请响应";
+  }
 }
 
 export function App() {
   const [view, setView] = useState<SeatView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [pendingCoup, setPendingCoup] = useState(false);
+  const [pendingTarget, setPendingTarget] = useState<TargetAction | null>(
+    null,
+  );
+  const [exchangeSelected, setExchangeSelected] = useState<string[]>([]);
 
   useEffect(() => {
     void (async () => {
@@ -109,7 +161,8 @@ export function App() {
   async function startMatch() {
     setBusy(true);
     setError(null);
-    setPendingCoup(false);
+    setPendingTarget(null);
+    setExchangeSelected([]);
     try {
       const response = await fetch("/api/matches", { method: "POST" });
       if (!response.ok) {
@@ -147,7 +200,8 @@ export function App() {
       }
       const body = (await response.json()) as { view: SeatView };
       setView(body.view);
-      setPendingCoup(false);
+      setPendingTarget(null);
+      setExchangeSelected([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "提交失败");
     } finally {
@@ -158,8 +212,19 @@ export function App() {
   const decisions = view?.legalDecisions ?? [];
   const canIncome = hasAction(decisions, "income");
   const canForeignAid = hasAction(decisions, "foreign_aid");
-  const coupTargetIds = coupTargets(decisions);
-  const canCoup = coupTargetIds.length > 0;
+  const canTax = hasAction(decisions, "tax");
+  const canExchange = hasAction(decisions, "exchange");
+  const coupTargetIds = targetsFor(decisions, "coup");
+  const assassinateTargetIds = targetsFor(decisions, "assassinate");
+  const stealTargetIds = targetsFor(decisions, "steal");
+  const activeTargetIds =
+    pendingTarget === "coup"
+      ? coupTargetIds
+      : pendingTarget === "assassinate"
+        ? assassinateTargetIds
+        : pendingTarget === "steal"
+          ? stealTargetIds
+          : [];
   const responseDecisions = decisions.filter((decision) =>
     [
       "pass_block",
@@ -172,6 +237,40 @@ export function App() {
     ].includes(decision.type),
   );
   const showResponseBar = responseDecisions.length > 0;
+  const exchangeHand = view?.privateState.exchangeHand ?? null;
+  const showExchange =
+    view?.publicState.phase === "await_exchange_selection" &&
+    exchangeHand != null &&
+    exchangeHand.length > 0;
+  const finished = view?.publicState.status === "finished";
+
+  function toggleTargetMode(action: TargetAction) {
+    setPendingTarget((current) => (current === action ? null : action));
+  }
+
+  function toggleExchangeCard(cardId: string) {
+    setExchangeSelected((current) => {
+      if (current.includes(cardId)) {
+        return current.filter((id) => id !== cardId);
+      }
+      if (current.length >= 2) {
+        return [current[1]!, cardId];
+      }
+      return [...current, cardId];
+    });
+  }
+
+  function submitExchange() {
+    if (exchangeSelected.length !== 2) return;
+    const [a, b] = exchangeSelected;
+    void submitDecision(
+      {
+        type: "choose_exchange_cards",
+        returnCardIds: [a!, b!],
+      },
+      "exchange-return",
+    );
+  }
 
   return (
     <main className="shell">
@@ -179,7 +278,7 @@ export function App() {
         <p className="eyebrow">本机自用</p>
         <h1>政变</h1>
         <p className="lede">
-          2 座练习桌：你 vs Stub。本票开放收入、外援、政变与响应窗口。
+          2 座练习桌：你 vs Stub。完整基础行动、质疑/阻挡与终局。
         </p>
       </header>
 
@@ -191,12 +290,32 @@ export function App() {
         </section>
       ) : (
         <>
+          {finished ? (
+            <p className="hint">
+              对局结束 —{" "}
+              {(() => {
+                const finishedEvent = view.projectedHistory.find(
+                  (event) => event.type === "match_finished",
+                );
+                if (!finishedEvent || finishedEvent.type !== "match_finished") {
+                  return "有人";
+                }
+                return (
+                  view.publicState.seats.find(
+                    (seat) => seat.seatId === finishedEvent.winnerSeatId,
+                  )?.displayName ?? "有人"
+                );
+              })()}{" "}
+              获胜
+            </p>
+          ) : null}
+
           <section className="panel seats" aria-label="公开座位">
             {view.publicState.seats.map((seat) => {
               const isCurrent = seat.seatId === view.publicState.currentSeatId;
               const isActive = seat.seatId === view.publicState.activeSeatId;
-              const coupSelectable =
-                pendingCoup && coupTargetIds.includes(seat.seatId);
+              const targetable =
+                pendingTarget != null && activeTargetIds.includes(seat.seatId);
               return (
                 <article
                   key={seat.seatId}
@@ -204,7 +323,8 @@ export function App() {
                     "seat",
                     isCurrent ? "current" : "",
                     isActive ? "active" : "",
-                    coupSelectable ? "targetable" : "",
+                    targetable ? "targetable" : "",
+                    seat.eliminated ? "eliminated" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
@@ -212,7 +332,8 @@ export function App() {
                   <h2>{seat.displayName}</h2>
                   <p className="meta">
                     {seat.controller === "local_human" ? "本地人类" : "Stub Agent"}
-                    {isCurrent ? " · 当前回合" : ""}
+                    {seat.eliminated ? " · 已淘汰" : ""}
+                    {isCurrent && !seat.eliminated ? " · 当前回合" : ""}
                     {isActive && !isCurrent ? " · 待响应" : ""}
                   </p>
                   <p className="coins">{seat.coins} 枚钱币</p>
@@ -225,7 +346,7 @@ export function App() {
                         .join(" · ")}
                     </p>
                   ) : null}
-                  {coupSelectable ? (
+                  {targetable && pendingTarget ? (
                     <button
                       type="button"
                       disabled={busy}
@@ -234,11 +355,11 @@ export function App() {
                           {
                             type: "declare_action",
                             action: {
-                              type: "coup",
+                              type: pendingTarget,
                               targetSeatId: seat.seatId,
                             },
                           },
-                          `coup-${seat.seatId}`,
+                          `${pendingTarget}-${seat.seatId}`,
                         )
                       }
                     >
@@ -259,24 +380,50 @@ export function App() {
             </p>
           </section>
 
+          {showExchange ? (
+            <section className="response-bar" aria-label="交换选牌">
+              <span>点选恰好两张归还宫廷（对方看不到换了几张）</span>
+              <div className="response-actions">
+                {exchangeHand.map((card) => {
+                  const selected = exchangeSelected.includes(card.cardId);
+                  return (
+                    <button
+                      key={card.cardId}
+                      type="button"
+                      className={
+                        selected
+                          ? "response-button primary"
+                          : "response-button"
+                      }
+                      disabled={busy}
+                      onClick={() => toggleExchangeCard(card.cardId)}
+                    >
+                      {CHARACTER_LABEL[card.character] ?? card.character}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  className="response-button primary"
+                  disabled={busy || exchangeSelected.length !== 2}
+                  onClick={() => submitExchange()}
+                >
+                  确认归还
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           {showResponseBar ? (
             <section className="response-bar" aria-label="响应">
-              <span>
-                {view.publicState.phase === "await_block"
-                  ? "外援可被公爵阻挡"
-                  : view.publicState.phase === "await_block_challenge"
-                    ? "可质疑此次阻挡"
-                    : view.publicState.phase === "await_claim_defense"
-                      ? "证明或放弃证明"
-                      : view.publicState.phase === "await_influence_reveal"
-                        ? "选择失去的影响力"
-                        : "请响应"}
-              </span>
+              <span>{phaseHint(view.publicState.phase)}</span>
               <div className="response-actions">
                 {responseDecisions.map((decision, index) => {
                   let label: string = decision.type;
                   if (decision.type === "pass_block") label = "放弃";
-                  if (decision.type === "declare_block") label = "阻挡（公爵）";
+                  if (decision.type === "declare_block") {
+                    label = `阻挡（${CHARACTER_LABEL[decision.claimedCharacter] ?? decision.claimedCharacter}）`;
+                  }
                   if (decision.type === "pass_challenge") label = "放弃";
                   if (decision.type === "challenge_claim") label = "质疑";
                   if (decision.type === "concede_claim") label = "放弃证明";
@@ -315,7 +462,7 @@ export function App() {
           <section className="panel actions" aria-label="行动">
             <button
               type="button"
-              disabled={busy || !canIncome || showResponseBar}
+              disabled={busy || !canIncome || showResponseBar || showExchange || finished}
               onClick={() =>
                 void submitDecision(
                   { type: "declare_action", action: { type: "income" } },
@@ -327,7 +474,9 @@ export function App() {
             </button>
             <button
               type="button"
-              disabled={busy || !canForeignAid || showResponseBar}
+              disabled={
+                busy || !canForeignAid || showResponseBar || showExchange || finished
+              }
               onClick={() =>
                 void submitDecision(
                   { type: "declare_action", action: { type: "foreign_aid" } },
@@ -339,10 +488,68 @@ export function App() {
             </button>
             <button
               type="button"
-              disabled={busy || !canCoup || showResponseBar}
-              onClick={() => setPendingCoup((value) => !value)}
+              disabled={busy || !canTax || showResponseBar || showExchange || finished}
+              onClick={() =>
+                void submitDecision(
+                  { type: "declare_action", action: { type: "tax" } },
+                  "tax",
+                )
+              }
             >
-              {pendingCoup ? "取消政变" : "政变（7）"}
+              征税（+3）
+            </button>
+            <button
+              type="button"
+              disabled={
+                busy ||
+                assassinateTargetIds.length === 0 ||
+                showResponseBar ||
+                showExchange ||
+                finished
+              }
+              onClick={() => toggleTargetMode("assassinate")}
+            >
+              {pendingTarget === "assassinate" ? "取消刺杀" : "刺杀（3）"}
+            </button>
+            <button
+              type="button"
+              disabled={
+                busy ||
+                stealTargetIds.length === 0 ||
+                showResponseBar ||
+                showExchange ||
+                finished
+              }
+              onClick={() => toggleTargetMode("steal")}
+            >
+              {pendingTarget === "steal" ? "取消偷窃" : "偷窃"}
+            </button>
+            <button
+              type="button"
+              disabled={
+                busy || !canExchange || showResponseBar || showExchange || finished
+              }
+              onClick={() =>
+                void submitDecision(
+                  { type: "declare_action", action: { type: "exchange" } },
+                  "exchange",
+                )
+              }
+            >
+              交换
+            </button>
+            <button
+              type="button"
+              disabled={
+                busy ||
+                coupTargetIds.length === 0 ||
+                showResponseBar ||
+                showExchange ||
+                finished
+              }
+              onClick={() => toggleTargetMode("coup")}
+            >
+              {pendingTarget === "coup" ? "取消政变" : "政变（7）"}
             </button>
             <button
               type="button"
@@ -354,8 +561,16 @@ export function App() {
             </button>
           </section>
 
-          {pendingCoup && canCoup ? (
-            <p className="hint">先点政变，再点高亮座位选定目标。</p>
+          {pendingTarget && activeTargetIds.length > 0 ? (
+            <p className="hint">
+              先点
+              {pendingTarget === "coup"
+                ? "政变"
+                : pendingTarget === "assassinate"
+                  ? "刺杀"
+                  : "偷窃"}
+              ，再点高亮座位选定目标。
+            </p>
           ) : null}
 
           <section className="panel log" aria-label="对局事件">

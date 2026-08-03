@@ -6,6 +6,7 @@ import type {
   MatchStatus,
   PendingAction,
   SeatController,
+  BlockCharacter,
 } from "@coup/domain";
 
 export type ProtocolVersion = 1;
@@ -22,6 +23,8 @@ export type PublicSeatView = {
 
 export type PrivateSeatState = {
   hiddenCharacters: CharacterId[];
+  /** Present only for the exchanging seat during await_exchange_selection. */
+  exchangeHand: Array<{ cardId: string; character: CharacterId }> | null;
 };
 
 export type MatchPublicState = {
@@ -63,4 +66,5 @@ export type {
   MatchStatus,
   PendingAction,
   SeatController,
+  BlockCharacter,
 };

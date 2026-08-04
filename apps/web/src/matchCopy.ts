@@ -49,63 +49,132 @@ export const ROLE_CARD: Record<
   },
 };
 
-export function eventText(
+export type TextPart =
+  | { type: "text"; text: string }
+  | { type: "seat"; seatId: string; text: string };
+
+type NamedSeat = { seatId: string; displayName: string };
+
+function seatPart(seats: readonly NamedSeat[], seatId: string): TextPart {
+  return {
+    type: "seat",
+    seatId,
+    text: seats.find((seat) => seat.seatId === seatId)?.displayName ?? seatId,
+  };
+}
+
+export function joinTextParts(parts: readonly TextPart[]): string {
+  return parts.map((part) => part.text).join("");
+}
+
+/** Public event copy as text/seat segments for seat-color rendering. */
+export function eventParts(
   event: SeatView["projectedHistory"][number],
-  seats: SeatView["publicState"]["seats"],
-): string {
-  const name = (seatId: string) =>
-    seats.find((seat) => seat.seatId === seatId)?.displayName ?? seatId;
+  seats: readonly NamedSeat[],
+): TextPart[] {
+  const seat = (seatId: string) => seatPart(seats, seatId);
+  const text = (value: string): TextPart => ({ type: "text", text: value });
 
   switch (event.type) {
     case "match_started":
-      return "对局开始";
+      return [text("对局开始")];
     case "action_declared": {
-      const target =
-        event.targetSeatId != null ? ` → ${name(event.targetSeatId)}` : "";
-      return `${name(event.seatId)} 声明${ACTION_LABEL[event.actionType] ?? event.actionType}${target}`;
+      const parts: TextPart[] = [
+        seat(event.seatId),
+        text(` 声明${ACTION_LABEL[event.actionType] ?? event.actionType}`),
+      ];
+      if (event.targetSeatId != null) {
+        parts.push(text(" → "), seat(event.targetSeatId));
+      }
+      return parts;
     }
     case "action_resolved": {
       if (event.actionType === "coup" && event.targetSeatId) {
-        return `${name(event.seatId)} 政变命中 ${name(event.targetSeatId)}`;
+        return [
+          seat(event.seatId),
+          text(" 政变命中 "),
+          seat(event.targetSeatId),
+        ];
       }
       if (event.actionType === "assassinate" && event.targetSeatId) {
-        return `${name(event.seatId)} 刺杀命中 ${name(event.targetSeatId)}`;
+        return [
+          seat(event.seatId),
+          text(" 刺杀命中 "),
+          seat(event.targetSeatId),
+        ];
       }
       if (event.actionType === "steal" && event.coinsStolen != null) {
-        return `${name(event.seatId)} 偷走 ${event.coinsStolen} 枚（${name(event.targetSeatId ?? "")}）`;
+        return [
+          seat(event.seatId),
+          text(` 偷走 ${event.coinsStolen} 枚（`),
+          seat(event.targetSeatId ?? ""),
+          text("）"),
+        ];
       }
       if (event.actionType === "exchange") {
-        return `${name(event.seatId)} 完成交换`;
+        return [seat(event.seatId), text(" 完成交换")];
       }
       if (event.coinsGained != null) {
-        return `${name(event.seatId)} 获得 ${event.coinsGained} 枚钱币`;
+        return [
+          seat(event.seatId),
+          text(` 获得 ${event.coinsGained} 枚钱币`),
+        ];
       }
-      return `${name(event.seatId)} 行动结算`;
+      return [seat(event.seatId), text(" 行动结算")];
     }
     case "action_failed": {
       const why = event.reason === "blocked" ? "被阻挡" : "被质疑推翻";
-      return `${name(event.seatId)} 的${ACTION_LABEL[event.actionType] ?? event.actionType}${why}`;
+      return [
+        seat(event.seatId),
+        text(
+          ` 的${ACTION_LABEL[event.actionType] ?? event.actionType}${why}`,
+        ),
+      ];
     }
     case "block_declared":
-      return `${name(event.seatId)} 声明阻挡（${CHARACTER_LABEL[event.claimedCharacter] ?? event.claimedCharacter}）`;
+      return [
+        seat(event.seatId),
+        text(
+          ` 声明阻挡（${CHARACTER_LABEL[event.claimedCharacter] ?? event.claimedCharacter}）`,
+        ),
+      ];
     case "response_passed":
-      return `${name(event.seatId)} 放弃${event.responseType === "block" ? "阻挡" : "质疑"}`;
+      return [
+        seat(event.seatId),
+        text(
+          ` 放弃${event.responseType === "block" ? "阻挡" : "质疑"}`,
+        ),
+      ];
     case "challenge_declared":
-      return `${name(event.seatId)} 质疑 ${name(event.againstSeatId)}`;
+      return [
+        seat(event.seatId),
+        text(" 质疑 "),
+        seat(event.againstSeatId),
+      ];
     case "claim_proven":
-      return `${name(event.seatId)} 证明了 ${CHARACTER_LABEL[event.character] ?? event.character}`;
+      return [
+        seat(event.seatId),
+        text(
+          ` 证明了 ${CHARACTER_LABEL[event.character] ?? event.character}`,
+        ),
+      ];
     case "claim_conceded":
-      return `${name(event.seatId)} 放弃证明`;
+      return [seat(event.seatId), text(" 放弃证明")];
     case "influence_revealed":
-      return `${name(event.seatId)} 揭示 ${CHARACTER_LABEL[event.character] ?? event.character}`;
+      return [
+        seat(event.seatId),
+        text(
+          ` 揭示 ${CHARACTER_LABEL[event.character] ?? event.character}`,
+        ),
+      ];
     case "seat_eliminated":
-      return `${name(event.seatId)} 被淘汰`;
+      return [seat(event.seatId), text(" 被淘汰")];
     case "match_finished":
-      return `${name(event.winnerSeatId)} 获胜`;
+      return [seat(event.winnerSeatId), text(" 获胜")];
     case "turn_advanced":
-      return `轮到 ${name(event.seatId)}`;
+      return [text("轮到 "), seat(event.seatId)];
     default:
-      return "事件";
+      return [text("事件")];
   }
 }
 
@@ -149,12 +218,16 @@ export function seatModelLabel(seat: SeatModelLabelInput): string {
 export type SeatCallout = {
   seatId: string;
   text: string;
+  parts: TextPart[];
 };
 
 type CalloutSeat = { seatId: string; displayName: string };
 
-function calloutSeatName(seats: readonly CalloutSeat[], seatId: string): string {
-  return seats.find((seat) => seat.seatId === seatId)?.displayName ?? seatId;
+function calloutFromParts(
+  seatId: string,
+  parts: TextPart[],
+): SeatCallout {
+  return { seatId, parts, text: joinTextParts(parts) };
 }
 
 /** Short public-decision callout shown beside a seat (no rationale / private info). */
@@ -162,45 +235,50 @@ export function seatCalloutFromEvent(
   event: SeatView["projectedHistory"][number],
   seats: readonly CalloutSeat[],
 ): SeatCallout | null {
+  const seat = (seatId: string) => seatPart(seats, seatId);
+  const text = (value: string): TextPart => ({ type: "text", text: value });
+
   switch (event.type) {
     case "action_declared": {
       const action = ACTION_LABEL[event.actionType] ?? event.actionType;
-      const target =
-        event.targetSeatId != null
-          ? ` → ${calloutSeatName(seats, event.targetSeatId)}`
-          : "";
-      return { seatId: event.seatId, text: `声明${action}${target}` };
+      const parts: TextPart[] = [text(`声明${action}`)];
+      if (event.targetSeatId != null) {
+        parts.push(text(" → "), seat(event.targetSeatId));
+      }
+      return calloutFromParts(event.seatId, parts);
     }
     case "block_declared":
-      return {
-        seatId: event.seatId,
-        text: `阻挡 · ${CHARACTER_LABEL[event.claimedCharacter] ?? event.claimedCharacter}`,
-      };
+      return calloutFromParts(event.seatId, [
+        text(
+          `阻挡 · ${CHARACTER_LABEL[event.claimedCharacter] ?? event.claimedCharacter}`,
+        ),
+      ]);
     case "response_passed":
-      return {
-        seatId: event.seatId,
-        text: `放弃${event.responseType === "block" ? "阻挡" : "质疑"}`,
-      };
+      return calloutFromParts(event.seatId, [
+        text(`放弃${event.responseType === "block" ? "阻挡" : "质疑"}`),
+      ]);
     case "challenge_declared":
-      return {
-        seatId: event.seatId,
-        text: `质疑 ${calloutSeatName(seats, event.againstSeatId)}`,
-      };
+      return calloutFromParts(event.seatId, [
+        text("质疑 "),
+        seat(event.againstSeatId),
+      ]);
     case "claim_proven":
-      return {
-        seatId: event.seatId,
-        text: `证明${CHARACTER_LABEL[event.character] ?? event.character}`,
-      };
+      return calloutFromParts(event.seatId, [
+        text(
+          `证明${CHARACTER_LABEL[event.character] ?? event.character}`,
+        ),
+      ]);
     case "claim_conceded":
-      return { seatId: event.seatId, text: "放弃证明" };
+      return calloutFromParts(event.seatId, [text("放弃证明")]);
     case "influence_revealed":
-      return {
-        seatId: event.seatId,
-        text: `揭示${CHARACTER_LABEL[event.character] ?? event.character}`,
-      };
+      return calloutFromParts(event.seatId, [
+        text(
+          `揭示${CHARACTER_LABEL[event.character] ?? event.character}`,
+        ),
+      ]);
     case "action_resolved":
       if (event.actionType === "exchange") {
-        return { seatId: event.seatId, text: "完成交换" };
+        return calloutFromParts(event.seatId, [text("完成交换")]);
       }
       return null;
     default:
@@ -212,12 +290,12 @@ export function seatCalloutFromEvent(
 export function seatCalloutsFromEvents(
   events: readonly SeatView["projectedHistory"][number][],
   seats: readonly CalloutSeat[],
-): Record<string, string> {
-  const map: Record<string, string> = {};
+): Record<string, SeatCallout> {
+  const map: Record<string, SeatCallout> = {};
   for (const event of events) {
     const callout = seatCalloutFromEvent(event, seats);
     if (callout) {
-      map[callout.seatId] = callout.text;
+      map[callout.seatId] = callout;
     }
   }
   return map;
@@ -247,7 +325,7 @@ export function phaseHint(phase: SeatView["publicState"]["phase"]): string {
     case "await_influence_reveal":
       return "选择失去的影响力";
     case "await_exchange_selection":
-      return "选择归还宫廷的两张牌";
+      return "选择要保留的影响力";
     default:
       return "请响应";
   }

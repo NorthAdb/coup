@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { CharacterId, LegalDecision, SeatView } from "@coup/protocol";
+import {
+  actionDraftSummary,
+  actionDraftToDecision,
+  canConfirmActionDraft,
+  type ActionDraft,
+  type TargetedActionType,
+  type UntargetedActionType,
+} from "./actionDraft";
 import {
   calloutHoldMs,
   cssSpeedFactor,
@@ -11,19 +19,34 @@ import {
   type DeskPace,
 } from "./deskPacing";
 import {
+  exchangeKeepSummary,
+  keepCountNeeded,
+  returnCardIdsFromKeep,
+  toggleKeepSelection,
+} from "./exchangeKeep";
+import {
   ACTION_LABEL,
   CHARACTER_LABEL,
-  eventText,
+  eventParts,
   phaseHint,
   rationaleSourceLabel,
   ROLE_CARD,
-  seatCalloutsFromEvents,
   seatModelLabel,
   type DecisionRationaleView,
+  type SeatCallout,
+  type TextPart,
 } from "./matchCopy";
+import {
+  buildResultBeatSteps,
+  heavyBeatHoldMs,
+  lightBeatHoldMs,
+  yourTurnStageBeat,
+  type StageBeat,
+} from "./resultBeat";
 import { RulesPanel } from "./RulesPanel";
+import { seatTintClass, seatTintClassForId } from "./seatColor";
+import { TextPartsView } from "./textParts";
 
-type TargetAction = "coup" | "assassinate" | "steal";
 type AgentPhase = "idle" | "thinking" | "validating" | "retrying" | "failed";
 
 type DeskOverlay =
@@ -34,13 +57,8 @@ type MatchDeskProps = {
   view: SeatView;
   busy: boolean;
   agentPhase: AgentPhase;
-  pendingTarget: TargetAction | null;
-  exchangeSelected: string[];
   decisionRationales: Record<string, DecisionRationaleView>;
   onSubmitDecision: (decision: LegalDecision, label: string) => void;
-  onToggleTarget: (action: TargetAction) => void;
-  onToggleExchangeCard: (cardId: string) => void;
-  onSubmitExchange: () => void;
   onReturnToSetup: () => void;
 };
 
@@ -61,7 +79,7 @@ function agentPhaseLabel(phase: AgentPhase): string {
 
 function hasAction(
   decisions: LegalDecision[],
-  actionType: "income" | "foreign_aid" | "tax" | "exchange",
+  actionType: UntargetedActionType,
 ): boolean {
   return decisions.some(
     (decision) =>
@@ -72,7 +90,7 @@ function hasAction(
 
 function targetsFor(
   decisions: LegalDecision[],
-  actionType: TargetAction,
+  actionType: TargetedActionType,
 ): string[] {
   return decisions
     .filter(
@@ -104,12 +122,19 @@ function seatName(
 function stageContent(view: SeatView): {
   eyebrow: string;
   title: string;
+  titleParts: TextPart[];
   text: string;
   claim: string | null;
 } {
   const { publicState } = view;
   const seats = publicState.seats;
   const pending = publicState.pendingAction;
+  const text = (value: string): TextPart => ({ type: "text", text: value });
+  const seat = (seatId: string): TextPart => ({
+    type: "seat",
+    seatId,
+    text: seatName(seats, seatId),
+  });
 
   if (publicState.status === "finished") {
     const finished = view.projectedHistory.find(
@@ -117,37 +142,46 @@ function stageContent(view: SeatView): {
     );
     const winnerId =
       finished?.type === "match_finished" ? finished.winnerSeatId : null;
+    const titleParts: TextPart[] = winnerId
+      ? [seat(winnerId), text(" 获胜")]
+      : [text("有人 获胜")];
     return {
       eyebrow: "对局结束",
-      title: `${winnerId ? seatName(seats, winnerId) : "有人"} 获胜`,
+      title: titleParts.map((part) => part.text).join(""),
+      titleParts,
       text: "本局已结束。可返回开局页查看事件列表或开新局。",
       claim: null,
     };
   }
 
   if (publicState.phase === "await_action") {
-    const current = seatName(seats, publicState.currentSeatId);
     const yours = publicState.currentSeatId === view.seatId;
+    const titleParts: TextPart[] = yours
+      ? [text("轮到你行动")]
+      : [text("轮到 "), seat(publicState.currentSeatId)];
     return {
       eyebrow: "当前回合",
-      title: yours ? "轮到你行动" : `轮到 ${current}`,
+      title: titleParts.map((part) => part.text).join(""),
+      titleParts,
       text: yours
-        ? "从底部合法行动栏选择一项；需要目标时先点行动再点高亮座位。"
-        : `${current} 正在决策，舞台保持等待。`,
+        ? "从底部合法行动栏选择一项；需要目标时先点行动再点高亮座位，经确认条提交。"
+        : "对手正在决策，舞台保持等待。",
       claim: null,
     };
   }
 
   if (pending) {
-    const actor = seatName(seats, pending.actorSeatId);
     const actionLabel = ACTION_LABEL[pending.action.type] ?? pending.action.type;
-    let targetText = "";
+    const titleParts: TextPart[] = [
+      seat(pending.actorSeatId),
+      text(` 声明「${actionLabel}」`),
+    ];
     if (
       pending.action.type === "coup" ||
       pending.action.type === "assassinate" ||
       pending.action.type === "steal"
     ) {
-      targetText = `，目标 ${seatName(seats, pending.action.targetSeatId)}`;
+      titleParts.push(text("，目标 "), seat(pending.action.targetSeatId));
     }
 
     let claim: string | null = null;
@@ -161,7 +195,8 @@ function stageContent(view: SeatView): {
 
     return {
       eyebrow: "当前行动",
-      title: `${actor} 声明「${actionLabel}」${targetText}`,
+      title: titleParts.map((part) => part.text).join(""),
+      titleParts,
       text: phaseHint(publicState.phase),
       claim,
     };
@@ -170,6 +205,7 @@ function stageContent(view: SeatView): {
   return {
     eyebrow: "舞台",
     title: phaseHint(publicState.phase),
+    titleParts: [text(phaseHint(publicState.phase))],
     text: "等待权威状态推进。",
     claim: null,
   };
@@ -193,28 +229,59 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function draftActionSummaryNodes(
+  draft: ActionDraft,
+  seats: SeatView["publicState"]["seats"],
+): ReactNode {
+  if (draft.kind === "untargeted") {
+    return actionDraftSummary(draft, seats);
+  }
+  const label = ACTION_LABEL[draft.actionType] ?? draft.actionType;
+  if (draft.targetSeatId == null) {
+    return `${label} · 选择目标`;
+  }
+  return (
+    <>
+      {label}{" "}
+      <span
+        className={`seat-name-tint ${seatTintClassForId(seats, draft.targetSeatId)}`}
+      >
+        {seatName(seats, draft.targetSeatId)}
+      </span>
+    </>
+  );
+}
+
 export function MatchDesk({
   view,
   busy,
   agentPhase,
-  pendingTarget,
-  exchangeSelected,
   decisionRationales,
   onSubmitDecision,
-  onToggleTarget,
-  onToggleExchangeCard,
-  onSubmitExchange,
   onReturnToSetup,
 }: MatchDeskProps) {
   const [pace, setPace] = useState<DeskPace>(() => loadDeskPace());
   const [rulesOpen, setRulesOpen] = useState(false);
   const [overlay, setOverlay] = useState<DeskOverlay | null>(null);
-  const [callouts, setCallouts] = useState<Record<string, string>>({});
+  const [callouts, setCallouts] = useState<Record<string, SeatCallout>>({});
+  const [stageBeat, setStageBeat] = useState<StageBeat | null>(null);
+  const [replaying, setReplaying] = useState(false);
+  const [actionDraft, setActionDraft] = useState<ActionDraft | null>(null);
+  const [exchangeKeepSelected, setExchangeKeepSelected] = useState<string[]>(
+    [],
+  );
   const reducedMotion = usePrefersReducedMotion();
   const seenHistoryRef = useRef(view.projectedHistory.length);
   const matchIdRef = useRef(view.matchId);
   const eventListRef = useRef<HTMLOListElement | null>(null);
   const calloutTimersRef = useRef<Record<string, number>>({});
+  const replayGenRef = useRef(0);
 
   const speed = cssSpeedFactor(pace, reducedMotion);
 
@@ -229,14 +296,31 @@ export function MatchDesk({
     if (matchIdRef.current !== view.matchId) {
       matchIdRef.current = view.matchId;
       seenHistoryRef.current = view.projectedHistory.length;
+      replayGenRef.current += 1;
       setOverlay(null);
       setCallouts({});
+      setStageBeat(null);
+      setReplaying(false);
+      setActionDraft(null);
+      setExchangeKeepSelected([]);
       for (const timer of Object.values(calloutTimersRef.current)) {
         window.clearTimeout(timer);
       }
       calloutTimersRef.current = {};
     }
   }, [view.matchId, view.projectedHistory.length]);
+
+  useEffect(() => {
+    if (view.publicState.phase !== "await_exchange_selection") {
+      setExchangeKeepSelected([]);
+    }
+  }, [view.publicState.phase, view.stateVersion]);
+
+  useEffect(() => {
+    if (view.publicState.phase !== "await_action") {
+      setActionDraft(null);
+    }
+  }, [view.publicState.phase, view.stateVersion]);
 
   useEffect(() => {
     const history = view.projectedHistory;
@@ -247,76 +331,103 @@ export function MatchDesk({
     const fresh = history.slice(seenHistoryRef.current);
     seenHistoryRef.current = history.length;
 
-    const proven = [...fresh]
-      .reverse()
-      .find((event) => event.type === "claim_proven");
-    const revealed = [...fresh]
-      .reverse()
-      .find((event) => event.type === "influence_revealed");
-
+    const steps = buildResultBeatSteps(fresh, view.publicState.seats);
+    const gen = ++replayGenRef.current;
     let cancelled = false;
-    const timers: number[] = [];
 
-    if (proven && proven.type === "claim_proven") {
-      setOverlay({
-        kind: "reveal",
-        character: proven.character,
-        caption: "证明角色",
-      });
-      timers.push(
-        window.setTimeout(() => {
-          if (cancelled) return;
-          setOverlay({
-            kind: "draw",
-            caption: "洗回宫廷 · 抽取替代牌",
-          });
-          timers.push(
-            window.setTimeout(() => {
-              if (!cancelled) setOverlay(null);
-            }, drawHoldMs(pace, reducedMotion)),
-          );
-        }, revealHoldMs(pace, reducedMotion)),
-      );
-    } else if (revealed && revealed.type === "influence_revealed") {
-      setOverlay({
-        kind: "reveal",
-        character: revealed.character,
-        caption: "失去影响力",
-      });
-      timers.push(
-        window.setTimeout(() => {
-          if (!cancelled) setOverlay(null);
-        }, revealHoldMs(pace, reducedMotion)),
-      );
-    }
-
-    const nextCallouts = seatCalloutsFromEvents(
-      fresh,
-      view.publicState.seats,
-    );
-    const hold = calloutHoldMs(pace, reducedMotion);
-    for (const [seatId, text] of Object.entries(nextCallouts)) {
+    function showCallout(seatId: string, callout: SeatCallout) {
       const previousTimer = calloutTimersRef.current[seatId];
       if (previousTimer !== undefined) {
         window.clearTimeout(previousTimer);
       }
-      setCallouts((current) => ({ ...current, [seatId]: text }));
+      setCallouts((current) => ({ ...current, [seatId]: callout }));
       calloutTimersRef.current[seatId] = window.setTimeout(() => {
-        if (cancelled) return;
+        if (cancelled || replayGenRef.current !== gen) return;
         setCallouts((current) => {
-          if (current[seatId] !== text) return current;
+          if (current[seatId]?.text !== callout.text) return current;
           const { [seatId]: _removed, ...rest } = current;
           return rest;
         });
         delete calloutTimersRef.current[seatId];
-      }, hold);
+      }, calloutHoldMs(pace, reducedMotion));
     }
+
+    async function runReplay() {
+      if (steps.length === 0) return;
+      setReplaying(true);
+
+      for (const step of steps) {
+        if (cancelled || replayGenRef.current !== gen) return;
+
+        if (step.callout) {
+          showCallout(step.callout.seatId, step.callout);
+        }
+
+        if (step.weight === "heavy" && step.stage) {
+          setStageBeat(step.stage);
+          let identityHeld = false;
+          if (step.event.type === "claim_proven") {
+            identityHeld = true;
+            setOverlay({
+              kind: "reveal",
+              character: step.event.character,
+              caption: "证明角色",
+            });
+            await waitMs(revealHoldMs(pace, reducedMotion));
+            if (cancelled || replayGenRef.current !== gen) return;
+            setOverlay({
+              kind: "draw",
+              caption: "洗回宫廷 · 抽取替代牌",
+            });
+            await waitMs(drawHoldMs(pace, reducedMotion));
+            if (cancelled || replayGenRef.current !== gen) return;
+            setOverlay(null);
+          } else if (step.event.type === "influence_revealed") {
+            identityHeld = true;
+            setOverlay({
+              kind: "reveal",
+              character: step.event.character,
+              caption: "失去影响力",
+            });
+            await waitMs(revealHoldMs(pace, reducedMotion));
+            if (cancelled || replayGenRef.current !== gen) return;
+            setOverlay(null);
+          }
+          if (!identityHeld) {
+            await waitMs(heavyBeatHoldMs(pace, reducedMotion));
+          }
+        } else if (step.weight === "light") {
+          await waitMs(lightBeatHoldMs(pace, reducedMotion));
+        }
+      }
+
+      if (cancelled || replayGenRef.current !== gen) return;
+
+      const finishedNow = view.publicState.status === "finished";
+      if (!finishedNow && view.legalDecisions.length > 0) {
+        setStageBeat(yourTurnStageBeat());
+        await waitMs(lightBeatHoldMs(pace, reducedMotion));
+      }
+
+      if (cancelled || replayGenRef.current !== gen) return;
+      setStageBeat(null);
+      setOverlay(null);
+      setReplaying(false);
+    }
+
+    void runReplay();
 
     return () => {
       cancelled = true;
-      for (const id of timers) window.clearTimeout(id);
     };
-  }, [view.projectedHistory, view.publicState.seats, pace, reducedMotion]);
+  }, [
+    view.projectedHistory,
+    view.publicState.seats,
+    view.legalDecisions.length,
+    view.publicState.status,
+    pace,
+    reducedMotion,
+  ]);
 
   useEffect(() => {
     const list = eventListRef.current;
@@ -344,6 +455,8 @@ export function MatchDesk({
   const coupTargetIds = targetsFor(decisions, "coup");
   const assassinateTargetIds = targetsFor(decisions, "assassinate");
   const stealTargetIds = targetsFor(decisions, "steal");
+  const pendingTarget =
+    actionDraft?.kind === "targeted" ? actionDraft.actionType : null;
   const activeTargetIds =
     pendingTarget === "coup"
       ? coupTargetIds
@@ -369,9 +482,22 @@ export function MatchDesk({
     view.publicState.phase === "await_exchange_selection" &&
     exchangeHand != null &&
     exchangeHand.length > 0;
+  const keepNeeded = exchangeHand ? keepCountNeeded(exchangeHand.length) : 0;
   const finished = view.publicState.status === "finished";
-  const actionsLocked = busy || showResponseBar || showExchange || finished;
-  const stage = stageContent(view);
+  const showActionConfirm =
+    actionDraft != null && !showResponseBar && !showExchange && !finished;
+  const actionsLocked =
+    busy || replaying || showResponseBar || showExchange || finished;
+  const liveStage = stageContent(view);
+  const stage = stageBeat
+    ? {
+        ...stageBeat,
+        titleParts: stageBeat.titleParts ?? [
+          { type: "text" as const, text: stageBeat.title },
+        ],
+        claim: null as string | null,
+      }
+    : liveStage;
   const localSeat = view.publicState.seats.find(
     (seat) => seat.seatId === view.seatId,
   );
@@ -382,10 +508,59 @@ export function MatchDesk({
       ? view.publicState.activeSeatId
       : null;
 
+  const keptLabels =
+    exchangeHand
+      ?.filter((card) => exchangeKeepSelected.includes(card.cardId))
+      .map((card) => CHARACTER_LABEL[card.character]) ?? [];
+
   function cyclePace() {
     const next = toggleDeskPace(pace);
     setPace(next);
     saveDeskPace(next);
+  }
+
+  function selectUntargeted(actionType: UntargetedActionType) {
+    setActionDraft((current) =>
+      current?.kind === "untargeted" && current.actionType === actionType
+        ? null
+        : { kind: "untargeted", actionType },
+    );
+  }
+
+  function selectTargeted(actionType: TargetedActionType) {
+    setActionDraft((current) =>
+      current?.kind === "targeted" && current.actionType === actionType
+        ? null
+        : { kind: "targeted", actionType, targetSeatId: null },
+    );
+  }
+
+  function chooseTarget(targetSeatId: string) {
+    setActionDraft((current) => {
+      if (current?.kind !== "targeted") return current;
+      return { ...current, targetSeatId };
+    });
+  }
+
+  function confirmActionDraft() {
+    if (!actionDraft) return;
+    const decision = actionDraftToDecision(actionDraft);
+    if (!decision) return;
+    setActionDraft(null);
+    onSubmitDecision(decision, `draft-${actionDraft.actionType}`);
+  }
+
+  function confirmExchangeKeep() {
+    if (!exchangeHand || exchangeKeepSelected.length !== keepNeeded) return;
+    const returnCardIds = returnCardIdsFromKeep(
+      exchangeHand.map((card) => card.cardId),
+      exchangeKeepSelected,
+    );
+    setExchangeKeepSelected([]);
+    onSubmitDecision(
+      { type: "choose_exchange_cards", returnCardIds },
+      "exchange-keep",
+    );
   }
 
   return (
@@ -426,7 +601,7 @@ export function MatchDesk({
 
       <main className="board desk-layout" aria-label="策划桌">
         <section className="opponents" aria-label="座位">
-          {view.publicState.seats.map((seat) => {
+          {view.publicState.seats.map((seat, seatIndex) => {
             const isCurrent = seat.seatId === view.publicState.currentSeatId;
             const isActive = seat.seatId === view.publicState.activeSeatId;
             const targetable =
@@ -439,11 +614,13 @@ export function MatchDesk({
               thinkingSeatId === seat.seatId
                 ? undefined
                 : decisionRationales[seat.seatId];
+            const callout = callouts[seat.seatId];
             return (
               <article
                 key={seat.seatId}
                 className={[
                   "seat",
+                  seatTintClass(seatIndex),
                   isCurrent ? "current" : "",
                   isActive ? "active" : "",
                   targetable ? "targetable" : "",
@@ -454,12 +631,19 @@ export function MatchDesk({
                   .join(" ")}
               >
                 <div className="seat-header">
-                  <span className="seat-name">{seat.displayName}</span>
+                  <span
+                    className={`seat-name seat-name-tint ${seatTintClass(seatIndex)}`}
+                  >
+                    {seat.displayName}
+                  </span>
                   <span className="coin">{seat.coins}</span>
                 </div>
-                {callouts[seat.seatId] ? (
+                {callout ? (
                   <div className="seat-callout" role="status">
-                    {callouts[seat.seatId]}
+                    <TextPartsView
+                      parts={callout.parts}
+                      seats={view.publicState.seats}
+                    />
                   </div>
                 ) : null}
                 {rationale ? (
@@ -501,19 +685,8 @@ export function MatchDesk({
                   <button
                     type="button"
                     className="seat-target-button"
-                    disabled={busy}
-                    onClick={() =>
-                      onSubmitDecision(
-                        {
-                          type: "declare_action",
-                          action: {
-                            type: pendingTarget,
-                            targetSeatId: seat.seatId,
-                          },
-                        },
-                        `${pendingTarget}-${seat.seatId}`,
-                      )
-                    }
+                    disabled={busy || replaying}
+                    onClick={() => chooseTarget(seat.seatId)}
                   >
                     选定为目标
                   </button>
@@ -527,7 +700,12 @@ export function MatchDesk({
           <section className="stage" aria-label="行动舞台">
             <div className="stage-card">
               <div className="eyebrow">{stage.eyebrow}</div>
-              <h2>{stage.title}</h2>
+              <h2>
+                <TextPartsView
+                  parts={stage.titleParts}
+                  seats={view.publicState.seats}
+                />
+              </h2>
               <p>{stage.text}</p>
               {stage.claim ? (
                 <div className="claim-token entering">
@@ -540,40 +718,114 @@ export function MatchDesk({
                   {agentPhaseLabel(agentPhase)}
                 </p>
               ) : null}
+              {replaying && !busy ? (
+                <p className="agent-phase" aria-live="polite">
+                  结果节拍回放中…
+                </p>
+              ) : null}
 
-              {showExchange ? (
-                <div className="response-bar exchange-bar" aria-label="交换选牌">
-                  <span>点选恰好两张归还宫廷</span>
-                  {exchangeHand.map((card) => {
-                    const selected = exchangeSelected.includes(card.cardId);
-                    return (
-                      <button
-                        key={card.cardId}
-                        type="button"
-                        className={
-                          selected
-                            ? "response-button primary"
-                            : "response-button"
-                        }
-                        disabled={busy}
-                        onClick={() => onToggleExchangeCard(card.cardId)}
-                      >
-                        {CHARACTER_LABEL[card.character]}
-                      </button>
-                    );
-                  })}
-                  <button
-                    type="button"
-                    className="response-button primary"
-                    disabled={busy || exchangeSelected.length !== 2}
-                    onClick={() => onSubmitExchange()}
-                  >
-                    确认归还
-                  </button>
+              {showExchange && exchangeHand ? (
+                <div
+                  className="response-bar confirmation-bar exchange-bar"
+                  aria-label="交换选牌确认"
+                >
+                  <span className="confirm-summary">
+                    {exchangeKeepSelected.length === keepNeeded
+                      ? exchangeKeepSummary(keptLabels)
+                      : `选择 ${keepNeeded} 张要保留的影响力`}
+                  </span>
+                  <div className="exchange-pick-row">
+                    {exchangeHand.map((card) => {
+                      const selected = exchangeKeepSelected.includes(
+                        card.cardId,
+                      );
+                      return (
+                        <button
+                          key={card.cardId}
+                          type="button"
+                          className={
+                            selected
+                              ? "response-button primary"
+                              : "response-button"
+                          }
+                          disabled={busy || replaying}
+                          onClick={() =>
+                            setExchangeKeepSelected((current) =>
+                              toggleKeepSelection(
+                                current,
+                                card.cardId,
+                                keepNeeded,
+                              ),
+                            )
+                          }
+                        >
+                          {CHARACTER_LABEL[card.character]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="confirm-actions">
+                    <button
+                      type="button"
+                      className="response-button"
+                      disabled={busy || replaying}
+                      onClick={() => setExchangeKeepSelected([])}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      className="response-button primary"
+                      disabled={
+                        busy ||
+                        replaying ||
+                        exchangeKeepSelected.length !== keepNeeded
+                      }
+                      onClick={() => confirmExchangeKeep()}
+                    >
+                      确认
+                    </button>
+                  </div>
                 </div>
               ) : null}
 
-              {showResponseBar ? (
+              {showActionConfirm && actionDraft ? (
+                <div
+                  className="response-bar confirmation-bar"
+                  aria-label="行动确认"
+                >
+                  <span className="confirm-summary">
+                    {draftActionSummaryNodes(
+                      actionDraft,
+                      view.publicState.seats,
+                    )}
+                  </span>
+                  <div className="confirm-actions">
+                    <button
+                      type="button"
+                      className="response-button"
+                      disabled={busy || replaying}
+                      onClick={() => setActionDraft(null)}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      className="response-button primary"
+                      disabled={
+                        busy ||
+                        replaying ||
+                        !canConfirmActionDraft(actionDraft)
+                      }
+                      onClick={() => confirmActionDraft()}
+                    >
+                      确认
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {showResponseBar && !showExchange ? (
                 <div className="response-bar" aria-label="响应">
                   <span>{phaseHint(view.publicState.phase)}</span>
                   {responseDecisions.map((decision, index) => {
@@ -603,7 +855,7 @@ export function MatchDesk({
                             ? "response-button primary"
                             : "response-button"
                         }
-                        disabled={busy}
+                        disabled={busy || replaying}
                         onClick={() =>
                           onSubmitDecision(
                             decision,
@@ -648,12 +900,14 @@ export function MatchDesk({
               <div className="action-label">
                 <span>
                   {pendingTarget
-                    ? "再点高亮座位选定目标"
-                    : showResponseBar || showExchange
-                      ? "请先处理舞台上的响应"
-                      : finished
-                        ? "对局已结束"
-                        : "选择一个合法行动"}
+                    ? "再点高亮座位选定目标，然后确认"
+                    : showActionConfirm
+                      ? "确认条确认后才会提交"
+                      : showResponseBar || showExchange
+                        ? "请先处理舞台上的响应"
+                        : finished
+                          ? "对局已结束"
+                          : "选择一个合法行动"}
                 </span>
                 <span>你的金币：{localSeat?.coins ?? 0}</span>
               </div>
@@ -662,12 +916,7 @@ export function MatchDesk({
                   type="button"
                   className="action-button"
                   disabled={actionsLocked || !canIncome}
-                  onClick={() =>
-                    onSubmitDecision(
-                      { type: "declare_action", action: { type: "income" } },
-                      "income",
-                    )
-                  }
+                  onClick={() => selectUntargeted("income")}
                 >
                   收入
                   <small>+1</small>
@@ -676,15 +925,7 @@ export function MatchDesk({
                   type="button"
                   className="action-button"
                   disabled={actionsLocked || !canForeignAid}
-                  onClick={() =>
-                    onSubmitDecision(
-                      {
-                        type: "declare_action",
-                        action: { type: "foreign_aid" },
-                      },
-                      "foreign-aid",
-                    )
-                  }
+                  onClick={() => selectUntargeted("foreign_aid")}
                 >
                   外援
                   <small>+2</small>
@@ -697,7 +938,7 @@ export function MatchDesk({
                     coupTargetIds.length === 0 ||
                     (pendingTarget != null && pendingTarget !== "coup")
                   }
-                  onClick={() => onToggleTarget("coup")}
+                  onClick={() => selectTargeted("coup")}
                 >
                   {pendingTarget === "coup" ? "取消政变" : "政变"}
                   <small>7 金币</small>
@@ -706,12 +947,7 @@ export function MatchDesk({
                   type="button"
                   className="action-button"
                   disabled={actionsLocked || !canTax}
-                  onClick={() =>
-                    onSubmitDecision(
-                      { type: "declare_action", action: { type: "tax" } },
-                      "tax",
-                    )
-                  }
+                  onClick={() => selectUntargeted("tax")}
                 >
                   征税
                   <small>公爵 · +3</small>
@@ -724,7 +960,7 @@ export function MatchDesk({
                     assassinateTargetIds.length === 0 ||
                     (pendingTarget != null && pendingTarget !== "assassinate")
                   }
-                  onClick={() => onToggleTarget("assassinate")}
+                  onClick={() => selectTargeted("assassinate")}
                 >
                   {pendingTarget === "assassinate" ? "取消刺杀" : "刺杀"}
                   <small>刺客 · 3</small>
@@ -737,7 +973,7 @@ export function MatchDesk({
                     stealTargetIds.length === 0 ||
                     (pendingTarget != null && pendingTarget !== "steal")
                   }
-                  onClick={() => onToggleTarget("steal")}
+                  onClick={() => selectTargeted("steal")}
                 >
                   {pendingTarget === "steal" ? "取消偷窃" : "偷窃"}
                   <small>队长 · 目标</small>
@@ -746,12 +982,7 @@ export function MatchDesk({
                   type="button"
                   className="action-button"
                   disabled={actionsLocked || !canExchange}
-                  onClick={() =>
-                    onSubmitDecision(
-                      { type: "declare_action", action: { type: "exchange" } },
-                      "exchange",
-                    )
-                  }
+                  onClick={() => selectUntargeted("exchange")}
                 >
                   交换
                   <small>大使</small>
@@ -769,7 +1000,10 @@ export function MatchDesk({
           <ol className="event-list" ref={eventListRef}>
             {view.projectedHistory.map((event, index) => (
               <li key={`${event.type}-${index}`} className="event">
-                {eventText(event, view.publicState.seats)}
+                <TextPartsView
+                  parts={eventParts(event, view.publicState.seats)}
+                  seats={view.publicState.seats}
+                />
               </li>
             ))}
           </ol>

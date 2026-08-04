@@ -12,7 +12,6 @@ import {
   type MatchSetupDraft,
 } from "./matchSetup";
 
-type TargetAction = "coup" | "assassinate" | "steal";
 type AgentPhase = "idle" | "thinking" | "validating" | "retrying" | "failed";
 
 export function App() {
@@ -45,10 +44,6 @@ export function App() {
     runStatus: string;
     events: Array<{ seq: number; event: { type: string } }>;
   } | null>(null);
-  const [pendingTarget, setPendingTarget] = useState<TargetAction | null>(
-    null,
-  );
-  const [exchangeSelected, setExchangeSelected] = useState<string[]>([]);
 
   useEffect(() => {
     if (!busy || !view) {
@@ -194,8 +189,6 @@ export function App() {
   async function resumeMatch(matchId: string) {
     setBusy(true);
     setError(null);
-    setPendingTarget(null);
-    setExchangeSelected([]);
     try {
       const response = await fetch(`/api/matches/${matchId}/resume`, {
         method: "POST",
@@ -227,8 +220,6 @@ export function App() {
   async function startMatch() {
     setBusy(true);
     setError(null);
-    setPendingTarget(null);
-    setExchangeSelected([]);
     saveSetupDraft(setupDraft);
     try {
       const response = await fetch("/api/matches", {
@@ -267,8 +258,6 @@ export function App() {
     // Clear client view only; server keeps the in-progress run for resume.
     setView(null);
     setDecisionRationales({});
-    setPendingTarget(null);
-    setExchangeSelected([]);
     setError(null);
     void (async () => {
       try {
@@ -327,42 +316,12 @@ export function App() {
       };
       setView(body.view);
       setDecisionRationales(body.decisionRationales ?? {});
-      setPendingTarget(null);
-      setExchangeSelected([]);
       setAgentPhase("idle");
     } catch (err) {
       setError(err instanceof Error ? err.message : "提交失败");
     } finally {
       setBusy(false);
     }
-  }
-
-  function toggleTargetMode(action: TargetAction) {
-    setPendingTarget((current) => (current === action ? null : action));
-  }
-
-  function toggleExchangeCard(cardId: string) {
-    setExchangeSelected((current) => {
-      if (current.includes(cardId)) {
-        return current.filter((id) => id !== cardId);
-      }
-      if (current.length >= 2) {
-        return [current[1]!, cardId];
-      }
-      return [...current, cardId];
-    });
-  }
-
-  function submitExchange() {
-    if (exchangeSelected.length !== 2) return;
-    const [a, b] = exchangeSelected;
-    void submitDecision(
-      {
-        type: "choose_exchange_cards",
-        returnCardIds: [a!, b!],
-      },
-      "exchange-return",
-    );
   }
 
   if (view) {
@@ -372,15 +331,10 @@ export function App() {
           view={view}
           busy={busy}
           agentPhase={agentPhase}
-          pendingTarget={pendingTarget}
-          exchangeSelected={exchangeSelected}
           decisionRationales={decisionRationales}
           onSubmitDecision={(decision, label) =>
             void submitDecision(decision, label)
           }
-          onToggleTarget={toggleTargetMode}
-          onToggleExchangeCard={toggleExchangeCard}
-          onSubmitExchange={submitExchange}
           onReturnToSetup={returnToSetup}
         />
         {error ? <p className="desk-error">{error}</p> : null}

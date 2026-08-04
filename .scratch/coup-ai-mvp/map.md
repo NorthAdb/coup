@@ -40,7 +40,9 @@
 - [座位卡公开模型标签](issues/23-seat-model-labels.md) — `PublicSeatView` 公开 `cli`/`modelId`；座位卡 `seatModelLabel` 可读展示（Stub 占位不空白）。
 - [座位呼出](issues/24-seat-callouts.md) — 公开决策旁呼出约 4s、同座替换；减动效仍可读；不改领域事件。
 - [决策说明旁路与 hover](issues/25-decision-rationale-hover.md) — 可选旁路说明本局内存、模板兜底、来源标签；不进权威历史。
+- [结果节拍表现层回放](issues/26-result-beat-replay.md) — 权威一次推进后按轻重两档在中央舞台回放「刚才发生」；不倒带状态；见 ADR-0002。
 - 座位可读性增强（grilling）— `PublicSeatView` 公开 CLI/模型；决策说明为本局旁路（最近一条、模板兜底、标明来源）；座位呼出播公开决策约 4 秒且替换；改写 US-42 并新增 US-56/57。术语见 [`CONTEXT.md`](../../CONTEXT.md)；取舍见 [`ADR-0001`](../../docs/adr/0001-decision-rationale-sidecar.md)。实现票：[23 座位卡公开模型标签](issues/23-seat-model-labels.md)、[24 座位呼出](issues/24-seat-callouts.md)、[25 决策说明旁路与 hover](issues/25-decision-rationale-hover.md)（均可立即开始）。
+- 确认条、大使保留选牌与座位色（grilling）— 本地人类声明行动与大使选牌经确认条提交；大使 UI 按「保留」选牌、领域仍 `returnCardIds`；座位色固定辨识名与座位卡。新增 US-59/60/61；术语见 [`CONTEXT.md`](../../CONTEXT.md)；取舍见 [`ADR-0003`](../../docs/adr/0003-confirmation-bar-scope.md)。实现票：[27 确认条与大使保留选牌](issues/27-confirmation-bar-exchange-keep.md)、[28 座位色辨识](issues/28-seat-colors.md)（均可立即开始）。
 
 ## Not yet specified
 

@@ -21,15 +21,16 @@ export function cssSpeedFactor(
   return DESK_SPEED[pace];
 }
 
-/** Hold time for the challenge reveal overlay (ms). */
+/** Hold time for identity reveal overlay (prove / lose influence), ms. */
 export function revealHoldMs(
   pace: DeskPace,
   prefersReducedMotion: boolean,
 ): number {
+  // Keep readable even with reduced motion — identity must stay on screen.
   if (prefersReducedMotion) {
-    return 0;
+    return pace === "fast" ? 2500 : 5000;
   }
-  return pace === "fast" ? 420 : 820;
+  return pace === "fast" ? 2500 : 5000;
 }
 
 /** Hold time for the post-prove shuffle/draw beat (ms). */

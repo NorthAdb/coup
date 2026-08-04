@@ -254,7 +254,10 @@ select {
 /* —— Match desk (variant B) —— */
 
 .desk-shell {
-  min-height: 100vh;
+  box-sizing: border-box;
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 100dvh;
   min-width: 1100px;
   padding: 18px 22px 22px;
   display: grid;
@@ -328,6 +331,7 @@ select {
 
 .board {
   min-height: 0;
+  height: 100%;
   border: 1px solid var(--line);
   border-radius: 22px;
   overflow: hidden;
@@ -345,7 +349,11 @@ select {
 
 .desk-layout {
   display: grid;
+  min-height: 0;
+  height: 100%;
   grid-template-columns: 230px minmax(0, 1fr) 250px;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .opponents {
@@ -354,6 +362,7 @@ select {
   align-content: start;
   gap: 10px;
   padding: 15px;
+  min-height: 0;
   overflow: auto;
   border-right: 1px solid rgba(255, 255, 255, 0.06);
 }
@@ -374,17 +383,89 @@ select {
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
+.seat.seat-tint-0 {
+  --seat-tint: #c9854a;
+  border-color: rgba(201, 133, 74, 0.55);
+  background: rgba(201, 133, 74, 0.1);
+}
+.seat.seat-tint-1 {
+  --seat-tint: #8b6bc9;
+  border-color: rgba(139, 107, 201, 0.55);
+  background: rgba(139, 107, 201, 0.1);
+}
+.seat.seat-tint-2 {
+  --seat-tint: #4f9d78;
+  border-color: rgba(79, 157, 120, 0.55);
+  background: rgba(79, 157, 120, 0.1);
+}
+.seat.seat-tint-3 {
+  --seat-tint: #c75d6a;
+  border-color: rgba(199, 93, 106, 0.55);
+  background: rgba(199, 93, 106, 0.1);
+}
+.seat.seat-tint-4 {
+  --seat-tint: #4f8fb5;
+  border-color: rgba(79, 143, 181, 0.55);
+  background: rgba(79, 143, 181, 0.1);
+}
+.seat.seat-tint-5 {
+  --seat-tint: #b79a45;
+  border-color: rgba(183, 154, 69, 0.55);
+  background: rgba(183, 154, 69, 0.1);
+}
+
+.seat-name-tint {
+  font-weight: 600;
+}
+.seat-name-tint.seat-tint-0 {
+  color: #e0a56a;
+}
+.seat-name-tint.seat-tint-1 {
+  color: #b39be0;
+}
+.seat-name-tint.seat-tint-2 {
+  color: #6fc49a;
+}
+.seat-name-tint.seat-tint-3 {
+  color: #e08a94;
+}
+.seat-name-tint.seat-tint-4 {
+  color: #74b4d6;
+}
+.seat-name-tint.seat-tint-5 {
+  color: #d4b85c;
+}
+
+.confirmation-bar {
+  display: grid;
+  gap: 8px;
+}
+
+.confirmation-bar .confirm-summary {
+  color: #f0e6d4;
+  font-size: 13px;
+}
+
+.confirmation-bar .confirm-actions,
+.confirmation-bar .exchange-pick-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .seat.active,
 .seat.current {
   transform: translateY(3px);
-  border-color: rgba(244, 214, 154, 0.62);
-  background: rgba(215, 173, 98, 0.1);
-  box-shadow: 0 0 24px rgba(215, 173, 98, 0.09);
+  /* Gold ring for turn/active — keep seat-tint border/background. */
+  box-shadow:
+    0 0 0 1px rgba(244, 214, 154, 0.55),
+    0 0 24px rgba(215, 173, 98, 0.12);
 }
 
 .seat.targetable {
   cursor: pointer;
-  border-color: rgba(200, 95, 99, 0.75);
+  outline: 2px solid rgba(200, 95, 99, 0.75);
+  outline-offset: 2px;
   animation: target-pulse calc(1.4s * var(--speed)) ease-in-out infinite;
 }
 
@@ -791,6 +872,9 @@ select {
 .event-rail {
   display: flex;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   flex-direction: column;
   border-left: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(5, 9, 15, 0.48);

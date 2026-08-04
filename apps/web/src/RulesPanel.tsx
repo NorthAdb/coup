@@ -78,7 +78,7 @@ export function RulesPanel({ open, onClose }: RulesPanelProps) {
               </li>
               <li>
                 <strong>大使 · 交换</strong>
-                ：抽 2 张，与自己的面朝下牌合并后归还 2 张并洗牌。可质疑，不可阻挡。
+                ：抽 2 张，与自己的面朝下牌合并后选择要保留的影响力（其余洗回宫廷）。可质疑，不可阻挡。
               </li>
             </ul>
           </section>

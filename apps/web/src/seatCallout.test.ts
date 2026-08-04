@@ -17,15 +17,15 @@ const seats = [
 ] as const;
 
 describe("seatCalloutFromEvent", () => {
-  it("builds public-decision callouts without seat names or private info", () => {
-    assert.deepEqual(
+  it("builds public-decision callouts without private info", () => {
+    assert.equal(
       seatCalloutFromEvent(
         { type: "action_declared", seatId: "seat-1", actionType: "income" },
         seats,
-      ),
-      { seatId: "seat-1", text: "声明收入" },
+      )?.text,
+      "声明收入",
     );
-    assert.deepEqual(
+    assert.equal(
       seatCalloutFromEvent(
         {
           type: "action_declared",
@@ -34,8 +34,8 @@ describe("seatCalloutFromEvent", () => {
           targetSeatId: "seat-2",
         },
         seats,
-      ),
-      { seatId: "seat-1", text: "声明刺杀 → 灰狐" },
+      )?.text,
+      "声明刺杀 → 灰狐",
     );
     assert.deepEqual(
       seatCalloutFromEvent(
@@ -45,10 +45,13 @@ describe("seatCalloutFromEvent", () => {
           againstSeatId: "seat-1",
         },
         seats,
-      ),
-      { seatId: "seat-2", text: "质疑 你" },
+      )?.parts,
+      [
+        { type: "text", text: "质疑 " },
+        { type: "seat", seatId: "seat-1", text: "你" },
+      ],
     );
-    assert.deepEqual(
+    assert.equal(
       seatCalloutFromEvent(
         {
           type: "block_declared",
@@ -56,10 +59,10 @@ describe("seatCalloutFromEvent", () => {
           claimedCharacter: "duke",
         },
         seats,
-      ),
-      { seatId: "seat-2", text: "阻挡 · 公爵" },
+      )?.text,
+      "阻挡 · 公爵",
     );
-    assert.deepEqual(
+    assert.equal(
       seatCalloutFromEvent(
         {
           type: "response_passed",
@@ -67,21 +70,22 @@ describe("seatCalloutFromEvent", () => {
           responseType: "challenge",
         },
         seats,
-      ),
-      { seatId: "seat-2", text: "放弃质疑" },
+      )?.text,
+      "放弃质疑",
     );
-    assert.deepEqual(
+    assert.equal(
       seatCalloutFromEvent(
         { type: "claim_proven", seatId: "seat-1", character: "captain" },
         seats,
-      ),
-      { seatId: "seat-1", text: "证明队长" },
+      )?.text,
+      "证明队长",
     );
-    assert.deepEqual(
-      seatCalloutFromEvent({ type: "claim_conceded", seatId: "seat-1" }, seats),
-      { seatId: "seat-1", text: "放弃证明" },
+    assert.equal(
+      seatCalloutFromEvent({ type: "claim_conceded", seatId: "seat-1" }, seats)
+        ?.text,
+      "放弃证明",
     );
-    assert.deepEqual(
+    assert.equal(
       seatCalloutFromEvent(
         {
           type: "influence_revealed",
@@ -89,10 +93,10 @@ describe("seatCalloutFromEvent", () => {
           character: "contessa",
         },
         seats,
-      ),
-      { seatId: "seat-2", text: "揭示伯爵夫人" },
+      )?.text,
+      "揭示伯爵夫人",
     );
-    assert.deepEqual(
+    assert.equal(
       seatCalloutFromEvent(
         {
           type: "action_resolved",
@@ -100,8 +104,8 @@ describe("seatCalloutFromEvent", () => {
           actionType: "exchange",
         },
         seats,
-      ),
-      { seatId: "seat-1", text: "完成交换" },
+      )?.text,
+      "完成交换",
     );
   });
 
@@ -147,9 +151,7 @@ describe("seatCalloutsFromEvents", () => {
       ],
       seats,
     );
-    assert.deepEqual(map, {
-      "seat-1": "证明公爵",
-      "seat-2": "质疑 你",
-    });
+    assert.equal(map["seat-1"]?.text, "证明公爵");
+    assert.equal(map["seat-2"]?.text, "质疑 你");
   });
 });

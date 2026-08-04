@@ -24,13 +24,15 @@ describe("desk pacing", () => {
     assert.equal(cssSpeedFactor("fast", true), REDUCED_MOTION_SPEED);
   });
 
-  it("shortens reveal and draw holds in fast pace", () => {
-    assert.ok(revealHoldMs("fast", false) < revealHoldMs("balanced", false));
+  it("holds identity reveals ~5s on balanced and ~2.5s on fast", () => {
+    assert.equal(revealHoldMs("balanced", false), 5000);
+    assert.equal(revealHoldMs("fast", false), 2500);
     assert.ok(drawHoldMs("fast", false) < drawHoldMs("balanced", false));
   });
 
-  it("skips reveal and draw holds under reduced motion", () => {
-    assert.equal(revealHoldMs("balanced", true), 0);
+  it("keeps identity reveals readable under reduced motion", () => {
+    assert.equal(revealHoldMs("balanced", true), 5000);
+    assert.equal(revealHoldMs("fast", true), 2500);
     assert.equal(drawHoldMs("fast", true), 0);
   });
 

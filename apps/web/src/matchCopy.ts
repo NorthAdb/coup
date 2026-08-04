@@ -169,6 +169,8 @@ export function eventParts(
       ];
     case "seat_eliminated":
       return [seat(event.seatId), text(" 被淘汰")];
+    case "host_absence_elimination":
+      return [seat(event.seatId), text(" 因离席被主机强制揭示淘汰")];
     case "match_finished":
       return [seat(event.winnerSeatId), text(" 获胜")];
     case "turn_advanced":

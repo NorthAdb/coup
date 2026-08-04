@@ -1171,6 +1171,66 @@ select {
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
+.absence-drawer {
+  flex: 0 0 auto;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: 8px;
+}
+
+.absence-card {
+  margin: 0 12px 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(232, 196, 120, 0.28);
+  background: rgba(28, 22, 14, 0.72);
+  color: #e5ddcf;
+}
+
+.absence-card strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.absence-card p {
+  margin: 0 0 8px;
+  color: #aab3bf;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.absence-card.absence-timed_out {
+  border-color: rgba(220, 120, 96, 0.45);
+}
+
+.absence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.absence-actions button,
+.absence-resume {
+  border: 1px solid rgba(229, 221, 207, 0.28);
+  background: rgba(12, 16, 22, 0.85);
+  color: #e5ddcf;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.absence-actions button:disabled,
+.absence-resume:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.absence-resume {
+  display: block;
+  width: calc(100% - 24px);
+  margin: 0 12px 10px;
+}
+
 .rail-title {
   display: flex;
   align-items: center;

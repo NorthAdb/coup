@@ -380,3 +380,83 @@ export function seatKindLabel(kind: LobbySeat["kind"]): string {
       return "关闭";
   }
 }
+
+export type SeatAbsenceView = {
+  seatId: string;
+  phase: "reconnecting" | "absent" | "timed_out" | "present";
+  remainingMs: number;
+  deadlineAt: number | null;
+};
+
+export async function postRoomHeartbeat(
+  code: string,
+): Promise<{ absences: SeatAbsenceView[] }> {
+  await ensureSession();
+  const response = await authedFetch(`/api/rooms/${code}/heartbeat`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    throw new Error(body?.error ?? "心跳失败");
+  }
+  return (await response.json()) as { absences: SeatAbsenceView[] };
+}
+
+export async function resumeRoomSeat(code: string): Promise<{
+  resumed: boolean;
+  absences: SeatAbsenceView[];
+}> {
+  await ensureSession();
+  const response = await authedFetch(`/api/rooms/${code}/resume-seat`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    throw new Error(body?.error ?? "回席失败");
+  }
+  return (await response.json()) as {
+    resumed: boolean;
+    absences: SeatAbsenceView[];
+  };
+}
+
+export type DispositionAction =
+  | "extend_wait"
+  | "swap_agent"
+  | "technical_abort"
+  | "force_eliminate";
+
+export async function postSeatDisposition(
+  code: string,
+  seatId: string,
+  action: DispositionAction,
+): Promise<Record<string, unknown>> {
+  await ensureSession();
+  const payload =
+    action === "swap_agent"
+      ? {
+          action,
+          displayName: "灰狐",
+          cli: "stub",
+          modelId: "stub/placeholder",
+        }
+      : { action };
+  const response = await authedFetch(
+    `/api/rooms/${code}/seats/${seatId}/disposition`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    throw new Error(body?.error ?? "处置失败");
+  }
+  return (await response.json()) as Record<string, unknown>;
+}

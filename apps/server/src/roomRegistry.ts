@@ -97,6 +97,40 @@ export type RoomRegistry = {
   ):
     | { ok: true; room: RoomRecord }
     | { ok: false; reason: "room_not_found" | "room_not_lobby" };
+  rotateSeatCredential(
+    code: string,
+    seatId: string,
+    credentialHash: string,
+  ):
+    | { ok: true; seat: LobbySeat; room: RoomRecord }
+    | {
+        ok: false;
+        reason: "room_not_found" | "seat_not_found" | "seat_not_human";
+      };
+  revokeSeatCredential(
+    code: string,
+    seatId: string,
+  ):
+    | { ok: true; seat: LobbySeat; room: RoomRecord }
+    | { ok: false; reason: "room_not_found" | "seat_not_found" };
+  swapSeatToLocalAgent(
+    code: string,
+    seatId: string,
+    input: {
+      displayName: string;
+      cli: LobbyAgentCli;
+      modelId: string | null;
+    },
+  ):
+    | { ok: true; seat: LobbySeat; room: RoomRecord }
+    | {
+        ok: false;
+        reason:
+          | "room_not_found"
+          | "seat_not_found"
+          | "seat_not_remote_human"
+          | "room_not_match";
+      };
 };
 
 function defaultSeats(): LobbySeat[] {
@@ -231,6 +265,43 @@ export function createRoomRegistry(): RoomRegistry {
       room.phase = "match";
       room.matchId = matchId;
       return { ok: true, room };
+    },
+    rotateSeatCredential(code, seatId, credentialHash) {
+      const room = rooms.get(code);
+      if (!room) return { ok: false, reason: "room_not_found" };
+      const seat = room.seats.find((s) => s.seatId === seatId);
+      if (!seat) return { ok: false, reason: "seat_not_found" };
+      if (seat.kind !== "local_human" && seat.kind !== "remote_human") {
+        return { ok: false, reason: "seat_not_human" };
+      }
+      seat.credentialHash = credentialHash;
+      return { ok: true, seat, room };
+    },
+    revokeSeatCredential(code, seatId) {
+      const room = rooms.get(code);
+      if (!room) return { ok: false, reason: "room_not_found" };
+      const seat = room.seats.find((s) => s.seatId === seatId);
+      if (!seat) return { ok: false, reason: "seat_not_found" };
+      seat.credentialHash = null;
+      return { ok: true, seat, room };
+    },
+    swapSeatToLocalAgent(code, seatId, input) {
+      const room = rooms.get(code);
+      if (!room) return { ok: false, reason: "room_not_found" };
+      if (room.phase !== "match") {
+        return { ok: false, reason: "room_not_match" };
+      }
+      const seat = room.seats.find((s) => s.seatId === seatId);
+      if (!seat) return { ok: false, reason: "seat_not_found" };
+      if (seat.kind !== "remote_human") {
+        return { ok: false, reason: "seat_not_remote_human" };
+      }
+      seat.kind = "local_agent";
+      seat.displayName = input.displayName;
+      seat.credentialHash = null;
+      seat.cli = input.cli;
+      seat.modelId = input.modelId;
+      return { ok: true, seat, room };
     },
   };
 }

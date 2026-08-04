@@ -2,6 +2,7 @@ import path from "node:path";
 import { homedir, networkInterfaces } from "node:os";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
+import { activeDecidingSeatId, forceEliminateForHostAbsence } from "@coup/domain";
 import type { SeatDecision } from "@coup/protocol";
 import { createAgentRuntime, type AgentRuntime } from "./agents/index.js";
 import { createProcessCliRunner } from "./agents/cliRunner.js";
@@ -56,6 +57,10 @@ import {
   type SessionRecord,
   type SessionStore,
 } from "./sessionAuth.js";
+import {
+  createSeatPresenceTracker,
+  type SeatPresenceTracker,
+} from "./seatPresenceTracker.js";
 
 export type BindMode = "local" | "host";
 
@@ -84,6 +89,9 @@ export type CreateAppOptions = {
   listNetworkInterfaces?: () => NetIfaceMap;
   rooms?: RoomRegistry;
   sessions?: SessionStore;
+  /** Injectable clock for absence timers (tests). */
+  now?: () => number;
+  presence?: SeatPresenceTracker;
 };
 
 function defaultDbPath() {
@@ -296,6 +304,64 @@ export async function createApp(options: CreateAppOptions) {
   let agentPhase: AgentDecisionPhase | "idle" = "idle";
   let agentSeatId: string | null = null;
   let thinkingSeatIds: string[] = [];
+  const presence = options.presence ?? createSeatPresenceTracker();
+  const now = () => (options.now ? options.now() : Date.now());
+
+  function tickPresence() {
+    presence.tick(now());
+  }
+
+  function trackRemoteSeatsForMatch() {
+    presence.clear();
+    if (!activeMatch || !activeRoomCode) return;
+    const t = now();
+    for (const seat of activeMatch.state.seats) {
+      if (seat.controller === "remote_human" && !seat.eliminated) {
+        presence.trackSeat(seat.seatId);
+        // Treat match start as an initial heartbeat so silence starts the lease.
+        presence.noteHeartbeat(seat.seatId, t);
+      }
+    }
+  }
+
+  function requireHostSeat(
+    request: { headers: Record<string, unknown> },
+    reply: {
+      code: (status: number) => { send: (body: unknown) => unknown };
+    },
+    code: string,
+  ) {
+    if (!requireSession(request, reply)) return null;
+    const room = rooms.getByCode(code);
+    if (!room) {
+      reply.code(404).send({ error: "room_not_found" });
+      return null;
+    }
+    const cookies = parseCookies(
+      typeof request.headers.cookie === "string"
+        ? request.headers.cookie
+        : undefined,
+    );
+    const seatToken = cookies[SEAT_COOKIE];
+    const holder = seatToken
+      ? rooms.findSeatByCredential(room.code, hashToken(seatToken))
+      : null;
+    if (!holder || holder.kind !== "local_human" || holder.seatId !== "1") {
+      reply.code(403).send({ error: "host_seat_required" });
+      return null;
+    }
+    return { room, holder };
+  }
+
+  function revokeAllRemoteCredentials(code: string) {
+    const room = rooms.getByCode(code);
+    if (!room) return;
+    for (const seat of room.seats) {
+      if (seat.kind === "remote_human") {
+        rooms.revokeSeatCredential(code, seat.seatId);
+      }
+    }
+  }
 
   function resolveMatchSeatId(
     request: { headers: Record<string, unknown> },
@@ -797,14 +863,287 @@ export async function createApp(options: CreateAppOptions) {
         return reply.code(409).send({ error: begun.reason });
       }
       activeRoomCode = room.code;
+      trackRemoteSeatsForMatch();
 
       return reply.send({
         ...humanFacingPayload(activeMatch, undefined, "1"),
         phase: begun.room.phase,
         matchId: activeMatch.state.matchId,
+        absences: presence.projectAll(now()),
       });
     },
   );
+
+  app.post<{ Params: { code: string } }>(
+    "/api/rooms/:code/heartbeat",
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const room = rooms.getByCode(request.params.code);
+      if (!room) {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      const cookies = parseCookies(
+        typeof request.headers.cookie === "string"
+          ? request.headers.cookie
+          : undefined,
+      );
+      const seatToken = cookies[SEAT_COOKIE];
+      const holder = seatToken
+        ? rooms.findSeatByCredential(room.code, hashToken(seatToken))
+        : null;
+      if (!holder || holder.kind !== "remote_human") {
+        return reply.code(403).send({ error: "remote_seat_required" });
+      }
+      const t = now();
+      presence.trackSeat(holder.seatId);
+      presence.noteHeartbeat(holder.seatId, t);
+      tickPresence();
+      return reply.send({
+        ok: true,
+        absences: presence.projectAll(now()),
+      });
+    },
+  );
+
+  app.get<{ Params: { code: string } }>(
+    "/api/rooms/:code/presence",
+    async (request, reply) => {
+      const room = rooms.getByCode(request.params.code);
+      if (!room) {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      tickPresence();
+      return reply.send({
+        absences: presence.projectAll(now()),
+      });
+    },
+  );
+
+  app.post<{ Params: { code: string } }>(
+    "/api/rooms/:code/resume-seat",
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const room = rooms.getByCode(request.params.code);
+      if (!room) {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      const cookies = parseCookies(
+        typeof request.headers.cookie === "string"
+          ? request.headers.cookie
+          : undefined,
+      );
+      const seatToken = cookies[SEAT_COOKIE];
+      const holder = seatToken
+        ? rooms.findSeatByCredential(room.code, hashToken(seatToken))
+        : null;
+      if (
+        !holder ||
+        (holder.kind !== "remote_human" && holder.kind !== "local_human")
+      ) {
+        return reply.code(403).send({ error: "seat_credential_required" });
+      }
+      tickPresence();
+      presence.trackSeat(holder.seatId);
+      const before = presence.get(holder.seatId);
+      if (!before || before.phase === "present") {
+        presence.noteHeartbeat(holder.seatId, now());
+        return reply.send({
+          resumed: false,
+          seat: {
+            seatId: holder.seatId,
+            kind: holder.kind,
+            displayName: holder.displayName,
+          },
+          absences: presence.projectAll(now()),
+        });
+      }
+      const issued = issueSeatToken();
+      const rotated = rooms.rotateSeatCredential(
+        room.code,
+        holder.seatId,
+        issued.hash,
+      );
+      if (!rotated.ok) {
+        return reply.code(409).send({ error: rotated.reason });
+      }
+      appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
+      presence.resume(holder.seatId);
+      presence.noteHeartbeat(holder.seatId, now());
+      return reply.send({
+        resumed: true,
+        seat: {
+          seatId: holder.seatId,
+          kind: holder.kind,
+          displayName: holder.displayName,
+        },
+        absences: presence.projectAll(now()),
+      });
+    },
+  );
+
+  app.post<{
+    Params: { code: string; seatId: string };
+    Body: {
+      action?: string;
+      displayName?: string;
+      cli?: string;
+      modelId?: string | null;
+    };
+  }>("/api/rooms/:code/seats/:seatId/disposition", async (request, reply) => {
+    const host = requireHostSeat(request, reply, request.params.code);
+    if (!host) return;
+    const { room } = host;
+    if (room.phase !== "match" || !activeMatch || activeRoomCode !== room.code) {
+      return reply.code(409).send({ error: "room_not_match" });
+    }
+    const seatId = request.params.seatId;
+    const action = request.body?.action;
+    tickPresence();
+    const absence = presence.get(seatId);
+    if (
+      !absence ||
+      (absence.phase !== "absent" && absence.phase !== "timed_out")
+    ) {
+      return reply.code(409).send({ error: "seat_not_absent" });
+    }
+
+    if (action === "extend_wait") {
+      presence.extendWait(seatId, now());
+      return reply.send({
+        action: "extend_wait",
+        absences: presence.projectAll(now()),
+      });
+    }
+
+    if (action === "swap_agent") {
+      const displayName =
+        typeof request.body?.displayName === "string" &&
+        request.body.displayName.trim().length > 0
+          ? request.body.displayName.trim()
+          : "Agent";
+      const cli =
+        request.body?.cli === "opencode" ||
+        request.body?.cli === "claude" ||
+        request.body?.cli === "stub"
+          ? request.body.cli
+          : "stub";
+      const modelId =
+        typeof request.body?.modelId === "string" ? request.body.modelId : null;
+      const report = await runProbe();
+      const ready = recheckSetupSeats([{ cli, modelId }], report);
+      if (!ready.ok) {
+        return reply.code(400).send({
+          error: ready.reason,
+          hint: ready.hint,
+        });
+      }
+      const swapped = rooms.swapSeatToLocalAgent(room.code, seatId, {
+        displayName,
+        cli,
+        modelId,
+      });
+      if (!swapped.ok) {
+        return reply.code(409).send({ error: swapped.reason });
+      }
+      const seats = activeMatch.state.seats.map((seat) =>
+        seat.seatId === seatId
+          ? { ...seat, controller: "stub_agent" as const }
+          : seat,
+      );
+      activeMatch = {
+        ...activeMatch,
+        state: { ...activeMatch.state, seats },
+        displayNames: {
+          ...activeMatch.displayNames,
+          [seatId]: displayName,
+        },
+        seatAgents: {
+          ...activeMatch.seatAgents,
+          [seatId]: { cli, modelId },
+        },
+      };
+      store.commitCommand(activeMatch.state.matchId, activeMatch.state, []);
+      presence.clearSeat(seatId);
+      try {
+        activeMatch = await advanceAgentSeats(activeMatch, runtimeOptions());
+      } catch (error) {
+        const matchId = activeMatch.state.matchId;
+        store.technicalAbort(matchId, abortReasonFrom(error));
+        revokeAllRemoteCredentials(room.code);
+        presence.clear();
+        activeMatch = null;
+        activeRoomCode = null;
+        return reply.code(502).send({
+          error: abortReasonFrom(error),
+          aborted: true,
+          matchId,
+        });
+      }
+      return reply.send({
+        action: "swap_agent",
+        ...humanFacingPayload(activeMatch, undefined, "1"),
+        absences: presence.projectAll(now()),
+        seats: publicSeats(swapped.room),
+      });
+    }
+
+    if (action === "technical_abort") {
+      const matchId = activeMatch.state.matchId;
+      store.technicalAbort(matchId, "host_absence_disposition");
+      revokeAllRemoteCredentials(room.code);
+      rooms.revokeSeatCredential(room.code, seatId);
+      presence.clear();
+      activeMatch = null;
+      return reply.send({
+        action: "technical_abort",
+        aborted: true,
+        matchId,
+      });
+    }
+
+    if (action === "force_eliminate") {
+      const result = forceEliminateForHostAbsence(activeMatch.state, seatId);
+      if (!result.ok) {
+        return reply.code(409).send({ error: result.reason });
+      }
+      activeMatch = {
+        ...activeMatch,
+        state: result.state,
+        events: [...activeMatch.events, ...result.events],
+      };
+      store.commitCommand(
+        activeMatch.state.matchId,
+        activeMatch.state,
+        result.events,
+      );
+      rooms.revokeSeatCredential(room.code, seatId);
+      presence.clearSeat(seatId);
+      if (activeMatch.state.status === "in_progress") {
+        try {
+          activeMatch = await advanceAgentSeats(activeMatch, runtimeOptions());
+        } catch (error) {
+          const matchId = activeMatch.state.matchId;
+          store.technicalAbort(matchId, abortReasonFrom(error));
+          revokeAllRemoteCredentials(room.code);
+          presence.clear();
+          activeMatch = null;
+          activeRoomCode = null;
+          return reply.code(502).send({
+            error: abortReasonFrom(error),
+            aborted: true,
+            matchId,
+          });
+        }
+      }
+      return reply.send({
+        action: "force_eliminate",
+        ...humanFacingPayload(activeMatch, undefined, "1"),
+        absences: presence.projectAll(now()),
+      });
+    }
+
+    return reply.code(400).send({ error: "invalid_disposition" });
+  });
 
   app.get<{ Params: { code: string } }>(
     "/api/rooms/:code/me",
@@ -1029,21 +1368,32 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(403).send({ error: "seat_credential_required" });
     }
 
-    const advanced = await advanceActiveOrAbort(activeMatch);
-    if (!advanced.ok) {
-      activeMatch = null;
-      activeRoomCode = null;
-      return reply.code(502).send({
-        error: advanced.error,
-        aborted: true,
-        matchId: advanced.matchId,
-      });
+    tickPresence();
+    const deciding = activeDecidingSeatId(activeMatch.state);
+    const blockedByAbsence =
+      deciding !== null &&
+      presence.blocksAdvancement(deciding, true);
+
+    // Still try to advance agents when the deciding seat is not an absent remote.
+    if (!blockedByAbsence) {
+      const advanced = await advanceActiveOrAbort(activeMatch);
+      if (!advanced.ok) {
+        activeMatch = null;
+        activeRoomCode = null;
+        return reply.code(502).send({
+          error: advanced.error,
+          aborted: true,
+          matchId: advanced.matchId,
+        });
+      }
+      activeMatch = advanced.match;
     }
-    activeMatch = advanced.match;
 
     return reply.send({
       ...humanFacingPayload(activeMatch, undefined, seatId),
       matchId: activeMatch.state.matchId,
+      absences: presence.projectAll(now()),
+      pausedForAbsenceSeatId: blockedByAbsence ? deciding : null,
     });
   });
 
@@ -1054,6 +1404,22 @@ export async function createApp(options: CreateAppOptions) {
     const seatId = resolveMatchSeatId(request);
     if (!seatId) {
       return reply.code(403).send({ error: "seat_credential_required" });
+    }
+    tickPresence();
+    const absence = presence.get(seatId);
+    if (
+      absence &&
+      (absence.phase === "absent" || absence.phase === "timed_out")
+    ) {
+      return reply.code(409).send({
+        error: "seat_absent",
+        absences: presence.projectAll(now()),
+      });
+    }
+    // Decision during grace counts as channel recovery (no credential rotate).
+    if (absence?.phase === "reconnecting") {
+      presence.noteHeartbeat(seatId, now());
+      presence.resume(seatId);
     }
     const body = request.body as SeatDecision;
     const matchId = activeMatch.state.matchId;
@@ -1088,9 +1454,17 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(409).send({ error: result.reason });
     }
     activeMatch = result.match;
-    return reply.send(
-      humanFacingPayload(activeMatch, body.requestId, seatId),
-    );
+    if (
+      activeMatch.state.status === "finished" &&
+      activeRoomCode
+    ) {
+      revokeAllRemoteCredentials(activeRoomCode);
+      presence.clear();
+    }
+    return reply.send({
+      ...humanFacingPayload(activeMatch, body.requestId, seatId),
+      absences: presence.projectAll(now()),
+    });
   });
 
   await app.register(fastifyStatic, {

@@ -23,10 +23,15 @@ import {
   fetchMySeat,
   fetchRoom,
   patchRoomHost,
+  postRoomHeartbeat,
+  postSeatDisposition,
   renameSeat,
+  resumeRoomSeat,
   startRoomMatch,
+  type DispositionAction,
   type LobbySeat,
   type RoomInvite,
+  type SeatAbsenceView,
 } from "./lanRoom";
 import type { HostSeatConfig } from "./LobbySeatList";
 
@@ -88,6 +93,10 @@ export function App() {
     runStatus: string;
     events: Array<{ seq: number; event: { type: string } }>;
   } | null>(null);
+  const [absences, setAbsences] = useState<SeatAbsenceView[]>([]);
+  const [pausedForAbsenceSeatId, setPausedForAbsenceSeatId] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     if (!busy || !view) {
@@ -570,6 +579,136 @@ export function App() {
     }
   }, [screen, capabilities]);
 
+  // LAN match: poll view/presence and keep remote-seat heartbeat alive.
+  useEffect(() => {
+    if (!view || !room || room.phase !== "match") return;
+    let cancelled = false;
+
+    const refreshMatch = async () => {
+      try {
+        const response = await fetch("/api/matches/current", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!response.ok || cancelled) return;
+        const body = (await response.json()) as {
+          view: SeatView;
+          matchId: string;
+          decisionRationales?: Record<string, DecisionRationaleView>;
+          absences?: SeatAbsenceView[];
+          pausedForAbsenceSeatId?: string | null;
+        };
+        if (cancelled) return;
+        setView(body.view);
+        setDecisionRationales(body.decisionRationales ?? {});
+        setAbsences(body.absences ?? []);
+        setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId ?? null);
+        setResumableMatchId(body.matchId);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const beat = async () => {
+      if (mySeatId === "1") return;
+      try {
+        const result = await postRoomHeartbeat(room.code);
+        if (!cancelled) setAbsences(result.absences);
+      } catch {
+        /* guest may be mid-resume */
+      }
+    };
+
+    void resumeRoomSeat(room.code)
+      .then((result) => {
+        if (!cancelled) setAbsences(result.absences);
+      })
+      .catch(() => {
+        /* ignore */
+      });
+
+    void refreshMatch();
+    void beat();
+    const pollId = window.setInterval(() => void refreshMatch(), 1500);
+    const beatId = window.setInterval(() => void beat(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+      window.clearInterval(beatId);
+    };
+  }, [view?.matchId, room?.code, room?.phase, mySeatId]);
+
+  async function handleAbsenceDisposition(
+    seatId: string,
+    action: DispositionAction,
+  ) {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body = await postSeatDisposition(room.code, seatId, action);
+      if (body.aborted) {
+        setView(null);
+        setDecisionRationales({});
+        setAbsences([]);
+        setPausedForAbsenceSeatId(null);
+        setResumableMatchId(null);
+        setRoom(null);
+        setScreen("home");
+        await refreshMatchList();
+        return;
+      }
+      if (body.view) {
+        setView(body.view as SeatView);
+      }
+      if (body.decisionRationales) {
+        setDecisionRationales(
+          body.decisionRationales as Record<string, DecisionRationaleView>,
+        );
+      }
+      if (Array.isArray(body.absences)) {
+        setAbsences(body.absences as SeatAbsenceView[]);
+      }
+      if (Array.isArray(body.seats)) {
+        setLobbySeats(body.seats as LobbySeat[]);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "处置失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResumeSeat() {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await resumeRoomSeat(room.code);
+      setAbsences(result.absences);
+      const response = await fetch("/api/matches/current", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (response.ok) {
+        const body = (await response.json()) as {
+          view: SeatView;
+          absences?: SeatAbsenceView[];
+          pausedForAbsenceSeatId?: string | null;
+          decisionRationales?: Record<string, DecisionRationaleView>;
+        };
+        setView(body.view);
+        setAbsences(body.absences ?? result.absences);
+        setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId ?? null);
+        setDecisionRationales(body.decisionRationales ?? {});
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "回席失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function openLocalSetup() {
     setScreen("local-setup");
     setError(null);
@@ -578,6 +717,7 @@ export function App() {
   }
 
   if (view) {
+    const lanMatch = Boolean(room && room.phase === "match");
     return (
       <>
         <MatchDesk
@@ -589,6 +729,30 @@ export function App() {
             void submitDecision(decision, label)
           }
           onReturnToSetup={returnToSetup}
+          absences={absences}
+          pausedForAbsenceSeatId={pausedForAbsenceSeatId}
+          isHost={lanMatch && mySeatId === "1"}
+          showResume={
+            lanMatch &&
+            mySeatId !== null &&
+            mySeatId !== "1" &&
+            absences.some(
+              (a) =>
+                a.seatId === mySeatId &&
+                (a.phase === "reconnecting" ||
+                  a.phase === "absent" ||
+                  a.phase === "timed_out"),
+            )
+          }
+          onAbsenceDisposition={
+            lanMatch
+              ? (seatId, action) =>
+                  void handleAbsenceDisposition(seatId, action)
+              : undefined
+          }
+          onResumeSeat={
+            lanMatch ? () => void handleResumeSeat() : undefined
+          }
         />
         {error ? <p className="desk-error">{error}</p> : null}
       </>

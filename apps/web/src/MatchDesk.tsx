@@ -43,6 +43,12 @@ import {
   yourTurnStageBeat,
   type StageBeat,
 } from "./resultBeat";
+import {
+  AbsenceDrawer,
+  absenceSeatStatus,
+  type AbsenceDispositionAction,
+  type SeatAbsenceView,
+} from "./AbsenceDrawer";
 import { RulesPanel } from "./RulesPanel";
 import { seatTintClass, seatTintClassForId } from "./seatColor";
 import { TextPartsView } from "./textParts";
@@ -60,6 +66,15 @@ type MatchDeskProps = {
   decisionRationales: Record<string, DecisionRationaleView>;
   onSubmitDecision: (decision: LegalDecision, label: string) => void;
   onReturnToSetup: () => void;
+  absences?: SeatAbsenceView[];
+  pausedForAbsenceSeatId?: string | null;
+  isHost?: boolean;
+  showResume?: boolean;
+  onAbsenceDisposition?: (
+    seatId: string,
+    action: AbsenceDispositionAction,
+  ) => void;
+  onResumeSeat?: () => void;
 };
 
 function agentPhaseLabel(phase: AgentPhase): string {
@@ -265,6 +280,12 @@ export function MatchDesk({
   decisionRationales,
   onSubmitDecision,
   onReturnToSetup,
+  absences = [],
+  pausedForAbsenceSeatId = null,
+  isHost = false,
+  showResume = false,
+  onAbsenceDisposition,
+  onResumeSeat,
 }: MatchDeskProps) {
   const [pace, setPace] = useState<DeskPace>(() => loadDeskPace());
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -674,11 +695,12 @@ export function MatchDesk({
                   <span className="seat-status">
                     {seat.eliminated
                       ? "已淘汰"
-                      : isCurrent
-                        ? "当前回合"
-                        : isActive
-                          ? "待响应"
-                          : "观察中"}
+                      : (absenceSeatStatus(absences, seat.seatId) ??
+                        (isCurrent
+                          ? "当前回合"
+                          : isActive
+                            ? "待响应"
+                            : "观察中"))}
                   </span>
                 </div>
                 {targetable && pendingTarget ? (
@@ -993,6 +1015,25 @@ export function MatchDesk({
         </div>
 
         <aside className="event-rail" aria-label="对局记录">
+          {onAbsenceDisposition || showResume ? (
+            <AbsenceDrawer
+              absences={absences}
+              seatNames={Object.fromEntries(
+                view.publicState.seats.map((seat) => [
+                  seat.seatId,
+                  seat.displayName,
+                ]),
+              )}
+              isHost={isHost}
+              busy={busy}
+              pausedForAbsenceSeatId={pausedForAbsenceSeatId}
+              onDisposition={(seatId, action) =>
+                onAbsenceDisposition?.(seatId, action)
+              }
+              showResume={showResume}
+              onResume={onResumeSeat}
+            />
+          ) : null}
           <div className="rail-title">
             <span>对局记录</span>
             <span>{view.projectedHistory.length} 条</span>

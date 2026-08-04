@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   applyCommand,
   createMatch,
+  forceEliminateForHostAbsence,
   legalDecisionsFor,
   projectForSeat,
 } from "./index.js";
@@ -1135,5 +1136,35 @@ describe("match domain — role actions", () => {
           event.winnerSeatId === "seat-human",
       ),
     );
+  });
+});
+
+describe("forceEliminateForHostAbsence", () => {
+  it("reveals remaining influence, zeros coins, and marks host absence elimination", () => {
+    const threeSeats = [
+      { seatId: "1", controller: "local_human" as const },
+      { seatId: "2", controller: "remote_human" as const },
+      { seatId: "3", controller: "stub_agent" as const },
+    ];
+    const { state } = createMatch({
+      matchId: "match-absence",
+      seed: "fixed-seed",
+      seats: threeSeats,
+    });
+
+    const result = forceEliminateForHostAbsence(state, "2");
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+
+    const seat = result.state.seats.find((s) => s.seatId === "2");
+    assert.ok(seat);
+    assert.equal(seat.eliminated, true);
+    assert.equal(seat.coins, 0);
+    assert.ok(seat.influences.every((card) => card.revealed));
+    assert.ok(
+      result.events.some((e) => e.type === "host_absence_elimination"),
+    );
+    assert.ok(result.events.some((e) => e.type === "seat_eliminated"));
+    assert.equal(result.state.status, "in_progress");
   });
 });

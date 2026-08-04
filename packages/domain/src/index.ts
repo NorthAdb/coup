@@ -222,6 +222,11 @@ export type DomainEvent =
       seatId: string;
     }
   | {
+      /** Host disposition: force-reveal eliminate an absent remote seat. */
+      type: "host_absence_elimination";
+      seatId: string;
+    }
+  | {
       type: "match_finished";
       winnerSeatId: string;
     }
@@ -1493,6 +1498,76 @@ export function applyCommand(
     case "choose_exchange_cards":
       next = applyExchangeReturn(working, command.returnCardIds, events);
       break;
+  }
+
+  return { ok: true, state: commit(next), events };
+}
+
+/**
+ * Host absence disposition: reveal all remaining face-down influence,
+ * eliminate the seat (coins returned to treasury = zeroed), clear mid-turn
+ * ephemera involving that seat, and advance if needed.
+ */
+export function forceEliminateForHostAbsence(
+  state: MatchState,
+  seatId: string,
+): ApplyCommandResult {
+  if (state.status !== "in_progress") {
+    return { ok: false, reason: "match_not_in_progress" };
+  }
+  const target = findSeat(state, seatId);
+  if (!target || target.eliminated) {
+    return { ok: false, reason: "seat_not_eliminable" };
+  }
+
+  const events: DomainEvent[] = [];
+  const seats = state.seats.map((seat) => {
+    if (seat.seatId !== seatId) return seat;
+    const influences = seat.influences.map((card) => {
+      if (!card.revealed) {
+        events.push({
+          type: "influence_revealed",
+          seatId,
+          character: card.character,
+        });
+        return { ...card, revealed: true };
+      }
+      return card;
+    });
+    return { ...seat, influences, eliminated: true, coins: 0 };
+  });
+  events.push({ type: "seat_eliminated", seatId });
+  events.push({ type: "host_absence_elimination", seatId });
+
+  let next = patchState(state, { seats });
+
+  const finished = finishIfSoleSurvivor(next, events);
+  if (finished) {
+    return { ok: true, state: commit(finished), events };
+  }
+
+  const involved =
+    next.currentSeatId === seatId ||
+    next.revealSeatId === seatId ||
+    next.pendingExchange?.seatId === seatId ||
+    next.pendingClaim?.seatId === seatId ||
+    next.pendingClaim?.challengerSeatId === seatId ||
+    next.pendingAction?.actorSeatId === seatId ||
+    next.pendingAction?.blockerSeatId === seatId ||
+    next.responseQueue.includes(seatId) ||
+    activeDecidingSeatId(next) === seatId;
+
+  if (involved) {
+    const fromSeatId =
+      next.currentSeatId === seatId
+        ? seatId
+        : next.currentSeatId;
+    next = advanceTurn(
+      patchState(next, {
+        currentSeatId: fromSeatId,
+      }),
+      events,
+    );
   }
 
   return { ok: true, state: commit(next), events };

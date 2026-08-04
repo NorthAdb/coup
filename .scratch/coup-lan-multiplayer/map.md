@@ -28,6 +28,7 @@
 - [汇总局域网联机规格与验收边界](issues/09-define-lan-acceptance-spec.md) — 交付索引型 [`spec.md`](spec.md)；同机双浏览器+LAN Origin 必过；两台物理机/防火墙为建议项；细节链子票，继承本机 MVP 规格。
 - [11 多 Origin 会话与座位凭证占座](issues/11-multi-origin-session-and-seat-claim.md) — `coup_session`+CSRF 与 `coup_seat` 分离；Origin 允许列表覆盖 LAN/loopback；座 1 本地人类、开放座可占可改名；双客户端可见占座。
 - [12 指挥台大厅配置与开局对局](issues/12-lobby-console-and-start-match.md) — 主机配置 open/Agent/关闭；开局门禁；`remote_human` 入域并按座位凭证投影/决策。
+- [13 离席、回席与主机处置](issues/13-absence-resume-and-host-disposition.md) — 15s 宽限→离席+5min；按需暂停；四处置与凭证轮换；桌右侧抽屉。
 
 ## Not yet specified
 

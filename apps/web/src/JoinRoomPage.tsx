@@ -29,6 +29,13 @@ export function JoinRoomPage({
       return;
     }
     try {
+      // Seat cookies are host-only — claim must happen on the room's Origin.
+      if (parsed.origin !== window.location.origin) {
+        window.location.assign(
+          `${parsed.origin}/join?code=${parsed.code}`,
+        );
+        return;
+      }
       const room = await fetchRoom(parsed.origin, parsed.code);
       onJoined(room, parsed.origin);
     } catch (err) {

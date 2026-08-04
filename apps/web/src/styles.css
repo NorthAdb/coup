@@ -195,6 +195,56 @@ button {
   font-size: 0.85rem;
 }
 
+.lobby-seats-heading {
+  margin: 0.6rem 0 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.lobby-seat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.lobby-seat {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 0.55rem;
+  align-items: center;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  background: rgba(8, 12, 18, 0.45);
+  font-size: 0.9rem;
+}
+
+.lobby-seat.mine {
+  border-color: var(--gold);
+}
+
+.lobby-seat-id {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.lobby-seat-kind {
+  color: var(--gold-bright);
+  font-size: 0.8rem;
+}
+
+.lobby-seat-name {
+  color: var(--ink);
+}
+
+.lobby-rename-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+}
+
 .field {
   display: grid;
   gap: 0.35rem;

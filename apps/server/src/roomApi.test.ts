@@ -30,6 +30,40 @@ afterEach(async () => {
   }
 });
 
+function cookieFrom(setCookie: string | string[] | undefined, name: string) {
+  const headers = Array.isArray(setCookie)
+    ? setCookie
+    : setCookie
+      ? [setCookie]
+      : [];
+  for (const header of headers) {
+    if (header.startsWith(`${name}=`)) {
+      return header.split(";")[0]!;
+    }
+  }
+  return null;
+}
+
+async function authedHeaders(
+  app: Awaited<ReturnType<typeof createApp>>,
+  origin: string,
+) {
+  const session = await app.inject({
+    method: "GET",
+    url: "/api/session",
+    headers: { origin },
+  });
+  assert.equal(session.statusCode, 200);
+  const csrfToken = (session.json() as { csrfToken: string }).csrfToken;
+  const cookie = cookieFrom(session.headers["set-cookie"], "coup_session");
+  assert.ok(cookie);
+  return {
+    origin,
+    cookie,
+    "x-csrf-token": csrfToken,
+  };
+}
+
 describe("room invite API", () => {
   it("creates a room in host mode and returns join url", async () => {
     const app = await createApp({
@@ -56,7 +90,12 @@ describe("room invite API", () => {
     });
 
     try {
-      const created = await app.inject({ method: "POST", url: "/api/rooms" });
+      const headers = await authedHeaders(app, "http://192.168.1.42:8787");
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/rooms",
+        headers,
+      });
       assert.equal(created.statusCode, 200);
       const body = created.json() as {
         code: string;
@@ -117,7 +156,12 @@ describe("room invite API", () => {
     });
 
     try {
-      const created = await app.inject({ method: "POST", url: "/api/rooms" });
+      const headers = await authedHeaders(app, "http://127.0.0.1:3456");
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/rooms",
+        headers,
+      });
       assert.equal(created.statusCode, 409);
       assert.equal(
         (created.json() as { error: string }).error,
@@ -150,7 +194,12 @@ describe("room invite API", () => {
     });
 
     try {
-      const created = await app.inject({ method: "POST", url: "/api/rooms" });
+      const headers = await authedHeaders(app, "http://127.0.0.1:8787");
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/rooms",
+        headers,
+      });
       assert.equal(created.statusCode, 400);
       assert.equal((created.json() as { error: string }).error, "no_lan_ipv4");
     } finally {
@@ -183,7 +232,12 @@ describe("room invite API", () => {
     });
 
     try {
-      const created = await app.inject({ method: "POST", url: "/api/rooms" });
+      const headers = await authedHeaders(app, "http://192.168.1.42:8787");
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/rooms",
+        headers,
+      });
       const room = created.json() as { code: string };
       const patched = await app.inject({
         method: "PATCH",

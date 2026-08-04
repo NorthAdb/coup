@@ -1,8 +1,14 @@
-import type { RoomInvite } from "./lanRoom";
+import type { LobbySeat, RoomInvite } from "./lanRoom";
+import { LobbySeatList } from "./LobbySeatList";
 
 type HostInvitePanelProps = {
   room: RoomInvite;
+  seats: LobbySeat[];
+  mySeatId: string | null;
   busy: boolean;
+  displayNameDraft: string;
+  onDisplayNameDraftChange: (value: string) => void;
+  onRename: () => void;
   onSelectHost: (host: string) => void;
   onCopy: () => void;
   onBack: () => void;
@@ -10,7 +16,12 @@ type HostInvitePanelProps = {
 
 export function HostInvitePanel({
   room,
+  seats,
+  mySeatId,
   busy,
+  displayNameDraft,
+  onDisplayNameDraftChange,
+  onRename,
   onSelectHost,
   onCopy,
   onBack,
@@ -48,8 +59,19 @@ export function HostInvitePanel({
           </select>
         </label>
       ) : null}
+
+      <h3 className="lobby-seats-heading">座位</h3>
+      <LobbySeatList
+        seats={seats}
+        mySeatId={mySeatId}
+        busy={busy}
+        displayNameDraft={displayNameDraft}
+        onDisplayNameDraftChange={onDisplayNameDraftChange}
+        onRename={onRename}
+      />
+
       <p className="fine">
-        加入方须用完整链接，或「地址 + 房间号」。占座与开局将在后续实现；当前可确认房间已创建。
+        加入方须用完整链接，或「地址 + 房间号」。开局门禁与指挥台配置由后续票收口。
       </p>
       <p className="hint ok">
         主机模式已监听局域网（端口 {room.port}）。返回入口不会自动切回

@@ -35,9 +35,23 @@ import {
 } from "./lanAddresses.js";
 import {
   createRoomRegistry,
+  publicSeats,
   roomInvitePayload,
   type RoomRegistry,
 } from "./roomRegistry.js";
+import {
+  CSRF_HEADER,
+  SEAT_COOKIE,
+  SESSION_COOKIE,
+  allowedOrigins,
+  createSessionStore,
+  hashToken,
+  issueSeatToken,
+  parseCookies,
+  serializeCookie,
+  type SessionRecord,
+  type SessionStore,
+} from "./sessionAuth.js";
 
 export type BindMode = "local" | "host";
 
@@ -65,6 +79,7 @@ export type CreateAppOptions = {
   hosting?: HostingController;
   listNetworkInterfaces?: () => NetIfaceMap;
   rooms?: RoomRegistry;
+  sessions?: SessionStore;
 };
 
 function defaultDbPath() {
@@ -173,8 +188,97 @@ export async function createApp(options: CreateAppOptions) {
     options.probe ??
     (() => probeCapabilities({ runner: createProcessCliRunner() }));
   const rooms = options.rooms ?? createRoomRegistry();
+  const sessions = options.sessions ?? createSessionStore();
   const listIfaces = options.listNetworkInterfaces ?? networkInterfaces;
   let selectedLanHost: string | null = null;
+
+  function currentAllowedOrigins(): string[] {
+    const state = options.hosting?.getState();
+    const port = state?.port ?? 0;
+    const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
+    const addresses = candidates.map((c) => c.address);
+    const hosts = [
+      ...addresses,
+      ...(selectedLanHost && !addresses.includes(selectedLanHost)
+        ? [selectedLanHost]
+        : []),
+    ];
+    return allowedOrigins({ port, lanHosts: hosts });
+  }
+
+  function originAllowed(origin: string | undefined): boolean {
+    if (!origin) return false;
+    return currentAllowedOrigins().includes(origin);
+  }
+
+  /** Prefer Origin; same-origin GET may omit it — fall back to Host. */
+  function requestEntryAllowed(request: {
+    headers: { origin?: unknown; host?: unknown };
+  }): boolean {
+    const origin = request.headers.origin;
+    if (typeof origin === "string" && originAllowed(origin)) return true;
+    if (origin === undefined || origin === null || origin === "") {
+      const host = request.headers.host;
+      if (typeof host === "string" && host.length > 0) {
+        return originAllowed(`http://${host}`);
+      }
+    }
+    return false;
+  }
+
+  function appendSetCookie(reply: { getHeader: (name: string) => unknown; header: (name: string, value: string | string[]) => unknown }, value: string) {
+    const existing = reply.getHeader("set-cookie");
+    if (!existing) {
+      reply.header("set-cookie", value);
+      return;
+    }
+    if (Array.isArray(existing)) {
+      reply.header("set-cookie", [...existing.map(String), value]);
+      return;
+    }
+    reply.header("set-cookie", [String(existing), value]);
+  }
+
+  function requireSession(
+    request: { headers: Record<string, unknown> },
+    reply: {
+      code: (status: number) => { send: (body: unknown) => unknown };
+    },
+  ): SessionRecord | null {
+    if (
+      !requestEntryAllowed({
+        headers: {
+          origin: request.headers.origin,
+          host: request.headers.host,
+        },
+      })
+    ) {
+      reply.code(403).send({ error: "origin_not_allowed" });
+      return null;
+    }
+    const cookies = parseCookies(
+      typeof request.headers.cookie === "string"
+        ? request.headers.cookie
+        : undefined,
+    );
+    const session = cookies[SESSION_COOKIE]
+      ? sessions.get(cookies[SESSION_COOKIE])
+      : null;
+    if (!session) {
+      reply.code(401).send({ error: "session_required" });
+      return null;
+    }
+    const csrf = request.headers[CSRF_HEADER];
+    if (typeof csrf !== "string" || csrf.length === 0) {
+      reply.code(403).send({ error: "csrf_required" });
+      return null;
+    }
+    if (csrf !== session.csrfToken) {
+      reply.code(403).send({ error: "csrf_invalid" });
+      return null;
+    }
+    return session;
+  }
 
   const resumable = store.findResumableRun();
   let activeMatch: ActiveMatch | null = resumable
@@ -263,6 +367,25 @@ export async function createApp(options: CreateAppOptions) {
     return reply.send(report);
   });
 
+  app.get("/api/session", async (request, reply) => {
+    if (!requestEntryAllowed(request)) {
+      return reply.code(403).send({ error: "origin_not_allowed" });
+    }
+    const cookies = parseCookies(request.headers.cookie);
+    const existing = cookies[SESSION_COOKIE]
+      ? sessions.get(cookies[SESSION_COOKIE])
+      : null;
+    const session = existing ?? sessions.create();
+    reply.header(
+      "set-cookie",
+      serializeCookie(SESSION_COOKIE, session.id),
+    );
+    return reply.send({
+      csrfToken: session.csrfToken,
+      allowedOrigins: currentAllowedOrigins(),
+    });
+  });
+
   app.get("/api/hosting", async (_request, reply) => {
     const state = options.hosting?.getState() ?? {
       bindMode: "local" as const,
@@ -319,7 +442,8 @@ export async function createApp(options: CreateAppOptions) {
     return reply.send(payload);
   });
 
-  app.post("/api/rooms", async (_request, reply) => {
+  app.post("/api/rooms", async (request, reply) => {
+    if (!requireSession(request, reply)) return;
     if (!options.hosting) {
       return reply.code(500).send({ error: "hosting_unavailable" });
     }
@@ -341,6 +465,13 @@ export async function createApp(options: CreateAppOptions) {
       rooms.dissolve(code);
     }
     const room = rooms.create();
+    const hostSeat = room.seats[0];
+    const issued = issueSeatToken();
+    if (hostSeat) {
+      hostSeat.credentialHash = issued.hash;
+    }
+    appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
+
     const payload = roomInvitePayload({
       room,
       lanHost,
@@ -353,6 +484,124 @@ export async function createApp(options: CreateAppOptions) {
       lanOrigin: `http://${lanHost}:${hostState.port}`,
     });
   });
+
+  app.post<{
+    Params: { code: string; seatId: string };
+    Body: { displayName?: string };
+  }>("/api/rooms/:code/seats/:seatId/claim", async (request, reply) => {
+    if (!requireSession(request, reply)) return;
+    const room = rooms.getByCode(request.params.code);
+    if (!room) {
+      return reply.code(404).send({ error: "room_not_found" });
+    }
+    const displayName =
+      typeof request.body?.displayName === "string" &&
+      request.body.displayName.trim().length > 0
+        ? request.body.displayName.trim().slice(0, 24)
+        : "客人";
+    const issued = issueSeatToken();
+    const result = rooms.claimSeat(room.code, request.params.seatId, {
+      displayName,
+      credentialHash: issued.hash,
+    });
+    if (!result.ok) {
+      if (result.reason === "room_not_found") {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      if (result.reason === "seat_not_found") {
+        return reply.code(404).send({ error: "seat_not_found" });
+      }
+      return reply.code(409).send({ error: "seat_not_open" });
+    }
+    appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
+    return reply.send({
+      seat: {
+        seatId: result.seat.seatId,
+        kind: result.seat.kind,
+        displayName: result.seat.displayName,
+      },
+      seats: publicSeats(result.room),
+    });
+  });
+
+  app.patch<{
+    Params: { code: string; seatId: string };
+    Body: { displayName?: string };
+  }>("/api/rooms/:code/seats/:seatId", async (request, reply) => {
+    if (!requireSession(request, reply)) return;
+    const room = rooms.getByCode(request.params.code);
+    if (!room) {
+      return reply.code(404).send({ error: "room_not_found" });
+    }
+    const cookies = parseCookies(
+      typeof request.headers.cookie === "string"
+        ? request.headers.cookie
+        : undefined,
+    );
+    const seatToken = cookies[SEAT_COOKIE];
+    if (!seatToken) {
+      return reply.code(401).send({ error: "seat_credential_required" });
+    }
+    const holder = rooms.findSeatByCredential(room.code, hashToken(seatToken));
+    if (!holder || holder.seatId !== request.params.seatId) {
+      return reply.code(403).send({ error: "seat_credential_mismatch" });
+    }
+    const displayName =
+      typeof request.body?.displayName === "string" &&
+      request.body.displayName.trim().length > 0
+        ? request.body.displayName.trim().slice(0, 24)
+        : null;
+    if (!displayName) {
+      return reply.code(400).send({ error: "display_name_required" });
+    }
+    const result = rooms.renameSeat(room.code, request.params.seatId, displayName);
+    if (!result.ok) {
+      if (result.reason === "room_not_found") {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      if (result.reason === "seat_not_found") {
+        return reply.code(404).send({ error: "seat_not_found" });
+      }
+      return reply.code(409).send({ error: "seat_not_human" });
+    }
+    return reply.send({
+      seat: {
+        seatId: result.seat.seatId,
+        kind: result.seat.kind,
+        displayName: result.seat.displayName,
+      },
+      seats: publicSeats(result.room),
+    });
+  });
+
+  app.get<{ Params: { code: string } }>(
+    "/api/rooms/:code/me",
+    async (request, reply) => {
+      const room = rooms.getByCode(request.params.code);
+      if (!room) {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      const cookies = parseCookies(
+        typeof request.headers.cookie === "string"
+          ? request.headers.cookie
+          : undefined,
+      );
+      const seatToken = cookies[SEAT_COOKIE];
+      const holder = seatToken
+        ? rooms.findSeatByCredential(room.code, hashToken(seatToken))
+        : null;
+      return reply.send({
+        seat: holder
+          ? {
+              seatId: holder.seatId,
+              kind: holder.kind,
+              displayName: holder.displayName,
+            }
+          : null,
+        seats: publicSeats(room),
+      });
+    },
+  );
 
   app.get<{ Params: { code: string } }>(
     "/api/rooms/:code",

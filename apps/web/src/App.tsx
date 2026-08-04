@@ -16,8 +16,14 @@ import {
   type MatchSetupDraft,
 } from "./matchSetup";
 import {
+  claimSeat,
+  createRoomOnCurrentOrigin,
   enterHostModeAndCreateRoom,
+  fetchMySeat,
   fetchRoom,
+  patchRoomHost,
+  renameSeat,
+  type LobbySeat,
   type RoomInvite,
 } from "./lanRoom";
 
@@ -46,6 +52,9 @@ function initialScreen(): Screen {
 export function App() {
   const [screen, setScreen] = useState<Screen>(() => initialScreen());
   const [room, setRoom] = useState<RoomInvite | null>(null);
+  const [lobbySeats, setLobbySeats] = useState<LobbySeat[]>([]);
+  const [mySeatId, setMySeatId] = useState<string | null>(null);
+  const [displayNameDraft, setDisplayNameDraft] = useState("客人");
   const [guestOrigin, setGuestOrigin] = useState(window.location.origin);
   const [view, setView] = useState<SeatView | null>(null);
   const [decisionRationales, setDecisionRationales] = useState<
@@ -151,33 +160,19 @@ export function App() {
         sessionStorage.removeItem("coup.createRoom");
         setBusy(true);
         try {
-          const created = await fetch("/api/rooms", { method: "POST" });
-          if (!created.ok) {
-            const body = (await created.json().catch(() => null)) as {
-              error?: string;
-            } | null;
-            throw new Error(body?.error ?? "无法创建房间");
-          }
-          const invite = (await created.json()) as RoomInvite;
+          const invite = await createRoomOnCurrentOrigin();
           setRoom(invite);
+          setLobbySeats(invite.seats ?? []);
+          setMySeatId("1");
+          setDisplayNameDraft(
+            invite.seats?.find((s) => s.seatId === "1")?.displayName ?? "你",
+          );
           setScreen("host-invite");
         } catch (err) {
           setError(err instanceof Error ? err.message : "创建房间失败");
           setScreen("home");
         } finally {
           setBusy(false);
-        }
-      }
-
-      const restoreCode = sessionStorage.getItem("coup.restoreInvite");
-      if (restoreCode) {
-        sessionStorage.removeItem("coup.restoreInvite");
-        try {
-          const found = await fetchRoom(window.location.origin, restoreCode);
-          setRoom(found);
-          setScreen("host-invite");
-        } catch {
-          setScreen("home");
         }
       }
 
@@ -191,7 +186,11 @@ export function App() {
         try {
           const found = await fetchRoom(window.location.origin, code);
           setRoom(found);
+          setLobbySeats(found.seats ?? []);
           setGuestOrigin(window.location.origin);
+          const me = await fetchMySeat(window.location.origin, code);
+          setMySeatId(me.seat?.seatId ?? null);
+          if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
           setScreen("guest-confirm");
           return;
         } catch {
@@ -412,6 +411,11 @@ export function App() {
     try {
       const invite = await enterHostModeAndCreateRoom();
       setRoom(invite);
+      setLobbySeats(invite.seats ?? []);
+      setMySeatId("1");
+      setDisplayNameDraft(
+        invite.seats?.find((s) => s.seatId === "1")?.displayName ?? "你",
+      );
       setScreen("host-invite");
     } catch (err) {
       if (err instanceof Error && err.message === "redirecting") return;
@@ -426,21 +430,84 @@ export function App() {
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`/api/rooms/${room.code}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ selectedHost: host }),
-      });
-      if (!response.ok) {
-        throw new Error("无法切换网卡地址");
-      }
-      setRoom((await response.json()) as RoomInvite);
+      const next = await patchRoomHost(room.code, host);
+      setRoom(next);
+      if (next.seats) setLobbySeats(next.seats);
     } catch (err) {
       setError(err instanceof Error ? err.message : "切换失败");
     } finally {
       setBusy(false);
     }
   }
+
+  async function refreshLobby(origin: string, code: string) {
+    try {
+      const found = await fetchRoom(origin, code);
+      setRoom(found);
+      setLobbySeats(found.seats ?? []);
+      const me = await fetchMySeat(origin, code);
+      setMySeatId((prev) => me.seat?.seatId ?? prev);
+      if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
+    } catch {
+      /* ignore poll errors */
+    }
+  }
+
+  async function handleClaim(seatId: string) {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await claimSeat(
+        guestOrigin,
+        room.code,
+        seatId,
+        displayNameDraft.trim() || "客人",
+      );
+      setLobbySeats(result.seats);
+      setMySeatId(result.seat.seatId);
+      if (result.seat.displayName) setDisplayNameDraft(result.seat.displayName);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "占座失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRename(origin: string) {
+    if (!room || !mySeatId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await renameSeat(
+        origin,
+        room.code,
+        mySeatId,
+        displayNameDraft.trim() || "客人",
+      );
+      setLobbySeats(result.seats);
+      if (result.seat.displayName) setDisplayNameDraft(result.seat.displayName);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "改名失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (
+      !room ||
+      (screen !== "host-invite" && screen !== "guest-confirm")
+    ) {
+      return;
+    }
+    const origin =
+      screen === "guest-confirm" ? guestOrigin : window.location.origin;
+    const id = window.setInterval(() => {
+      void refreshLobby(origin, room.code);
+    }, 1500);
+    return () => window.clearInterval(id);
+  }, [room, screen, guestOrigin]);
 
   function openLocalSetup() {
     setScreen("local-setup");
@@ -493,7 +560,12 @@ export function App() {
         </header>
         <HostInvitePanel
           room={room}
+          seats={lobbySeats}
+          mySeatId={mySeatId}
           busy={busy}
+          displayNameDraft={displayNameDraft}
+          onDisplayNameDraftChange={setDisplayNameDraft}
+          onRename={() => void handleRename(window.location.origin)}
           onBack={() => setScreen("home")}
           onSelectHost={(host) => void selectLanHost(host)}
           onCopy={() => {
@@ -527,9 +599,17 @@ export function App() {
           onError={(message) => setError(message)}
           onJoined={(found, origin) => {
             setRoom(found);
+            setLobbySeats(found.seats ?? []);
             setGuestOrigin(origin);
+            setMySeatId(null);
             setError(null);
             setScreen("guest-confirm");
+            void fetchMySeat(origin, found.code).then((me) => {
+              setMySeatId(me.seat?.seatId ?? null);
+              if (me.seat?.displayName) {
+                setDisplayNameDraft(me.seat.displayName);
+              }
+            });
           }}
         />
         {error ? <p className="error">{error}</p> : null}
@@ -547,8 +627,16 @@ export function App() {
         <GuestRoomConfirm
           room={room}
           origin={guestOrigin}
+          seats={lobbySeats}
+          mySeatId={mySeatId}
+          busy={busy}
+          displayNameDraft={displayNameDraft}
+          onDisplayNameDraftChange={setDisplayNameDraft}
+          onClaim={(seatId) => void handleClaim(seatId)}
+          onRename={() => void handleRename(guestOrigin)}
           onBack={() => setScreen("join")}
         />
+        {error ? <p className="error">{error}</p> : null}
       </main>
     );
   }

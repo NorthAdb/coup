@@ -1,3 +1,9 @@
+export type LobbySeat = {
+  seatId: string;
+  kind: "local_human" | "open" | "remote_human";
+  displayName: string | null;
+};
+
 export type RoomInvite = {
   code: string;
   phase: string;
@@ -5,6 +11,7 @@ export type RoomInvite = {
   selectedHost: string | null;
   joinUrl: string | null;
   candidates: string[];
+  seats?: LobbySeat[];
   bindMode: string;
   lanOrigin: string | null;
   error?: string | null;
@@ -26,8 +33,47 @@ export type HostingEnterResponse =
       retryOrigins: string[];
     };
 
+let csrfToken: string | null = null;
+
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+export async function ensureSession(origin = ""): Promise<string> {
+  const base = origin || "";
+  const response = await fetch(`${base}/api/session`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    throw new Error(body?.error ?? "无法建立会话");
+  }
+  const body = (await response.json()) as { csrfToken: string };
+  csrfToken = body.csrfToken;
+  return csrfToken;
+}
+
+async function authedFetch(
+  url: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  if (!csrfToken) {
+    const absolute = url.startsWith("http") ? new URL(url).origin : "";
+    await ensureSession(absolute);
+  }
+  const headers = new Headers(init.headers);
+  if (csrfToken) headers.set("x-csrf-token", csrfToken);
+  if (init.body && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  return fetch(url, {
+    ...init,
+    credentials: "include",
+    headers,
+  });
 }
 
 export async function waitForHostOrigin(
@@ -68,7 +114,26 @@ export async function enterHostModeAndCreateRoom(): Promise<RoomInvite> {
     throw new Error("redirecting");
   }
 
-  const created = await fetch("/api/rooms", { method: "POST" });
+  // Already host: still land on LAN Origin before create so seat cookies
+  // are issued on the join Origin (host-only; loopback ≠ LAN site).
+  const selected =
+    enterBody.status === "ready" ? enterBody.selectedHost : null;
+  const port = enterBody.status === "ready" ? enterBody.port : 0;
+  if (selected && port > 0) {
+    const lanOrigin = `http://${selected}:${port}`;
+    if (lanOrigin !== window.location.origin) {
+      sessionStorage.setItem("coup.createRoom", "1");
+      window.location.assign(`${lanOrigin}/`);
+      throw new Error("redirecting");
+    }
+  }
+
+  return createRoomOnCurrentOrigin();
+}
+
+export async function createRoomOnCurrentOrigin(): Promise<RoomInvite> {
+  await ensureSession();
+  const created = await authedFetch("/api/rooms", { method: "POST" });
   if (!created.ok) {
     const body = (await created.json().catch(() => null)) as {
       error?: string;
@@ -81,13 +146,7 @@ export async function enterHostModeAndCreateRoom(): Promise<RoomInvite> {
     }
     throw new Error(body?.error ?? "无法创建房间");
   }
-  const invite = (await created.json()) as RoomInvite;
-  if (invite.lanOrigin && invite.lanOrigin !== window.location.origin) {
-    sessionStorage.setItem("coup.restoreInvite", invite.code);
-    window.location.assign(`${invite.lanOrigin}/`);
-    throw new Error("redirecting");
-  }
-  return invite;
+  return (await created.json()) as RoomInvite;
 }
 
 export function parseManualJoin(input: {
@@ -135,7 +194,10 @@ export async function fetchRoom(
   origin: string,
   code: string,
 ): Promise<RoomInvite> {
-  const response = await fetch(`${origin}/api/rooms/${code}`);
+  const response = await fetch(`${origin}/api/rooms/${code}`, {
+    credentials: "include",
+    cache: "no-store",
+  });
   if (response.status === 404) {
     throw new Error("房间不存在或已解散");
   }
@@ -143,4 +205,93 @@ export async function fetchRoom(
     throw new Error("无法查询房间");
   }
   return (await response.json()) as RoomInvite;
+}
+
+export async function fetchMySeat(
+  origin: string,
+  code: string,
+): Promise<{ seat: LobbySeat | null; seats: LobbySeat[] }> {
+  const response = await fetch(`${origin}/api/rooms/${code}/me`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error("无法确认座位凭证");
+  }
+  return (await response.json()) as {
+    seat: LobbySeat | null;
+    seats: LobbySeat[];
+  };
+}
+
+export async function claimSeat(
+  origin: string,
+  code: string,
+  seatId: string,
+  displayName: string,
+): Promise<{ seat: LobbySeat; seats: LobbySeat[] }> {
+  await ensureSession(origin);
+  const response = await authedFetch(
+    `${origin}/api/rooms/${code}/seats/${seatId}/claim`,
+    {
+      method: "POST",
+      body: JSON.stringify({ displayName }),
+    },
+  );
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    if (body?.error === "seat_not_open") {
+      throw new Error("该座位不可占或已被占用");
+    }
+    throw new Error(body?.error ?? "占座失败");
+  }
+  return (await response.json()) as { seat: LobbySeat; seats: LobbySeat[] };
+}
+
+export async function renameSeat(
+  origin: string,
+  code: string,
+  seatId: string,
+  displayName: string,
+): Promise<{ seat: LobbySeat; seats: LobbySeat[] }> {
+  await ensureSession(origin);
+  const response = await authedFetch(
+    `${origin}/api/rooms/${code}/seats/${seatId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ displayName }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error("无法修改显示名");
+  }
+  return (await response.json()) as { seat: LobbySeat; seats: LobbySeat[] };
+}
+
+export async function patchRoomHost(
+  code: string,
+  selectedHost: string,
+): Promise<RoomInvite> {
+  await ensureSession();
+  const response = await authedFetch(`/api/rooms/${code}`, {
+    method: "PATCH",
+    body: JSON.stringify({ selectedHost }),
+  });
+  if (!response.ok) {
+    throw new Error("无法切换网卡地址");
+  }
+  return (await response.json()) as RoomInvite;
+}
+
+export function seatKindLabel(kind: LobbySeat["kind"]): string {
+  switch (kind) {
+    case "local_human":
+      return "本地人类";
+    case "remote_human":
+      return "远程人类";
+    case "open":
+      return "开放占座";
+  }
 }

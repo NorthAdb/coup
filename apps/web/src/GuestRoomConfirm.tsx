@@ -27,27 +27,34 @@ export function GuestRoomConfirm({
   onBack,
 }: GuestRoomConfirmProps) {
   return (
-    <section className="panel" aria-label="已找到房间">
+    <section className="panel guest-console" aria-label="客人大厅">
       <button type="button" className="ghost" disabled={busy} onClick={onBack}>
         ← 返回
       </button>
-      <p className="eyebrow">已连接到主机</p>
-      <h2>房间 {room.code}</h2>
-      <p className="lede">
-        已确认主机上存在该房间（{origin}）。选择开放座位占座；刷新后凭座位凭证认回。
-      </p>
-      <p className="hint ok">房间阶段：{room.phase}</p>
-
-      <h3 className="lobby-seats-heading">座位</h3>
-      <LobbySeatList
-        seats={seats}
-        mySeatId={mySeatId}
-        busy={busy}
-        onClaim={onClaim}
-        displayNameDraft={displayNameDraft}
-        onDisplayNameDraftChange={onDisplayNameDraftChange}
-        onRename={onRename}
-      />
+      <div className="guest-console-grid">
+        <div className="guest-console-meta">
+          <p className="eyebrow">加入方 · 大厅</p>
+          <h2>房间 {room.code}</h2>
+          <p className="lede">
+            已确认主机上存在该房间（{origin}）。选择开放座位占座；开局由主机决定。
+          </p>
+          <p className="hint ok">
+            {room.phase === "match" ? "对局已开始，正在进入策划桌…" : "等待主机开局…"}
+          </p>
+        </div>
+        <div className="guest-console-seats">
+          <h3 className="lobby-seats-heading">座位矩阵</h3>
+          <LobbySeatList
+            seats={seats}
+            mySeatId={mySeatId}
+            busy={busy}
+            onClaim={onClaim}
+            displayNameDraft={displayNameDraft}
+            onDisplayNameDraftChange={onDisplayNameDraftChange}
+            onRename={onRename}
+          />
+        </div>
+      </div>
     </section>
   );
 }

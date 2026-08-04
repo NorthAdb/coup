@@ -210,15 +210,21 @@ export function seatModelLabel(seat: SeatModelLabelInput): string {
   if (seat.controller === "local_human") {
     return "本地人类";
   }
+  if (seat.controller === "remote_human") {
+    return "远程人类";
+  }
   const cli = seat.cli ?? "stub";
   const model = shortModelLabel(seat.modelId) ?? "占位";
   return `${cliDisplayName(cli)} · ${model}`;
 }
 
+export type SeatCalloutTone = "default" | "challenge" | "pass";
+
 export type SeatCallout = {
   seatId: string;
   text: string;
   parts: TextPart[];
+  tone: SeatCalloutTone;
 };
 
 type CalloutSeat = { seatId: string; displayName: string };
@@ -226,8 +232,9 @@ type CalloutSeat = { seatId: string; displayName: string };
 function calloutFromParts(
   seatId: string,
   parts: TextPart[],
+  tone: SeatCalloutTone = "default",
 ): SeatCallout {
-  return { seatId, parts, text: joinTextParts(parts) };
+  return { seatId, parts, text: joinTextParts(parts), tone };
 }
 
 /** Short public-decision callout shown beside a seat (no rationale / private info). */
@@ -254,14 +261,17 @@ export function seatCalloutFromEvent(
         ),
       ]);
     case "response_passed":
-      return calloutFromParts(event.seatId, [
-        text(`放弃${event.responseType === "block" ? "阻挡" : "质疑"}`),
-      ]);
+      return calloutFromParts(
+        event.seatId,
+        [text(`放弃${event.responseType === "block" ? "阻挡" : "质疑"}`)],
+        event.responseType === "challenge" ? "pass" : "default",
+      );
     case "challenge_declared":
-      return calloutFromParts(event.seatId, [
-        text("质疑 "),
-        seat(event.againstSeatId),
-      ]);
+      return calloutFromParts(
+        event.seatId,
+        [text("质疑 "), seat(event.againstSeatId)],
+        "challenge",
+      );
     case "claim_proven":
       return calloutFromParts(event.seatId, [
         text(

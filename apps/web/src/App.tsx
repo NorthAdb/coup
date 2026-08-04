@@ -17,15 +17,18 @@ import {
 } from "./matchSetup";
 import {
   claimSeat,
+  configureLobbySeat,
   createRoomOnCurrentOrigin,
   enterHostModeAndCreateRoom,
   fetchMySeat,
   fetchRoom,
   patchRoomHost,
   renameSeat,
+  startRoomMatch,
   type LobbySeat,
   type RoomInvite,
 } from "./lanRoom";
+import type { HostSeatConfig } from "./LobbySeatList";
 
 type AgentPhase =
   | "idle"
@@ -448,8 +451,60 @@ export function App() {
       const me = await fetchMySeat(origin, code);
       setMySeatId((prev) => me.seat?.seatId ?? prev);
       if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
+      if (found.phase === "match" && !view) {
+        const response = await fetch("/api/matches/current", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (response.ok) {
+          const body = (await response.json()) as {
+            view: SeatView;
+            matchId: string;
+            decisionRationales?: Record<string, DecisionRationaleView>;
+          };
+          setView(body.view);
+          setDecisionRationales(body.decisionRationales ?? {});
+          setResumableMatchId(body.matchId);
+        }
+      }
     } catch {
       /* ignore poll errors */
+    }
+  }
+
+  async function handleConfigure(seatId: string, config: HostSeatConfig) {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await configureLobbySeat(room.code, seatId, config);
+      setLobbySeats(result.seats);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "配置座位失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleStartRoom() {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body = await startRoomMatch(room.code);
+      setView(body.view);
+      setDecisionRationales(
+        (body.decisionRationales as Record<string, DecisionRationaleView>) ??
+          {},
+      );
+      setResumableMatchId(body.matchId);
+      setRoom({ ...room, phase: body.phase });
+      await refreshMatchList();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "无法开局");
+      void refreshCapabilities();
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -507,7 +562,13 @@ export function App() {
       void refreshLobby(origin, room.code);
     }, 1500);
     return () => window.clearInterval(id);
-  }, [room, screen, guestOrigin]);
+  }, [room, screen, guestOrigin, view]);
+
+  useEffect(() => {
+    if (screen === "host-invite" && !capabilities) {
+      void refreshCapabilities();
+    }
+  }, [screen, capabilities]);
 
   function openLocalSetup() {
     setScreen("local-setup");
@@ -563,9 +624,14 @@ export function App() {
           seats={lobbySeats}
           mySeatId={mySeatId}
           busy={busy}
+          probing={probing}
+          capabilities={capabilities}
           displayNameDraft={displayNameDraft}
           onDisplayNameDraftChange={setDisplayNameDraft}
           onRename={() => void handleRename(window.location.origin)}
+          onConfigure={(seatId, config) => void handleConfigure(seatId, config)}
+          onProbe={() => void refreshCapabilities()}
+          onStart={() => void handleStartRoom()}
           onBack={() => setScreen("home")}
           onSelectHost={(host) => void selectLanHost(host)}
           onCopy={() => {

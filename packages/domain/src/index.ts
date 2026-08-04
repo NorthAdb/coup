@@ -5,7 +5,7 @@ export type CharacterId =
   | "ambassador"
   | "contessa";
 
-export type SeatController = "local_human" | "stub_agent";
+export type SeatController = "local_human" | "remote_human" | "stub_agent";
 
 export type MatchStatus = "in_progress" | "finished" | "aborted";
 

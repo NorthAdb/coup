@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { SeatDecision, SeatView } from "@coup/protocol";
 import { createAgentRuntime } from "./agents/index.js";
 import {
+  pendingAgentSeatIds,
   startMatch,
   startTwoSeatMatch,
   submitHumanDecision,
@@ -401,5 +402,24 @@ describe("stub match runtime", () => {
           event.type === "action_resolved" && event.actionType === "income",
       ).length >= 3,
     );
+  });
+});
+
+describe("pendingAgentSeatIds", () => {
+  it("lists every agent still in the response queue, skipping the human", () => {
+    const match = {
+      humanSeatId: "seat-human",
+      state: {
+        status: "in_progress",
+        phase: "await_action_challenge",
+        responseQueue: ["seat-a", "seat-human", "seat-b"],
+        seats: [
+          { seatId: "seat-human", controller: "local_human" },
+          { seatId: "seat-a", controller: "stub_agent" },
+          { seatId: "seat-b", controller: "stub_agent" },
+        ],
+      },
+    } as ActiveMatch;
+    assert.deepEqual(pendingAgentSeatIds(match), ["seat-a", "seat-b"]);
   });
 });

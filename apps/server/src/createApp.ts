@@ -34,6 +34,10 @@ import {
   type NetIfaceMap,
 } from "./lanAddresses.js";
 import {
+  evaluateLobbyStartGates,
+  lobbySeatsToMatchSetup,
+} from "./lobbyStart.js";
+import {
   createRoomRegistry,
   publicSeats,
   roomInvitePayload,
@@ -98,9 +102,13 @@ export function activeMatchFromRun(run: MatchRunRecord): ActiveMatch {
   };
 }
 
-function humanFacingPayload(match: ActiveMatch, requestId?: string) {
+function humanFacingPayload(
+  match: ActiveMatch,
+  requestId?: string,
+  seatId = match.humanSeatId,
+) {
   return {
-    view: toSeatView(match, match.humanSeatId, requestId),
+    view: toSeatView(match, seatId, requestId),
     decisionRationales: match.decisionRationales,
   };
 }
@@ -284,9 +292,42 @@ export async function createApp(options: CreateAppOptions) {
   let activeMatch: ActiveMatch | null = resumable
     ? activeMatchFromRun(resumable)
     : null;
+  let activeRoomCode: string | null = null;
   let agentPhase: AgentDecisionPhase | "idle" = "idle";
   let agentSeatId: string | null = null;
   let thinkingSeatIds: string[] = [];
+
+  function resolveMatchSeatId(
+    request: { headers: Record<string, unknown> },
+  ): string | null {
+    if (!activeMatch) return null;
+    if (!activeRoomCode) return activeMatch.humanSeatId;
+    const room = rooms.getByCode(activeRoomCode);
+    if (!room) return null;
+    const cookies = parseCookies(
+      typeof request.headers.cookie === "string"
+        ? request.headers.cookie
+        : undefined,
+    );
+    const seatToken = cookies[SEAT_COOKIE];
+    if (!seatToken) return null;
+    const holder = rooms.findSeatByCredential(
+      room.code,
+      hashToken(seatToken),
+    );
+    if (!holder) return null;
+    const matchSeat = activeMatch.state.seats.find(
+      (seat) => seat.seatId === holder.seatId,
+    );
+    if (
+      !matchSeat ||
+      (matchSeat.controller !== "local_human" &&
+        matchSeat.controller !== "remote_human")
+    ) {
+      return null;
+    }
+    return holder.seatId;
+  }
 
   function lanSnapshot(port: number, code: string) {
     const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
@@ -519,6 +560,8 @@ export async function createApp(options: CreateAppOptions) {
         seatId: result.seat.seatId,
         kind: result.seat.kind,
         displayName: result.seat.displayName,
+        cli: result.seat.cli,
+        modelId: result.seat.modelId,
       },
       seats: publicSeats(result.room),
     });
@@ -569,10 +612,199 @@ export async function createApp(options: CreateAppOptions) {
         seatId: result.seat.seatId,
         kind: result.seat.kind,
         displayName: result.seat.displayName,
+        cli: result.seat.cli,
+        modelId: result.seat.modelId,
       },
       seats: publicSeats(result.room),
     });
   });
+
+  app.patch<{
+    Params: { code: string; seatId: string };
+    Body: {
+      kind?: string;
+      displayName?: string;
+      cli?: string;
+      modelId?: string | null;
+    };
+  }>("/api/rooms/:code/seats/:seatId/config", async (request, reply) => {
+    if (!requireSession(request, reply)) return;
+    const room = rooms.getByCode(request.params.code);
+    if (!room) {
+      return reply.code(404).send({ error: "room_not_found" });
+    }
+    const cookies = parseCookies(
+      typeof request.headers.cookie === "string"
+        ? request.headers.cookie
+        : undefined,
+    );
+    const seatToken = cookies[SEAT_COOKIE];
+    const holder = seatToken
+      ? rooms.findSeatByCredential(room.code, hashToken(seatToken))
+      : null;
+    if (!holder || holder.kind !== "local_human" || holder.seatId !== "1") {
+      return reply.code(403).send({ error: "host_seat_required" });
+    }
+
+    const kind = request.body?.kind;
+    if (kind !== "open" && kind !== "closed" && kind !== "local_agent") {
+      return reply.code(400).send({ error: "invalid_seat_kind" });
+    }
+
+    let configInput:
+      | { kind: "open" }
+      | { kind: "closed" }
+      | {
+          kind: "local_agent";
+          displayName: string;
+          cli: "opencode" | "claude" | "stub";
+          modelId: string | null;
+        };
+    if (kind === "open") {
+      configInput = { kind: "open" };
+    } else if (kind === "closed") {
+      configInput = { kind: "closed" };
+    } else {
+      const cli = request.body?.cli;
+      if (cli !== "opencode" && cli !== "claude" && cli !== "stub") {
+        return reply.code(400).send({ error: "invalid_cli" });
+      }
+      const displayName =
+        typeof request.body?.displayName === "string" &&
+        request.body.displayName.trim().length > 0
+          ? request.body.displayName.trim().slice(0, 24)
+          : "Agent";
+      const modelId =
+        request.body?.modelId === undefined
+          ? null
+          : request.body.modelId === null
+            ? null
+            : typeof request.body.modelId === "string"
+              ? request.body.modelId
+              : undefined;
+      if (modelId === undefined) {
+        return reply.code(400).send({ error: "invalid_model_id" });
+      }
+      configInput = { kind: "local_agent", displayName, cli, modelId };
+    }
+
+    const result = rooms.configureSeat(
+      room.code,
+      request.params.seatId,
+      configInput,
+    );
+    if (!result.ok) {
+      if (result.reason === "room_not_found") {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      if (result.reason === "seat_not_found") {
+        return reply.code(404).send({ error: "seat_not_found" });
+      }
+      if (result.reason === "room_not_lobby") {
+        return reply.code(409).send({ error: "room_not_lobby" });
+      }
+      return reply.code(409).send({ error: "seat_not_configurable" });
+    }
+    return reply.send({
+      seat: {
+        seatId: result.seat.seatId,
+        kind: result.seat.kind,
+        displayName: result.seat.displayName,
+        cli: result.seat.cli,
+        modelId: result.seat.modelId,
+      },
+      seats: publicSeats(result.room),
+    });
+  });
+
+  app.post<{ Params: { code: string } }>(
+    "/api/rooms/:code/start",
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const room = rooms.getByCode(request.params.code);
+      if (!room) {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      const cookies = parseCookies(
+        typeof request.headers.cookie === "string"
+          ? request.headers.cookie
+          : undefined,
+      );
+      const seatToken = cookies[SEAT_COOKIE];
+      const holder = seatToken
+        ? rooms.findSeatByCredential(room.code, hashToken(seatToken))
+        : null;
+      if (!holder || holder.kind !== "local_human" || holder.seatId !== "1") {
+        return reply.code(403).send({ error: "host_seat_required" });
+      }
+
+      const gates = evaluateLobbyStartGates(room);
+      if (!gates.ok) {
+        return reply.code(400).send({ error: gates.reason });
+      }
+
+      const setupSeats = lobbySeatsToMatchSetup(room);
+      const report = await runProbe();
+      const gate = recheckSetupSeats(setupSeats, report);
+      if (!gate.ok) {
+        return reply.code(400).send({
+          error: gate.reason,
+          hint: gate.hint,
+        });
+      }
+
+      if (activeMatch) {
+        const existing = store.findResumableRun();
+        if (existing && existing.runStatus === "in_progress") {
+          store.userAbort(existing.matchId);
+        }
+        activeMatch = null;
+        activeRoomCode = null;
+      }
+
+      try {
+        agentPhase = "thinking";
+        agentSeatId = null;
+        thinkingSeatIds = [];
+        activeMatch = await startMatch({
+          seats: setupSeats,
+          ...runtimeOptions(),
+        });
+        agentPhase = "idle";
+        agentSeatId = null;
+        thinkingSeatIds = [];
+      } catch (error) {
+        agentPhase = "failed";
+        thinkingSeatIds = [];
+        const startedId = store.findResumableRun()?.matchId;
+        if (startedId) {
+          store.technicalAbort(startedId, abortReasonFrom(error));
+        }
+        activeMatch = null;
+        activeRoomCode = null;
+        return reply.code(502).send({
+          error: abortReasonFrom(error),
+          aborted: Boolean(startedId),
+          matchId: startedId ?? null,
+        });
+      }
+
+      const begun = rooms.beginMatch(room.code, activeMatch.state.matchId);
+      if (!begun.ok) {
+        store.userAbort(activeMatch.state.matchId);
+        activeMatch = null;
+        activeRoomCode = null;
+        return reply.code(409).send({ error: begun.reason });
+      }
+      activeRoomCode = room.code;
+
+      return reply.send({
+        ...humanFacingPayload(activeMatch, undefined, "1"),
+        phase: begun.room.phase,
+        matchId: activeMatch.state.matchId,
+      });
+    },
+  );
 
   app.get<{ Params: { code: string } }>(
     "/api/rooms/:code/me",
@@ -596,6 +828,8 @@ export async function createApp(options: CreateAppOptions) {
               seatId: holder.seatId,
               kind: holder.kind,
               displayName: holder.displayName,
+              cli: holder.cli,
+              modelId: holder.modelId,
             }
           : null,
         seats: publicSeats(room),
@@ -757,6 +991,7 @@ export async function createApp(options: CreateAppOptions) {
         seats: parsed.setup.seats,
         ...runtimeOptions(),
       });
+      activeRoomCode = null;
       agentPhase = "idle";
       agentSeatId = null;
       thinkingSeatIds = [];
@@ -768,6 +1003,7 @@ export async function createApp(options: CreateAppOptions) {
         store.technicalAbort(startedId, abortReasonFrom(error));
       }
       activeMatch = null;
+      activeRoomCode = null;
       return reply.code(502).send({
         error: abortReasonFrom(error),
         aborted: Boolean(startedId),
@@ -777,7 +1013,7 @@ export async function createApp(options: CreateAppOptions) {
     return reply.send(humanFacingPayload(activeMatch));
   });
 
-  app.get("/api/matches/current", async (_request, reply) => {
+  app.get("/api/matches/current", async (request, reply) => {
     if (!activeMatch) {
       const again = store.findResumableRun();
       if (again) {
@@ -788,9 +1024,15 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(404).send({ error: "no_active_match" });
     }
 
+    const seatId = resolveMatchSeatId(request);
+    if (!seatId) {
+      return reply.code(403).send({ error: "seat_credential_required" });
+    }
+
     const advanced = await advanceActiveOrAbort(activeMatch);
     if (!advanced.ok) {
       activeMatch = null;
+      activeRoomCode = null;
       return reply.code(502).send({
         error: advanced.error,
         aborted: true,
@@ -800,7 +1042,7 @@ export async function createApp(options: CreateAppOptions) {
     activeMatch = advanced.match;
 
     return reply.send({
-      ...humanFacingPayload(activeMatch),
+      ...humanFacingPayload(activeMatch, undefined, seatId),
       matchId: activeMatch.state.matchId,
     });
   });
@@ -809,6 +1051,10 @@ export async function createApp(options: CreateAppOptions) {
     if (!activeMatch) {
       return reply.code(404).send({ error: "no_active_match" });
     }
+    const seatId = resolveMatchSeatId(request);
+    if (!seatId) {
+      return reply.code(403).send({ error: "seat_credential_required" });
+    }
     const body = request.body as SeatDecision;
     const matchId = activeMatch.state.matchId;
     let result: Awaited<ReturnType<typeof submitHumanDecision>>;
@@ -816,7 +1062,10 @@ export async function createApp(options: CreateAppOptions) {
       agentPhase = "thinking";
       agentSeatId = null;
       thinkingSeatIds = [];
-      result = await submitHumanDecision(activeMatch, body, runtimeOptions());
+      result = await submitHumanDecision(activeMatch, body, {
+        ...runtimeOptions(),
+        actingSeatId: seatId,
+      });
       agentPhase = "idle";
       agentSeatId = null;
       thinkingSeatIds = [];
@@ -828,6 +1077,7 @@ export async function createApp(options: CreateAppOptions) {
         store.technicalAbort(matchId, abortReasonFrom(error));
       }
       activeMatch = null;
+      activeRoomCode = null;
       return reply.code(502).send({
         error: abortReasonFrom(error),
         aborted: true,
@@ -838,7 +1088,9 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(409).send({ error: result.reason });
     }
     activeMatch = result.match;
-    return reply.send(humanFacingPayload(activeMatch, body.requestId));
+    return reply.send(
+      humanFacingPayload(activeMatch, body.requestId, seatId),
+    );
   });
 
   await app.register(fastifyStatic, {

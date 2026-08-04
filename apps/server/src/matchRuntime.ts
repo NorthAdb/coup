@@ -55,8 +55,31 @@ export type MatchPersistence = {
 export type MatchRuntimeOptions = {
   agentRuntime?: AgentRuntime;
   persistence?: MatchPersistence;
-  onAgentPhase?: (phase: AgentDecisionPhase) => void;
+  /** Optional seatId identifies which Agent seat is currently blocking. */
+  onAgentPhase?: (phase: AgentDecisionPhase, seatId?: string) => void;
+  /** Fired at advance start and after each agent commit with the live match. */
+  onMatchAdvanced?: (match: ActiveMatch) => void;
 };
+
+/** Agent seats that still owe a decision in the current response window. */
+export function pendingAgentSeatIds(match: ActiveMatch): string[] {
+  const { state } = match;
+  if (state.status !== "in_progress") return [];
+  const isAgent = (seatId: string) =>
+    state.seats.find((seat) => seat.seatId === seatId)?.controller ===
+    "stub_agent";
+
+  switch (state.phase) {
+    case "await_action_challenge":
+    case "await_block":
+    case "await_block_challenge":
+      return state.responseQueue.filter(isAgent);
+    default: {
+      const active = activeDecidingSeatId(state);
+      return active && isAgent(active) ? [active] : [];
+    }
+  }
+}
 
 function displayNameFor(match: ActiveMatch, seatId: string): string {
   return match.displayNames[seatId] ?? seatId;
@@ -84,7 +107,9 @@ export function toSeatView(
       pendingAction: projection.pendingAction,
       seats: projection.seats.map((seat) => {
         const agent = match.seatAgents[seat.seatId];
-        const isHuman = seat.controller === "local_human";
+        const isHuman =
+          seat.controller === "local_human" ||
+          seat.controller === "remote_human";
         return {
           seatId: seat.seatId,
           controller: seat.controller,
@@ -234,6 +259,7 @@ export async function advanceAgentSeats(
 ): Promise<ActiveMatch> {
   const runtime = options.agentRuntime ?? createAgentRuntime();
   let current = match;
+  options.onMatchAdvanced?.(current);
   for (let guard = 0; guard < 256; guard += 1) {
     const activeSeatId = activeDecidingSeatId(current.state);
     if (!activeSeatId) {
@@ -258,11 +284,13 @@ export async function advanceAgentSeats(
         applySeatDecision(current, seat.seatId, decision),
         options.persistence,
       );
+      options.onMatchAdvanced?.(current);
       continue;
     }
 
     const cwd = await ensureSeatWorkspace(current, seat.seatId);
     const adapter = runtime.getAdapter(config.cli);
+    options.onAgentPhase?.("thinking", seat.seatId);
     const seatDecision = await decideWithBoundedRetry({
       buildView: (requestId) => toSeatView(current, seat.seatId, requestId),
       decide: async (view, signal) => {
@@ -275,7 +303,7 @@ export async function advanceAgentSeats(
             ? { previousErrorCategory: signal.previousErrorCategory }
             : undefined,
         });
-        options.onAgentPhase?.("validating");
+        options.onAgentPhase?.("validating", seat.seatId);
         if (raw.protocolVersion !== 1) {
           throw new Error("agent_unsupported_protocol");
         }
@@ -293,12 +321,11 @@ export async function advanceAgentSeats(
       attemptIndexBase: 1,
       stateVersion: current.state.stateVersion,
       seatId: seat.seatId,
-      onPhase: options.onAgentPhase,
+      onPhase: (phase) => options.onAgentPhase?.(phase, seat.seatId),
     });
 
-    const previous = current;
     current = commitApplied(
-      previous,
+      current,
       applySeatDecision(
         current,
         seat.seatId,
@@ -307,6 +334,7 @@ export async function advanceAgentSeats(
       ),
       options.persistence,
     );
+    options.onMatchAdvanced?.(current);
   }
   throw new Error("agent_advance_exceeded_guard");
 }
@@ -390,7 +418,7 @@ export async function startTwoSeatMatch(options?: {
 export async function submitHumanDecision(
   match: ActiveMatch,
   decision: SeatDecision,
-  options: MatchRuntimeOptions = {},
+  options: MatchRuntimeOptions & { actingSeatId?: string } = {},
 ): Promise<{ ok: true; match: ActiveMatch } | { ok: false; reason: string }> {
   if (decision.protocolVersion !== 1) {
     return { ok: false, reason: "unsupported_protocol" };
@@ -402,10 +430,19 @@ export async function submitHumanDecision(
     return { ok: false, reason: "version_mismatch" };
   }
 
+  const actingSeatId = options.actingSeatId ?? match.humanSeatId;
+  const seat = match.state.seats.find((entry) => entry.seatId === actingSeatId);
+  if (
+    !seat ||
+    (seat.controller !== "local_human" && seat.controller !== "remote_human")
+  ) {
+    return { ok: false, reason: "not_human_seat" };
+  }
+
   const result = applyCommand(
     match.state,
     decisionToCommand(
-      match.humanSeatId,
+      actingSeatId,
       decision.decision,
       decision.stateVersion,
     ),
@@ -427,7 +464,7 @@ export async function submitHumanDecision(
       events: [...match.events, ...result.events],
       decisionRationales: {
         ...match.decisionRationales,
-        [match.humanSeatId]: rationale,
+        [actingSeatId]: rationale,
       },
     },
     options.persistence,

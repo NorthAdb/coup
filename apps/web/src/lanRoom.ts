@@ -1,7 +1,11 @@
+import type { SeatView } from "@coup/protocol";
+
 export type LobbySeat = {
   seatId: string;
-  kind: "local_human" | "open" | "remote_human";
+  kind: "local_human" | "open" | "remote_human" | "local_agent" | "closed";
   displayName: string | null;
+  cli?: string | null;
+  modelId?: string | null;
 };
 
 export type RoomInvite = {
@@ -285,6 +289,83 @@ export async function patchRoomHost(
   return (await response.json()) as RoomInvite;
 }
 
+export type ConfigureSeatPayload =
+  | { kind: "open" }
+  | { kind: "closed" }
+  | {
+      kind: "local_agent";
+      displayName: string;
+      cli: "opencode" | "claude" | "stub";
+      modelId: string | null;
+    };
+
+export async function configureLobbySeat(
+  code: string,
+  seatId: string,
+  payload: ConfigureSeatPayload,
+): Promise<{ seat: LobbySeat; seats: LobbySeat[] }> {
+  await ensureSession();
+  const response = await authedFetch(
+    `/api/rooms/${code}/seats/${seatId}/config`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    throw new Error(body?.error ?? "无法配置座位");
+  }
+  return (await response.json()) as { seat: LobbySeat; seats: LobbySeat[] };
+}
+
+export async function startRoomMatch(code: string): Promise<{
+  view: SeatView;
+  decisionRationales?: Record<string, unknown>;
+  matchId: string;
+  phase: string;
+}> {
+  await ensureSession();
+  const response = await authedFetch(`/api/rooms/${code}/start`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+      hint?: string;
+    } | null;
+    throw new Error(body?.hint ?? body?.error ?? "无法开局");
+  }
+  return (await response.json()) as {
+    view: SeatView;
+    decisionRationales?: Record<string, unknown>;
+    matchId: string;
+    phase: string;
+  };
+}
+
+export function lobbyStartBlockHint(seats: LobbySeat[]): string | null {
+  const open = seats.filter((s) => s.kind === "open");
+  if (open.length > 0) {
+    return "仍有「开放占座」空槽，请占满、改 Agent 或关闭。";
+  }
+  const effective = seats.filter(
+    (s) =>
+      s.kind === "local_human" ||
+      s.kind === "remote_human" ||
+      s.kind === "local_agent",
+  );
+  if (effective.length < 2) return "有效座位至少 2 人。";
+  if (effective.length > 6) return "有效座位至多 6 人。";
+  return null;
+}
+
+export function canStartLobby(seats: LobbySeat[]): boolean {
+  return lobbyStartBlockHint(seats) === null;
+}
+
 export function seatKindLabel(kind: LobbySeat["kind"]): string {
   switch (kind) {
     case "local_human":
@@ -293,5 +374,9 @@ export function seatKindLabel(kind: LobbySeat["kind"]): string {
       return "远程人类";
     case "open":
       return "开放占座";
+    case "local_agent":
+      return "本机 Agent";
+    case "closed":
+      return "关闭";
   }
 }

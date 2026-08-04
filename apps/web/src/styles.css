@@ -180,6 +180,59 @@ button {
   max-width: 36rem;
 }
 
+.host-console,
+.guest-console {
+  display: grid;
+  gap: 0.85rem;
+  max-width: 64rem;
+}
+
+.host-console-grid,
+.guest-console-grid {
+  display: grid;
+  gap: 1.25rem;
+}
+
+@media (min-width: 880px) {
+  .host-console-grid,
+  .guest-console-grid {
+    grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.host-console-invite,
+.guest-console-meta,
+.host-console-seats,
+.guest-console-seats {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.host-console-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.lobby-seat.configurable {
+  grid-template-columns: auto auto 1fr;
+  grid-template-rows: auto auto;
+}
+
+.lobby-seat-config {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.lobby-seat-config select {
+  font: inherit;
+  font-size: 0.8rem;
+  max-width: 11rem;
+}
+
 .code-xl {
   margin: 0.2rem 0;
   font-family: ui-monospace, Consolas, monospace;

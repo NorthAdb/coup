@@ -14,6 +14,17 @@ describe("seatModelLabel", () => {
     );
   });
 
+  it("shows remote human identity without agent CLI labels", () => {
+    assert.equal(
+      seatModelLabel({
+        controller: "remote_human",
+        cli: null,
+        modelId: null,
+      }),
+      "远程人类",
+    );
+  });
+
   it("shows an understandable stub placeholder label", () => {
     assert.equal(
       seatModelLabel({

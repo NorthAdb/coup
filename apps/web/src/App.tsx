@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { LegalDecision, SeatView } from "@coup/protocol";
 import { MatchDesk } from "./MatchDesk";
 import { SetupPage } from "./SetupPage";
+import type { DecisionRationaleView } from "./matchCopy";
 import {
   buildCreateMatchPayload,
   loadSetupDraft,
@@ -16,6 +17,9 @@ type AgentPhase = "idle" | "thinking" | "validating" | "retrying" | "failed";
 
 export function App() {
   const [view, setView] = useState<SeatView | null>(null);
+  const [decisionRationales, setDecisionRationales] = useState<
+    Record<string, DecisionRationaleView>
+  >({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>("idle");
@@ -120,8 +124,10 @@ export function App() {
           const body = (await response.json()) as {
             view: SeatView;
             matchId: string;
+            decisionRationales?: Record<string, DecisionRationaleView>;
           };
           setView(body.view);
+          setDecisionRationales(body.decisionRationales ?? {});
           setResumableMatchId(body.matchId);
           return;
         }
@@ -151,8 +157,10 @@ export function App() {
       const body = (await response.json()) as {
         view: SeatView;
         matchId: string;
+        decisionRationales?: Record<string, DecisionRationaleView>;
       };
       setView(body.view);
+      setDecisionRationales(body.decisionRationales ?? {});
       setResumableMatchId(body.matchId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "无法继续对局");
@@ -201,8 +209,10 @@ export function App() {
       const body = (await response.json()) as {
         view: SeatView;
         resumedFromMatchId: string;
+        decisionRationales?: Record<string, DecisionRationaleView>;
       };
       setView(body.view);
+      setDecisionRationales(body.decisionRationales ?? {});
       setResumableMatchId(body.view.matchId);
       setEventBrowse(null);
       await refreshMatchList();
@@ -237,8 +247,12 @@ export function App() {
         await refreshMatchList();
         throw new Error(body?.hint ?? body?.error ?? "无法创建对局");
       }
-      const body = (await response.json()) as { view: SeatView };
+      const body = (await response.json()) as {
+        view: SeatView;
+        decisionRationales?: Record<string, DecisionRationaleView>;
+      };
       setView(body.view);
+      setDecisionRationales(body.decisionRationales ?? {});
       setResumableMatchId(body.view.matchId);
       setEventBrowse(null);
       await refreshMatchList();
@@ -252,6 +266,7 @@ export function App() {
   function returnToSetup() {
     // Clear client view only; server keeps the in-progress run for resume.
     setView(null);
+    setDecisionRationales({});
     setPendingTarget(null);
     setExchangeSelected([]);
     setError(null);
@@ -296,6 +311,7 @@ export function App() {
         } | null;
         if (body?.aborted && body.matchId) {
           setView(null);
+          setDecisionRationales({});
           setResumableMatchId(null);
           setAgentPhase("failed");
           await refreshMatchList();
@@ -305,8 +321,12 @@ export function App() {
         }
         throw new Error(body?.error ?? "提交失败");
       }
-      const body = (await response.json()) as { view: SeatView };
+      const body = (await response.json()) as {
+        view: SeatView;
+        decisionRationales?: Record<string, DecisionRationaleView>;
+      };
       setView(body.view);
+      setDecisionRationales(body.decisionRationales ?? {});
       setPendingTarget(null);
       setExchangeSelected([]);
       setAgentPhase("idle");
@@ -354,6 +374,7 @@ export function App() {
           agentPhase={agentPhase}
           pendingTarget={pendingTarget}
           exchangeSelected={exchangeSelected}
+          decisionRationales={decisionRationales}
           onSubmitDecision={(decision, label) =>
             void submitDecision(decision, label)
           }

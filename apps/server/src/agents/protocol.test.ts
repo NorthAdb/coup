@@ -35,6 +35,8 @@ function sampleView(overrides?: Partial<SeatView>): SeatView {
           eliminated: false,
           revealedCharacters: [],
           influenceCount: 2,
+          cli: null,
+          modelId: null,
         },
         {
           seatId: "seat-2",
@@ -44,6 +46,8 @@ function sampleView(overrides?: Partial<SeatView>): SeatView {
           eliminated: false,
           revealedCharacters: [],
           influenceCount: 2,
+          cli: "stub",
+          modelId: "stub/placeholder",
         },
       ],
     },
@@ -81,6 +85,25 @@ describe("agent seat protocol helpers", () => {
     assert.deepEqual(decision.decision.decision, view.legalDecisions[1]);
     assert.equal(decision.decision.requestId, "req-1");
     assert.equal(decision.decision.stateVersion, 3);
+  });
+
+  it("passes through an optional decisionRationale sidecar from the choice", () => {
+    const view = sampleView();
+    const parsed = parseLegalDecisionChoice({
+      legalDecisionIndex: 0,
+      decisionRationale: "先拿收入",
+    });
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+    const decision = seatDecisionFromChoice(view, parsed.choice);
+    assert.equal(decision.ok, true);
+    if (!decision.ok) return;
+    assert.equal(decision.decisionRationale, "先拿收入");
+    assert.equal(
+      "decisionRationale" in decision.decision,
+      false,
+      "authoritative SeatDecision must not carry the sidecar field",
+    );
   });
 
   it("rejects an out-of-range legalDecisionIndex", () => {

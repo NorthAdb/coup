@@ -1,4 +1,5 @@
-import type { SeatDecision, SeatView } from "@coup/protocol";
+import type { SeatView } from "@coup/protocol";
+import type { AgentDecideResult } from "./agents/types.js";
 
 export const AGENT_FIRST_ATTEMPT_MS = 30_000;
 export const AGENT_RETRY_ATTEMPT_MS = 15_000;
@@ -20,7 +21,7 @@ export type DecideWithBoundedRetryInput = {
   decide: (
     view: SeatView,
     signal: AgentAttemptSignal,
-  ) => Promise<SeatDecision>;
+  ) => Promise<AgentDecideResult>;
   attemptIndexBase: number;
   stateVersion: number;
   seatId: string;
@@ -161,7 +162,7 @@ async function raceWithDeadline<T>(
  */
 export async function decideWithBoundedRetry(
   input: DecideWithBoundedRetryInput,
-): Promise<SeatDecision> {
+): Promise<AgentDecideResult> {
   const deadlines = input.deadlinesMs ?? [
     AGENT_FIRST_ATTEMPT_MS,
     AGENT_RETRY_ATTEMPT_MS,

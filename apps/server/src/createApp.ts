@@ -51,6 +51,14 @@ export function activeMatchFromRun(run: MatchRunRecord): ActiveMatch {
     displayNames: run.displayNames,
     seatAgents: run.seatAgents,
     seatWorkspaces: {},
+    decisionRationales: {},
+  };
+}
+
+function humanFacingPayload(match: ActiveMatch, requestId?: string) {
+  return {
+    view: toSeatView(match, match.humanSeatId, requestId),
+    decisionRationales: match.decisionRationales,
   };
 }
 
@@ -250,7 +258,7 @@ export async function createApp(options: CreateAppOptions) {
         });
       }
       return reply.send({
-        view: toSeatView(activeMatch, activeMatch.humanSeatId),
+        ...humanFacingPayload(activeMatch),
         resumedFromMatchId: source.matchId,
       });
     },
@@ -311,8 +319,7 @@ export async function createApp(options: CreateAppOptions) {
         matchId: startedId ?? null,
       });
     }
-    const view = toSeatView(activeMatch, activeMatch.humanSeatId);
-    return reply.send({ view });
+    return reply.send(humanFacingPayload(activeMatch));
   });
 
   app.get("/api/matches/current", async (_request, reply) => {
@@ -338,7 +345,7 @@ export async function createApp(options: CreateAppOptions) {
     activeMatch = advanced.match;
 
     return reply.send({
-      view: toSeatView(activeMatch, activeMatch.humanSeatId),
+      ...humanFacingPayload(activeMatch),
       matchId: activeMatch.state.matchId,
     });
   });
@@ -371,9 +378,7 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(409).send({ error: result.reason });
     }
     activeMatch = result.match;
-    return reply.send({
-      view: toSeatView(activeMatch, activeMatch.humanSeatId, body.requestId),
-    });
+    return reply.send(humanFacingPayload(activeMatch, body.requestId));
   });
 
   await app.register(fastifyStatic, {

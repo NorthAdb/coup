@@ -53,7 +53,7 @@ Status: ready-for-agent
 39. As an Agent 座位控制器, I want 只返回结构化 SeatDecision, so that 引擎可以严格校验。
 40. As an Agent 座位控制器, I want 独立会话且禁用外部工具, so that 我无法通过文件或 Shell 作弊。
 41. As an Agent 座位控制器, I want 完整投影历史以便会话重建, so that 丢会话后仍能继续决策。
-42. As a 本地玩家, I want Agent 思考时只看到状态提示而不是思维链, so that 界面干净且不泄私。
+42. As a 本地玩家, I want Agent 思考时只看到阶段状态提示、决策落地后可 hover 查看该座位最近一次决策说明（标明 Agent 原文或模板兜底）, so that 我能理解其选择动机却不接触原始思维链或 transcript。
 43. As a 本地玩家, I want Agent 超时或非法输出时自动有界重试, so that 偶发错误不立刻毁局。
 44. As a 本地玩家, I want 两次都失败时整局技术中止且无胜者, so that 不会伪造规则内淘汰。
 45. As a 本地玩家, I want 从故障前快照继续一局新的恢复运行, so that 修完配置还能接着玩。
@@ -67,6 +67,8 @@ Status: ready-for-agent
 53. As a 开发者, I want 领域核心不依赖 UI 与 CLI, so that 规则可以用确定性测试锁住。
 54. As a 开发者, I want 共享协议包承载命令、事件与 SeatView schema, so that 前后端与适配器契约一致。
 55. As a 安全敏感用户, I want 浏览器永不持有 CLI 或 provider 凭据, so that 恶意网页更难滥用本机 Agent。
+56. As a 本地玩家, I want 左侧座位卡显示各 Agent 的 CLI 与模型可读标签, so that 我能分辨桌上对手实际在跑什么。
+57. As a 本地玩家, I want 任一座位作出公开决策后在座位旁出现约 4 秒的座位呼出且后来者替换前者, so that 我不必紧盯右侧对局记录也能跟上刚刚发生的选择。
 
 ## Implementation Decisions
 
@@ -83,12 +85,15 @@ Status: ready-for-agent
 - 刺杀费用预留与退回规则、国库无硬上限、2 人先手 1 币等边界按已决议执行。
 - 座位控制器抽象为本地人类与 Agent，预留远程人类；Agent 之间不直连，只经引擎编排。
 - 统一版本化 `SeatView` / `SeatDecision` JSON；OpenCode 与 Claude 共用游戏层协议，适配器只处理 CLI 差异。
+- `PublicSeatView` 公开携带座位 CLI 与模型标识（人类座位无模型）；座位卡展示可读标签，不把 raw 路径当主文案。
+- 决策说明为适配器旁路字段：随已校验座位决策挂到该座位本局内存，仅最近一条可供 hover；缺省时用结构化决策模板文案并标明来源；不进领域事件、SQLite 或回放；禁止展示原始思维链 / transcript。见 ADR-0001。
+- 座位呼出由表现层根据已生效公开决策生成：所有座位均可出现，约 4 秒，新呼出替换旧呼出；不替代右侧权威对局记录。
 - OpenCode：伴随服务管理 `serve` 并代理；Claude：伴随服务监管 `claude -p` 的 JSON/stream-json 子进程。全部工具禁用。
 - Agent 决策：首次 30 秒，仅可恢复错误再试 15 秒；不可恢复错误立即技术中止；中止无胜者，可从故障前快照开恢复运行。
 - 原始 Agent 会话对局结束后删除或失效；权威投影事件可留作回放。
-- SQLite 在同一事务中追加事件并更新快照；不存凭据或原始模型 transcript。
+- SQLite 在同一事务中追加事件并更新快照；不存凭据、原始模型 transcript 或决策说明。
 - 开局页：选人数 → 配各 AI 座位 → 自动探测就绪 → 开始；记住上次非敏感配置。
-- 对局 UI：策划桌（左座位、中舞台、右记录、底行动栏、中央响应条、规则介绍）；深色权谋风占位卡；克制亮牌/补牌动效；平衡/快速节奏。
+- 对局 UI：策划桌（左座位、中舞台、右记录、底行动栏、中央响应条、规则介绍）；深色权谋风占位卡；克制亮牌/补牌动效；平衡/快速节奏；座位模型标签、决策说明 hover、座位呼出。
 - 回放验收为事件列表浏览；不做时间轴 scrub 动画回放。
 - 本机自用：复用已安装 CLI 登录态，应用内不配置 API key；对外分发需另案。
 - 不引入 Python、LangGraph、Electron/Tauri、容器或独立数据库服务器。

@@ -52,6 +52,136 @@ describe("stub match runtime", () => {
     assert.equal(view.publicState.seats[0]?.coins, 2);
   });
 
+  it("projects public CLI and model ids onto agent seats (human has none)", async () => {
+    const started = await startMatch({
+      matchId: "match-labels",
+      seed: "labels-seed",
+      seats: [
+        {
+          seatId: "seat-1",
+          controller: "local_human",
+          displayName: "你",
+        },
+        {
+          seatId: "seat-2",
+          controller: "stub_agent",
+          displayName: "灰狐",
+          cli: "opencode",
+          modelId: "openai/gpt-test",
+        },
+        {
+          seatId: "seat-3",
+          controller: "stub_agent",
+          displayName: "白塔",
+          cli: "stub",
+          modelId: "stub/placeholder",
+        },
+      ],
+      agentRuntime: createAgentRuntime({
+        adapters: {
+          opencode: {
+            kind: "opencode",
+            async decide(input) {
+              return {
+                protocolVersion: 1,
+                requestId: input.view.requestId,
+                stateVersion: input.view.stateVersion,
+                decision: input.view.legalDecisions[0]!,
+              };
+            },
+          },
+        },
+      }),
+    });
+    const view = toSeatView(started, started.humanSeatId);
+    assert.deepEqual(
+      {
+        cli: view.publicState.seats[0]?.cli,
+        modelId: view.publicState.seats[0]?.modelId,
+      },
+      { cli: null, modelId: null },
+    );
+    assert.deepEqual(
+      {
+        cli: view.publicState.seats[1]?.cli,
+        modelId: view.publicState.seats[1]?.modelId,
+      },
+      { cli: "opencode", modelId: "openai/gpt-test" },
+    );
+    assert.deepEqual(
+      {
+        cli: view.publicState.seats[2]?.cli,
+        modelId: view.publicState.seats[2]?.modelId,
+      },
+      { cli: "stub", modelId: "stub/placeholder" },
+    );
+  });
+
+  it("keeps the latest decision rationale in match memory only", async () => {
+    const agentRuntime = createAgentRuntime({
+      adapters: {
+        opencode: {
+          kind: "opencode",
+          async decide(input) {
+            return {
+              protocolVersion: 1,
+              requestId: input.view.requestId,
+              stateVersion: input.view.stateVersion,
+              decision: input.view.legalDecisions[0]!,
+              decisionRationale: "先攒点钱",
+            };
+          },
+        },
+      },
+    });
+    const started = await startMatch({
+      matchId: "match-rationale",
+      seed: "rationale-seed",
+      seats: [
+        {
+          seatId: "seat-1",
+          controller: "local_human",
+          displayName: "你",
+        },
+        {
+          seatId: "seat-2",
+          controller: "stub_agent",
+          displayName: "灰狐",
+          cli: "opencode",
+          modelId: "openai/gpt-test",
+        },
+      ],
+      agentRuntime,
+    });
+
+    const afterHuman = await submitHumanDecision(
+      started,
+      {
+        protocolVersion: 1,
+        requestId: "req-human-r1",
+        stateVersion: started.state.stateVersion,
+        decision: { type: "declare_action", action: { type: "income" } },
+      },
+      { agentRuntime },
+    );
+    assert.equal(afterHuman.ok, true);
+    if (!afterHuman.ok) return;
+
+    assert.equal(
+      afterHuman.match.decisionRationales["seat-1"]?.source,
+      "template",
+    );
+    assert.equal(
+      afterHuman.match.decisionRationales["seat-2"]?.text,
+      "先攒点钱",
+    );
+    assert.equal(
+      afterHuman.match.decisionRationales["seat-2"]?.source,
+      "agent",
+    );
+  });
+
+
   it("auto-plays stub income after the human declares income", async () => {
     const started = await startTwoSeatMatch({
       matchId: "match-runtime",

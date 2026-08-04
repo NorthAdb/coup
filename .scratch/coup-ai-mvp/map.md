@@ -37,6 +37,10 @@
 - [持久化、事件回放与快照恢复](issues/20-persistence-replay-resume.md) — SQLite 事务追加事件+快照；事件列表回放；重启恢复未结束对局；技术中止无胜者并可从快照开恢复运行；不落凭据/transcript。
 - [Agent 超时重试与中止节奏](issues/21-agent-timeout-abort.md) — 30s+可恢复再试 15s；新 requestId；迟到丢弃；不可恢复立即 technical_abort；UI 仅有限相位；复用票 20 快照恢复。
 - [策划桌 UI 打磨](issues/22-desk-ui-polish.md) — 左座位/中舞台+响应条/右记录/底行动栏/顶栏规则；克制亮牌与补牌；平衡/快速节奏与 reduced-motion；深色权谋占位卡。
+- [座位卡公开模型标签](issues/23-seat-model-labels.md) — `PublicSeatView` 公开 `cli`/`modelId`；座位卡 `seatModelLabel` 可读展示（Stub 占位不空白）。
+- [座位呼出](issues/24-seat-callouts.md) — 公开决策旁呼出约 4s、同座替换；减动效仍可读；不改领域事件。
+- [决策说明旁路与 hover](issues/25-decision-rationale-hover.md) — 可选旁路说明本局内存、模板兜底、来源标签；不进权威历史。
+- 座位可读性增强（grilling）— `PublicSeatView` 公开 CLI/模型；决策说明为本局旁路（最近一条、模板兜底、标明来源）；座位呼出播公开决策约 4 秒且替换；改写 US-42 并新增 US-56/57。术语见 [`CONTEXT.md`](../../CONTEXT.md)；取舍见 [`ADR-0001`](../../docs/adr/0001-decision-rationale-sidecar.md)。实现票：[23 座位卡公开模型标签](issues/23-seat-model-labels.md)、[24 座位呼出](issues/24-seat-callouts.md)、[25 决策说明旁路与 hover](issues/25-decision-rationale-hover.md)（均可立即开始）。
 
 ## Not yet specified
 

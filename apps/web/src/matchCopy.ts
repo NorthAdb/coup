@@ -109,8 +109,129 @@ export function eventText(
   }
 }
 
-export function controllerLabel(controller: string): string {
-  return controller === "local_human" ? "本地人类" : "Agent";
+export type SeatModelLabelInput = {
+  controller: string;
+  cli: "opencode" | "claude" | "stub" | null;
+  modelId: string | null;
+};
+
+function shortModelLabel(modelId: string | null): string | null {
+  if (modelId == null || modelId.trim().length === 0) return null;
+  const trimmed = modelId.trim();
+  if (trimmed.endsWith("/placeholder") || trimmed === "placeholder") {
+    return "占位";
+  }
+  const slash = trimmed.lastIndexOf("/");
+  return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+}
+
+function cliDisplayName(cli: "opencode" | "claude" | "stub"): string {
+  switch (cli) {
+    case "opencode":
+      return "OpenCode";
+    case "claude":
+      return "Claude Code";
+    case "stub":
+      return "Stub";
+  }
+}
+
+/** Readable seat-card label for public CLI / model projection. */
+export function seatModelLabel(seat: SeatModelLabelInput): string {
+  if (seat.controller === "local_human") {
+    return "本地人类";
+  }
+  const cli = seat.cli ?? "stub";
+  const model = shortModelLabel(seat.modelId) ?? "占位";
+  return `${cliDisplayName(cli)} · ${model}`;
+}
+
+export type SeatCallout = {
+  seatId: string;
+  text: string;
+};
+
+type CalloutSeat = { seatId: string; displayName: string };
+
+function calloutSeatName(seats: readonly CalloutSeat[], seatId: string): string {
+  return seats.find((seat) => seat.seatId === seatId)?.displayName ?? seatId;
+}
+
+/** Short public-decision callout shown beside a seat (no rationale / private info). */
+export function seatCalloutFromEvent(
+  event: SeatView["projectedHistory"][number],
+  seats: readonly CalloutSeat[],
+): SeatCallout | null {
+  switch (event.type) {
+    case "action_declared": {
+      const action = ACTION_LABEL[event.actionType] ?? event.actionType;
+      const target =
+        event.targetSeatId != null
+          ? ` → ${calloutSeatName(seats, event.targetSeatId)}`
+          : "";
+      return { seatId: event.seatId, text: `声明${action}${target}` };
+    }
+    case "block_declared":
+      return {
+        seatId: event.seatId,
+        text: `阻挡 · ${CHARACTER_LABEL[event.claimedCharacter] ?? event.claimedCharacter}`,
+      };
+    case "response_passed":
+      return {
+        seatId: event.seatId,
+        text: `放弃${event.responseType === "block" ? "阻挡" : "质疑"}`,
+      };
+    case "challenge_declared":
+      return {
+        seatId: event.seatId,
+        text: `质疑 ${calloutSeatName(seats, event.againstSeatId)}`,
+      };
+    case "claim_proven":
+      return {
+        seatId: event.seatId,
+        text: `证明${CHARACTER_LABEL[event.character] ?? event.character}`,
+      };
+    case "claim_conceded":
+      return { seatId: event.seatId, text: "放弃证明" };
+    case "influence_revealed":
+      return {
+        seatId: event.seatId,
+        text: `揭示${CHARACTER_LABEL[event.character] ?? event.character}`,
+      };
+    case "action_resolved":
+      if (event.actionType === "exchange") {
+        return { seatId: event.seatId, text: "完成交换" };
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+/** Later callouts for the same seat replace earlier ones (no queue). */
+export function seatCalloutsFromEvents(
+  events: readonly SeatView["projectedHistory"][number][],
+  seats: readonly CalloutSeat[],
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const event of events) {
+    const callout = seatCalloutFromEvent(event, seats);
+    if (callout) {
+      map[callout.seatId] = callout.text;
+    }
+  }
+  return map;
+}
+
+export type DecisionRationaleView = {
+  text: string;
+  source: "agent" | "template";
+};
+
+export function rationaleSourceLabel(
+  source: DecisionRationaleView["source"],
+): string {
+  return source === "agent" ? "Agent 说明" : "根据决策生成";
 }
 
 export function phaseHint(phase: SeatView["publicState"]["phase"]): string {

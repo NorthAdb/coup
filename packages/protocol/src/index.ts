@@ -19,6 +19,10 @@ export type PublicSeatView = {
   eliminated: boolean;
   revealedCharacters: CharacterId[];
   influenceCount: number;
+  /** Public open-seat CLI; null for local human. */
+  cli: "opencode" | "claude" | "stub" | null;
+  /** Public model id; null for local human or unset stub. */
+  modelId: string | null;
 };
 
 export type PrivateSeatState = {

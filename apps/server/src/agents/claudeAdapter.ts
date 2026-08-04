@@ -62,7 +62,12 @@ export function createClaudeAdapter(
       if (!decision.ok) {
         throw new Error(`claude_decision_${decision.reason}`);
       }
-      return decision.decision;
+      return {
+        ...decision.decision,
+        ...(decision.decisionRationale !== undefined
+          ? { decisionRationale: decision.decisionRationale }
+          : {}),
+      };
     },
   };
 }

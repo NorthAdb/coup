@@ -43,6 +43,17 @@ export function drawHoldMs(
   return pace === "fast" ? 330 : 760;
 }
 
+/** Hold time for seat callouts (ms). Always readable; reduced motion keeps text. */
+export function calloutHoldMs(
+  pace: DeskPace,
+  prefersReducedMotion: boolean,
+): number {
+  if (prefersReducedMotion) {
+    return 2500;
+  }
+  return pace === "fast" ? 2200 : 4000;
+}
+
 export function loadDeskPace(
   storage: Pick<Storage, "getItem"> | null = null,
 ): DeskPace {

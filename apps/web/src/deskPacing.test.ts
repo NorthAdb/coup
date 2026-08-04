@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  calloutHoldMs,
   cssSpeedFactor,
   DESK_PACE_STORAGE_KEY,
   DESK_SPEED,
@@ -31,6 +32,12 @@ describe("desk pacing", () => {
   it("skips reveal and draw holds under reduced motion", () => {
     assert.equal(revealHoldMs("balanced", true), 0);
     assert.equal(drawHoldMs("fast", true), 0);
+  });
+
+  it("keeps seat callouts readable (~4s balanced)", () => {
+    assert.equal(calloutHoldMs("balanced", false), 4000);
+    assert.ok(calloutHoldMs("fast", false) < 4000);
+    assert.ok(calloutHoldMs("balanced", true) >= 1500);
   });
 
   it("toggles pace and persists preference", () => {

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test src/deskPacing.test.ts",
+    "test": "node --experimental-strip-types --test src/deskPacing.test.ts src/matchCopy.test.ts src/seatCallout.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

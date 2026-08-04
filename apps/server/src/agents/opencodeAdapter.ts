@@ -84,7 +84,12 @@ export function createOpenCodeAdapter(
       if (!decision.ok) {
         throw new Error(`opencode_decision_${decision.reason}`);
       }
-      return decision.decision;
+      return {
+        ...decision.decision,
+        ...(decision.decisionRationale !== undefined
+          ? { decisionRationale: decision.decisionRationale }
+          : {}),
+      };
     },
   };
 }

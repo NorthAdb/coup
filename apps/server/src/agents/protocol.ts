@@ -10,12 +10,18 @@ export const LEGAL_DECISION_CHOICE_SCHEMA = {
       minimum: 0,
       description: "0-based index into SeatView.legalDecisions",
     },
+    decisionRationale: {
+      type: "string",
+      description:
+        "Optional one-sentence public rationale for the choice. Do not include hidden cards, chain-of-thought, or tool output.",
+    },
   },
   required: ["legalDecisionIndex"],
 } as const;
 
 export type LegalDecisionChoice = {
   legalDecisionIndex: number;
+  decisionRationale?: string;
 };
 
 /**
@@ -29,7 +35,9 @@ export function buildSeatDecisionUserPrompt(
   const lines = [
     "You are a Coup seat controller.",
     "Choose exactly one entry from legalDecisions by 0-based index.",
+    "You may include an optional short decisionRationale (one sentence).",
     "Do not invent actions, targets, characters, or card ids.",
+    "Do not reveal hidden cards, chain-of-thought, or raw transcripts.",
     "Do not call tools, read files, run shell commands, or use the network.",
     "Return only structured output matching the provided JSON schema.",
   ];
@@ -55,13 +63,29 @@ export function parseLegalDecisionChoice(
   if (typeof index !== "number" || !Number.isInteger(index) || index < 0) {
     return { ok: false, reason: "invalid_legal_decision_index" };
   }
-  return { ok: true, choice: { legalDecisionIndex: index } };
+  const rationale = record.decisionRationale;
+  if (
+    rationale !== undefined &&
+    rationale !== null &&
+    typeof rationale !== "string"
+  ) {
+    return { ok: false, reason: "invalid_decision_rationale" };
+  }
+  return {
+    ok: true,
+    choice: {
+      legalDecisionIndex: index,
+      ...(typeof rationale === "string" ? { decisionRationale: rationale } : {}),
+    },
+  };
 }
 
 export function seatDecisionFromChoice(
   view: SeatView,
   choice: LegalDecisionChoice,
-): { ok: true; decision: SeatDecision } | { ok: false; reason: string } {
+):
+  | { ok: true; decision: SeatDecision; decisionRationale?: string }
+  | { ok: false; reason: string } {
   const legal = view.legalDecisions[choice.legalDecisionIndex];
   if (!legal) {
     return { ok: false, reason: "legal_decision_index_out_of_range" };
@@ -74,6 +98,9 @@ export function seatDecisionFromChoice(
       stateVersion: view.stateVersion,
       decision: legal,
     },
+    ...(choice.decisionRationale !== undefined
+      ? { decisionRationale: choice.decisionRationale }
+      : {}),
   };
 }
 

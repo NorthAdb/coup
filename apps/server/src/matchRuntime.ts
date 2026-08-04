@@ -19,6 +19,10 @@ import {
   type AgentDecisionPhase,
 } from "./agentDecision.js";
 import {
+  resolveDecisionRationale,
+  type DecisionRationaleEntry,
+} from "./decisionRationale.js";
+import {
   createAgentRuntime,
   isLegalDecisionListed,
   type AgentRuntime,
@@ -39,6 +43,8 @@ export type ActiveMatch = {
   seatAgents: Record<string, SeatAgentConfig>;
   /** Per-seat isolated cwd for CLI sessions. */
   seatWorkspaces: Record<string, string>;
+  /** In-match-only latest rationale per seat; never persisted. */
+  decisionRationales: Record<string, DecisionRationaleEntry>;
 };
 
 export type MatchPersistence = {
@@ -76,15 +82,21 @@ export function toSeatView(
       currentSeatId: projection.currentSeatId,
       activeSeatId: projection.activeSeatId,
       pendingAction: projection.pendingAction,
-      seats: projection.seats.map((seat) => ({
-        seatId: seat.seatId,
-        controller: seat.controller,
-        displayName: displayNameFor(match, seat.seatId),
-        coins: seat.coins,
-        eliminated: seat.eliminated,
-        revealedCharacters: seat.revealedCharacters,
-        influenceCount: seat.influenceCount,
-      })),
+      seats: projection.seats.map((seat) => {
+        const agent = match.seatAgents[seat.seatId];
+        const isHuman = seat.controller === "local_human";
+        return {
+          seatId: seat.seatId,
+          controller: seat.controller,
+          displayName: displayNameFor(match, seat.seatId),
+          coins: seat.coins,
+          eliminated: seat.eliminated,
+          revealedCharacters: seat.revealedCharacters,
+          influenceCount: seat.influenceCount,
+          cli: isHuman ? null : (agent?.cli ?? "stub"),
+          modelId: isHuman ? null : (agent?.modelId ?? null),
+        };
+      }),
     },
     privateState: {
       hiddenCharacters: projection.hiddenCharacters,
@@ -172,6 +184,7 @@ function applySeatDecision(
   match: ActiveMatch,
   seatId: string,
   decision: LegalDecision,
+  agentRationale?: string | null,
 ): ActiveMatch {
   const result = applyCommand(
     match.state,
@@ -180,10 +193,17 @@ function applySeatDecision(
   if (!result.ok) {
     throw new Error(`agent_illegal_decision`);
   }
+  const rationale = resolveDecisionRationale(decision, agentRationale, {
+    seatNames: match.displayNames,
+  });
   return {
     ...match,
     state: result.state,
     events: [...match.events, ...result.events],
+    decisionRationales: {
+      ...match.decisionRationales,
+      [seatId]: rationale,
+    },
   };
 }
 
@@ -279,7 +299,12 @@ export async function advanceAgentSeats(
     const previous = current;
     current = commitApplied(
       previous,
-      applySeatDecision(current, seat.seatId, seatDecision.decision),
+      applySeatDecision(
+        current,
+        seat.seatId,
+        seatDecision.decision,
+        seatDecision.decisionRationale,
+      ),
       options.persistence,
     );
   }
@@ -343,6 +368,7 @@ export async function startMatch(
     displayNames,
     seatAgents,
     seatWorkspaces: {},
+    decisionRationales: {},
   };
   options?.persistence?.onCreated(match);
   return advanceAgentSeats(match, {
@@ -388,12 +414,21 @@ export async function submitHumanDecision(
     return result;
   }
 
+  const rationale = resolveDecisionRationale(
+    decision.decision,
+    null,
+    { seatNames: match.displayNames },
+  );
   const updated = commitApplied(
     match,
     {
       ...match,
       state: result.state,
       events: [...match.events, ...result.events],
+      decisionRationales: {
+        ...match.decisionRationales,
+        [match.humanSeatId]: rationale,
+      },
     },
     options.persistence,
   );

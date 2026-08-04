@@ -13,9 +13,14 @@ export type AgentDecideInput = {
   abortSignal?: AbortSignal;
 };
 
+/** Adapter result: authoritative SeatDecision plus optional rationale sidecar. */
+export type AgentDecideResult = SeatDecision & {
+  decisionRationale?: string;
+};
+
 export type AgentSeatAdapter = {
   readonly kind: AgentCliKind;
-  decide(input: AgentDecideInput): Promise<SeatDecision>;
+  decide(input: AgentDecideInput): Promise<AgentDecideResult>;
 };
 
 export type CliRunRequest = {

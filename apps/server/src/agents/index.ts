@@ -1,4 +1,13 @@
-export type { AgentCliKind, AgentDecideInput, AgentRuntime, AgentSeatAdapter, CliRunner, CliRunRequest, CliRunResult } from "./types.js";
+export type {
+  AgentCliKind,
+  AgentDecideInput,
+  AgentDecideResult,
+  AgentRuntime,
+  AgentSeatAdapter,
+  CliRunner,
+  CliRunRequest,
+  CliRunResult,
+} from "./types.js";
 export {
   LEGAL_DECISION_CHOICE_SCHEMA,
   buildSeatDecisionUserPrompt,

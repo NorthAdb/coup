@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CharacterId, LegalDecision, SeatView } from "@coup/protocol";
 import {
+  calloutHoldMs,
   cssSpeedFactor,
   drawHoldMs,
   loadDeskPace,
@@ -12,10 +13,13 @@ import {
 import {
   ACTION_LABEL,
   CHARACTER_LABEL,
-  controllerLabel,
   eventText,
   phaseHint,
+  rationaleSourceLabel,
   ROLE_CARD,
+  seatCalloutsFromEvents,
+  seatModelLabel,
+  type DecisionRationaleView,
 } from "./matchCopy";
 import { RulesPanel } from "./RulesPanel";
 
@@ -32,6 +36,7 @@ type MatchDeskProps = {
   agentPhase: AgentPhase;
   pendingTarget: TargetAction | null;
   exchangeSelected: string[];
+  decisionRationales: Record<string, DecisionRationaleView>;
   onSubmitDecision: (decision: LegalDecision, label: string) => void;
   onToggleTarget: (action: TargetAction) => void;
   onToggleExchangeCard: (cardId: string) => void;
@@ -194,6 +199,7 @@ export function MatchDesk({
   agentPhase,
   pendingTarget,
   exchangeSelected,
+  decisionRationales,
   onSubmitDecision,
   onToggleTarget,
   onToggleExchangeCard,
@@ -203,10 +209,12 @@ export function MatchDesk({
   const [pace, setPace] = useState<DeskPace>(() => loadDeskPace());
   const [rulesOpen, setRulesOpen] = useState(false);
   const [overlay, setOverlay] = useState<DeskOverlay | null>(null);
+  const [callouts, setCallouts] = useState<Record<string, string>>({});
   const reducedMotion = usePrefersReducedMotion();
   const seenHistoryRef = useRef(view.projectedHistory.length);
   const matchIdRef = useRef(view.matchId);
   const eventListRef = useRef<HTMLOListElement | null>(null);
+  const calloutTimersRef = useRef<Record<string, number>>({});
 
   const speed = cssSpeedFactor(pace, reducedMotion);
 
@@ -222,6 +230,11 @@ export function MatchDesk({
       matchIdRef.current = view.matchId;
       seenHistoryRef.current = view.projectedHistory.length;
       setOverlay(null);
+      setCallouts({});
+      for (const timer of Object.values(calloutTimersRef.current)) {
+        window.clearTimeout(timer);
+      }
+      calloutTimersRef.current = {};
     }
   }, [view.matchId, view.projectedHistory.length]);
 
@@ -277,11 +290,33 @@ export function MatchDesk({
       );
     }
 
+    const nextCallouts = seatCalloutsFromEvents(
+      fresh,
+      view.publicState.seats,
+    );
+    const hold = calloutHoldMs(pace, reducedMotion);
+    for (const [seatId, text] of Object.entries(nextCallouts)) {
+      const previousTimer = calloutTimersRef.current[seatId];
+      if (previousTimer !== undefined) {
+        window.clearTimeout(previousTimer);
+      }
+      setCallouts((current) => ({ ...current, [seatId]: text }));
+      calloutTimersRef.current[seatId] = window.setTimeout(() => {
+        if (cancelled) return;
+        setCallouts((current) => {
+          if (current[seatId] !== text) return current;
+          const { [seatId]: _removed, ...rest } = current;
+          return rest;
+        });
+        delete calloutTimersRef.current[seatId];
+      }, hold);
+    }
+
     return () => {
       cancelled = true;
       for (const id of timers) window.clearTimeout(id);
     };
-  }, [view.projectedHistory, pace, reducedMotion]);
+  }, [view.projectedHistory, view.publicState.seats, pace, reducedMotion]);
 
   useEffect(() => {
     const list = eventListRef.current;
@@ -340,6 +375,12 @@ export function MatchDesk({
   const localSeat = view.publicState.seats.find(
     (seat) => seat.seatId === view.seatId,
   );
+  const thinkingSeatId =
+    agentPhase === "thinking" ||
+    agentPhase === "validating" ||
+    agentPhase === "retrying"
+      ? view.publicState.activeSeatId
+      : null;
 
   function cyclePace() {
     const next = toggleDeskPace(pace);
@@ -394,6 +435,10 @@ export function MatchDesk({
               0,
               seat.influenceCount - seat.revealedCharacters.length,
             );
+            const rationale =
+              thinkingSeatId === seat.seatId
+                ? undefined
+                : decisionRationales[seat.seatId];
             return (
               <article
                 key={seat.seatId}
@@ -403,6 +448,7 @@ export function MatchDesk({
                   isActive ? "active" : "",
                   targetable ? "targetable" : "",
                   seat.eliminated ? "eliminated" : "",
+                  rationale ? "has-rationale" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
@@ -411,6 +457,19 @@ export function MatchDesk({
                   <span className="seat-name">{seat.displayName}</span>
                   <span className="coin">{seat.coins}</span>
                 </div>
+                {callouts[seat.seatId] ? (
+                  <div className="seat-callout" role="status">
+                    {callouts[seat.seatId]}
+                  </div>
+                ) : null}
+                {rationale ? (
+                  <div className="seat-rationale-panel">
+                    <span className="seat-rationale-source">
+                      {rationaleSourceLabel(rationale.source)}
+                    </span>
+                    <span className="seat-rationale-text">{rationale.text}</span>
+                  </div>
+                ) : null}
                 <div className="mini-cards" aria-hidden="true">
                   {Array.from({ length: hiddenCount }, (_, index) => (
                     <span key={`h-${index}`} className="mini-card" />
@@ -425,7 +484,7 @@ export function MatchDesk({
                 </div>
                 <div className="seat-meta">
                   <span className="model-name">
-                    {controllerLabel(seat.controller)}
+                    {seatModelLabel(seat)}
                     {seat.seatId === view.seatId ? " · 你" : ""}
                   </span>
                   <span className="seat-status">

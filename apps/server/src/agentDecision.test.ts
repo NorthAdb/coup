@@ -38,6 +38,8 @@ function baseView(overrides: Partial<SeatView> = {}): SeatView {
           eliminated: false,
           revealedCharacters: [],
           influenceCount: 2,
+          cli: null,
+          modelId: null,
         },
         {
           seatId: "seat-2",
@@ -47,6 +49,8 @@ function baseView(overrides: Partial<SeatView> = {}): SeatView {
           eliminated: false,
           revealedCharacters: [],
           influenceCount: 2,
+          cli: "stub",
+          modelId: null,
         },
       ],
     },

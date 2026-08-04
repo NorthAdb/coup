@@ -42,8 +42,10 @@ import {
   createRoomRegistry,
   publicSeats,
   roomInvitePayload,
+  type RoomRecord,
   type RoomRegistry,
 } from "./roomRegistry.js";
+import { openRoomStore, type RoomStore } from "./roomStore.js";
 import {
   CSRF_HEADER,
   SEAT_COOKIE,
@@ -63,6 +65,8 @@ import {
 } from "./seatPresenceTracker.js";
 
 export type BindMode = "local" | "host";
+
+export type RoomRecoveryStatus = "none" | "restored" | "failed";
 
 export type HostingState = {
   bindMode: BindMode;
@@ -92,6 +96,8 @@ export type CreateAppOptions = {
   /** Injectable clock for absence timers (tests). */
   now?: () => number;
   presence?: SeatPresenceTracker;
+  /** LAN room persistence (defaults to same dbPath as MatchStore). */
+  roomStore?: RoomStore;
 };
 
 function defaultDbPath() {
@@ -196,8 +202,9 @@ function abortReasonFrom(error: unknown): string {
 
 export async function createApp(options: CreateAppOptions) {
   const app = Fastify({ logger: false });
-  const store =
-    options.store ?? openMatchStore(options.dbPath ?? defaultDbPath());
+  const dbPath = options.dbPath ?? defaultDbPath();
+  const store = options.store ?? openMatchStore(dbPath);
+  const roomStore = options.roomStore ?? openRoomStore(dbPath);
   const persistence = persistenceForStore(store);
   const agentRuntime = options.agentRuntime ?? createAgentRuntime();
   const runProbe =
@@ -207,6 +214,9 @@ export async function createApp(options: CreateAppOptions) {
   const sessions = options.sessions ?? createSessionStore();
   const listIfaces = options.listNetworkInterfaces ?? networkInterfaces;
   let selectedLanHost: string | null = null;
+  let recoveryStatus: RoomRecoveryStatus = "none";
+  let recoveryReason: string | null = null;
+  let failedRecoveryRoom: RoomRecord | null = null;
 
   function currentAllowedOrigins(): string[] {
     const state = options.hosting?.getState();
@@ -296,10 +306,7 @@ export async function createApp(options: CreateAppOptions) {
     return session;
   }
 
-  const resumable = store.findResumableRun();
-  let activeMatch: ActiveMatch | null = resumable
-    ? activeMatchFromRun(resumable)
-    : null;
+  let activeMatch: ActiveMatch | null = null;
   let activeRoomCode: string | null = null;
   let agentPhase: AgentDecisionPhase | "idle" = "idle";
   let agentSeatId: string | null = null;
@@ -309,6 +316,16 @@ export async function createApp(options: CreateAppOptions) {
 
   function tickPresence() {
     presence.tick(now());
+  }
+
+  function persistActiveRoom() {
+    const codes = rooms.listCodes();
+    if (codes.length === 0) {
+      roomStore.clearActiveRoom();
+      return;
+    }
+    const room = rooms.getByCode(codes[0]!);
+    if (room) roomStore.saveActiveRoom(room);
   }
 
   function trackRemoteSeatsForMatch() {
@@ -321,6 +338,58 @@ export async function createApp(options: CreateAppOptions) {
         // Treat match start as an initial heartbeat so silence starts the lease.
         presence.noteHeartbeat(seat.seatId, t);
       }
+    }
+  }
+
+  function trackRemoteSeatsAfterAuthorityRestore() {
+    presence.clear();
+    if (!activeMatch || !activeRoomCode) return;
+    const seatIds: string[] = [];
+    for (const seat of activeMatch.state.seats) {
+      if (seat.controller === "remote_human" && !seat.eliminated) {
+        seatIds.push(seat.seatId);
+      }
+    }
+    // Fresh 15s grace — authority downtime is not counted against soft timeout.
+    presence.grantRecoveryGrace(seatIds, now());
+  }
+
+  {
+    const loaded = roomStore.loadActiveRoom();
+    if (!loaded.ok) {
+      recoveryStatus = "failed";
+      recoveryReason = loaded.reason;
+      failedRecoveryRoom = null;
+    } else if (loaded.room) {
+      const room = loaded.room;
+      if (room.phase === "match") {
+        if (!room.matchId) {
+          recoveryStatus = "failed";
+          recoveryReason = "match_missing";
+          failedRecoveryRoom = room;
+        } else {
+          const run = store.getRun(room.matchId);
+          if (!run || run.runStatus !== "in_progress") {
+            recoveryStatus = "failed";
+            recoveryReason = "match_not_active";
+            failedRecoveryRoom = room;
+          } else {
+            rooms.restore(room);
+            activeRoomCode = room.code;
+            activeMatch = activeMatchFromRun(run);
+            recoveryStatus = "restored";
+            trackRemoteSeatsAfterAuthorityRestore();
+          }
+        }
+      } else {
+        rooms.restore(room);
+        activeRoomCode = room.code;
+        recoveryStatus = "restored";
+      }
+    } else {
+      // No LAN room — keep MVP local resumable-run behavior.
+      const resumable = store.findResumableRun();
+      activeMatch = resumable ? activeMatchFromRun(resumable) : null;
     }
   }
 
@@ -361,6 +430,7 @@ export async function createApp(options: CreateAppOptions) {
         rooms.revokeSeatCredential(code, seat.seatId);
       }
     }
+    persistActiveRoom();
   }
 
   function resolveMatchSeatId(
@@ -467,6 +537,7 @@ export async function createApp(options: CreateAppOptions) {
 
   app.addHook("onClose", async () => {
     store.close();
+    roomStore.close();
   });
 
   app.get("/api/capabilities", async (_request, reply) => {
@@ -549,10 +620,94 @@ export async function createApp(options: CreateAppOptions) {
     return reply.send(payload);
   });
 
+  app.get("/api/room-recovery", async (_request, reply) => {
+    if (recoveryStatus === "failed") {
+      return reply.send({
+        status: "failed",
+        reason: recoveryReason,
+        message: "无法恢复上一房间",
+        room: failedRecoveryRoom
+          ? {
+              code: failedRecoveryRoom.code,
+              phase: failedRecoveryRoom.phase,
+              matchId: failedRecoveryRoom.matchId,
+              seats: publicSeats(failedRecoveryRoom),
+            }
+          : null,
+      });
+    }
+    if (recoveryStatus === "restored" && activeRoomCode) {
+      const room = rooms.getByCode(activeRoomCode);
+      if (room) {
+        return reply.send({
+          status: "restored",
+          reason: null,
+          message: null,
+          room: {
+            code: room.code,
+            phase: room.phase,
+            matchId: room.matchId,
+            seats: publicSeats(room),
+          },
+        });
+      }
+    }
+    return reply.send({
+      status: "none",
+      reason: null,
+      message: null,
+      room: null,
+    });
+  });
+
+  app.post("/api/room-recovery/abandon", async (request, reply) => {
+    if (!requireSession(request, reply)) return;
+    if (recoveryStatus !== "failed" && recoveryStatus !== "restored") {
+      return reply.code(409).send({ error: "no_recovery_to_abandon" });
+    }
+
+    // Prefer the room-linked matchId. Corrupt payloads have no parseable link;
+    // then only fall back to the single in-progress run (LAN is one-room/one-match).
+    const matchId =
+      failedRecoveryRoom?.matchId ??
+      (activeRoomCode ? rooms.getByCode(activeRoomCode)?.matchId : null) ??
+      (recoveryReason === "corrupt"
+        ? (store.findResumableRun()?.matchId ?? null)
+        : null);
+    if (matchId) {
+      const run = store.getRun(matchId);
+      if (run && run.runStatus === "in_progress") {
+        store.technicalAbort(matchId, "host_restart_abandoned");
+      }
+    }
+
+    for (const code of rooms.listCodes()) {
+      rooms.dissolve(code);
+    }
+    roomStore.clearActiveRoom();
+    failedRecoveryRoom = null;
+    recoveryStatus = "none";
+    recoveryReason = null;
+    activeRoomCode = null;
+    activeMatch = null;
+    presence.clear();
+
+    return reply.send({ status: "none", abandoned: true });
+  });
+
   app.post("/api/rooms", async (request, reply) => {
     if (!requireSession(request, reply)) return;
     if (!options.hosting) {
       return reply.code(500).send({ error: "hosting_unavailable" });
+    }
+    if (recoveryStatus === "failed" || recoveryStatus === "restored") {
+      return reply.code(409).send({
+        error: "recovery_pending_abandon",
+        message:
+          recoveryStatus === "failed"
+            ? "无法恢复上一房间：须先放弃并作废旧房后才能创建新房"
+            : "已恢复上一房间：须先放弃并作废旧房后才能创建新房",
+      });
     }
     const hostState = options.hosting.getState();
     if (hostState.bindMode !== "host") {
@@ -577,6 +732,11 @@ export async function createApp(options: CreateAppOptions) {
     if (hostSeat) {
       hostSeat.credentialHash = issued.hash;
     }
+    activeRoomCode = room.code;
+    recoveryStatus = "none";
+    recoveryReason = null;
+    failedRecoveryRoom = null;
+    persistActiveRoom();
     appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
 
     const payload = roomInvitePayload({
@@ -620,6 +780,7 @@ export async function createApp(options: CreateAppOptions) {
       }
       return reply.code(409).send({ error: "seat_not_open" });
     }
+    persistActiveRoom();
     appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
     return reply.send({
       seat: {
@@ -673,6 +834,7 @@ export async function createApp(options: CreateAppOptions) {
       }
       return reply.code(409).send({ error: "seat_not_human" });
     }
+    persistActiveRoom();
     return reply.send({
       seat: {
         seatId: result.seat.seatId,
@@ -771,6 +933,7 @@ export async function createApp(options: CreateAppOptions) {
       }
       return reply.code(409).send({ error: "seat_not_configurable" });
     }
+    persistActiveRoom();
     return reply.send({
       seat: {
         seatId: result.seat.seatId,
@@ -863,6 +1026,7 @@ export async function createApp(options: CreateAppOptions) {
         return reply.code(409).send({ error: begun.reason });
       }
       activeRoomCode = room.code;
+      persistActiveRoom();
       trackRemoteSeatsForMatch();
 
       return reply.send({
@@ -966,6 +1130,7 @@ export async function createApp(options: CreateAppOptions) {
       if (!rotated.ok) {
         return reply.code(409).send({ error: rotated.reason });
       }
+      persistActiveRoom();
       appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
       presence.resume(holder.seatId);
       presence.noteHeartbeat(holder.seatId, now());
@@ -1045,6 +1210,7 @@ export async function createApp(options: CreateAppOptions) {
       if (!swapped.ok) {
         return reply.code(409).send({ error: swapped.reason });
       }
+      persistActiveRoom();
       const seats = activeMatch.state.seats.map((seat) =>
         seat.seatId === seatId
           ? { ...seat, controller: "stub_agent" as const }
@@ -1092,6 +1258,7 @@ export async function createApp(options: CreateAppOptions) {
       store.technicalAbort(matchId, "host_absence_disposition");
       revokeAllRemoteCredentials(room.code);
       rooms.revokeSeatCredential(room.code, seatId);
+      persistActiveRoom();
       presence.clear();
       activeMatch = null;
       return reply.send({
@@ -1117,6 +1284,7 @@ export async function createApp(options: CreateAppOptions) {
         result.events,
       );
       rooms.revokeSeatCredential(room.code, seatId);
+      persistActiveRoom();
       presence.clearSeat(seatId);
       if (activeMatch.state.status === "in_progress") {
         try {
@@ -1353,10 +1521,13 @@ export async function createApp(options: CreateAppOptions) {
   });
 
   app.get("/api/matches/current", async (request, reply) => {
-    if (!activeMatch) {
-      const again = store.findResumableRun();
-      if (again) {
-        activeMatch = activeMatchFromRun(again);
+    if (!activeMatch && recoveryStatus !== "failed") {
+      // MVP local resume only — never silently revive a LAN run while recovery failed.
+      if (recoveryStatus === "none" && !activeRoomCode) {
+        const again = store.findResumableRun();
+        if (again) {
+          activeMatch = activeMatchFromRun(again);
+        }
       }
     }
     if (!activeMatch) {

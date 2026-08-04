@@ -141,6 +141,7 @@ export async function createRoomOnCurrentOrigin(): Promise<RoomInvite> {
   if (!created.ok) {
     const body = (await created.json().catch(() => null)) as {
       error?: string;
+      message?: string;
     } | null;
     if (body?.error === "no_lan_ipv4") {
       throw new Error("未检测到可用局域网 IPv4，无法生成加入链接");
@@ -148,9 +149,65 @@ export async function createRoomOnCurrentOrigin(): Promise<RoomInvite> {
     if (body?.error === "need_host_mode") {
       throw new Error("仍未进入主机模式，请重试创建房间");
     }
+    if (body?.error === "recovery_pending_abandon") {
+      throw new Error(
+        body.message ?? "无法恢复上一房间：须先放弃并作废旧房后才能创建新房",
+      );
+    }
     throw new Error(body?.error ?? "无法创建房间");
   }
   return (await created.json()) as RoomInvite;
+}
+
+export type RoomRecovery =
+  | {
+      status: "none";
+      reason: null;
+      message: null;
+      room: null;
+    }
+  | {
+      status: "restored";
+      reason: null;
+      message: null;
+      room: {
+        code: string;
+        phase: string;
+        matchId: string | null;
+        seats: LobbySeat[];
+      };
+    }
+  | {
+      status: "failed";
+      reason: string | null;
+      message: string | null;
+      room: {
+        code: string;
+        phase: string;
+        matchId: string | null;
+        seats: LobbySeat[];
+      } | null;
+    };
+
+export async function fetchRoomRecovery(): Promise<RoomRecovery> {
+  const response = await fetch("/api/room-recovery", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("无法读取房间恢复状态");
+  }
+  return (await response.json()) as RoomRecovery;
+}
+
+export async function abandonFailedRoomRecovery(): Promise<void> {
+  await ensureSession();
+  const response = await authedFetch("/api/room-recovery/abandon", {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    throw new Error(body?.error ?? "放弃旧房间失败");
+  }
 }
 
 export function parseManualJoin(input: {
@@ -203,7 +260,7 @@ export async function fetchRoom(
     cache: "no-store",
   });
   if (response.status === 404) {
-    throw new Error("房间不存在或已解散");
+    throw new Error("房间已失效，可离开");
   }
   if (!response.ok) {
     throw new Error("无法查询房间");

@@ -30,6 +30,11 @@ export type SeatPresenceTracker = {
   tick(now: number): void;
   resume(seatId: string): { resumed: boolean; absence: SeatAbsence } | null;
   extendWait(seatId: string, now: number): SeatAbsence | null;
+  /**
+   * After authority restart: put seats into a fresh reconnecting grace.
+   * Downtime is not counted — soft-timeout clocks restart from this grace.
+   */
+  grantRecoveryGrace(seatIds: string[], now: number): void;
   clearSeat(seatId: string): void;
   get(seatId: string): SeatAbsence | null;
   projectAll(now: number): PublicSeatAbsence[];
@@ -102,6 +107,13 @@ export function createSeatPresenceTracker(): SeatPresenceTracker {
       if (!tracked) return null;
       tracked.absence = extendAbsenceWait(tracked.absence, now);
       return tracked.absence;
+    },
+    grantRecoveryGrace(seatIds, now) {
+      for (const seatId of seatIds) {
+        const tracked = ensure(seatId);
+        tracked.lastHeartbeatAt = null;
+        tracked.absence = markChannelDrop(createSeatAbsence(seatId), now);
+      }
     },
     clearSeat(seatId) {
       seats.delete(seatId);

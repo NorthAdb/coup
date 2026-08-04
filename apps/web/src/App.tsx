@@ -16,12 +16,14 @@ import {
   type MatchSetupDraft,
 } from "./matchSetup";
 import {
+  abandonFailedRoomRecovery,
   claimSeat,
   configureLobbySeat,
   createRoomOnCurrentOrigin,
   enterHostModeAndCreateRoom,
   fetchMySeat,
   fetchRoom,
+  fetchRoomRecovery,
   patchRoomHost,
   postRoomHeartbeat,
   postSeatDisposition,
@@ -79,6 +81,8 @@ export function App() {
   );
   const [probing, setProbing] = useState(false);
   const [resumableMatchId, setResumableMatchId] = useState<string | null>(null);
+  const [recoveryFailed, setRecoveryFailed] = useState(false);
+  const [hostUnreachable, setHostUnreachable] = useState(false);
   const [matches, setMatches] = useState<
     Array<{
       matchId: string;
@@ -168,6 +172,83 @@ export function App() {
 
   useEffect(() => {
     void (async () => {
+      try {
+        const recovery = await fetchRoomRecovery();
+        if (recovery.status === "failed") {
+          setRecoveryFailed(true);
+          setError(recovery.message ?? "无法恢复上一房间");
+          setScreen("home");
+          return;
+        }
+        if (recovery.status === "restored" && recovery.room) {
+          const found = await fetchRoom(
+            window.location.origin,
+            recovery.room.code,
+          );
+          setRoom(found);
+          setLobbySeats(found.seats ?? recovery.room.seats);
+          setRecoveryFailed(false);
+          const me = await fetchMySeat(
+            window.location.origin,
+            recovery.room.code,
+          );
+          setMySeatId(me.seat?.seatId ?? null);
+          if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
+
+          const enterMatchIfPossible = async () => {
+            if (recovery.room.phase !== "match") return false;
+            const response = await fetch("/api/matches/current", {
+              credentials: "include",
+              cache: "no-store",
+            });
+            if (!response.ok) return false;
+            const body = (await response.json()) as {
+              view: SeatView;
+              matchId: string;
+              decisionRationales?: Record<string, DecisionRationaleView>;
+            };
+            setView(body.view);
+            setDecisionRationales(body.decisionRationales ?? {});
+            setResumableMatchId(body.matchId);
+            return true;
+          };
+
+          // Seat cookie distinguishes host vs guest on the shared LAN Origin.
+          if (me.seat?.kind === "remote_human") {
+            setGuestOrigin(window.location.origin);
+            setHostUnreachable(false);
+            if (await enterMatchIfPossible()) return;
+            setScreen("guest-confirm");
+            return;
+          }
+          if (me.seat?.kind === "local_human" && me.seat.seatId === "1") {
+            if (await enterMatchIfPossible()) return;
+            setScreen("host-invite");
+            return;
+          }
+          // Restored room but no seat cookie: do not fall into silent create —
+          // join?code= below can still attach; otherwise host must abandon.
+          const joinParams = new URLSearchParams(window.location.search);
+          const joinCode = joinParams.get("code");
+          if (
+            !(
+              (window.location.pathname === "/join" || joinCode) &&
+              joinCode &&
+              /^\d{4}$/.test(joinCode)
+            )
+          ) {
+            setRecoveryFailed(true);
+            setError(
+              "已恢复上一房间，但本机没有座位凭证。客人请用加入链接回席；主机可放弃旧房后开新房。",
+            );
+            setScreen("home");
+            return;
+          }
+        }
+      } catch {
+        /* recovery probe is best-effort before other entry paths */
+      }
+
       if (sessionStorage.getItem("coup.createRoom") === "1") {
         sessionStorage.removeItem("coup.createRoom");
         setBusy(true);
@@ -181,7 +262,12 @@ export function App() {
           );
           setScreen("host-invite");
         } catch (err) {
-          setError(err instanceof Error ? err.message : "创建房间失败");
+          const message =
+            err instanceof Error ? err.message : "创建房间失败";
+          setError(message);
+          if (message.includes("无法恢复上一房间")) {
+            setRecoveryFailed(true);
+          }
           setScreen("home");
         } finally {
           setBusy(false);
@@ -200,12 +286,31 @@ export function App() {
           setRoom(found);
           setLobbySeats(found.seats ?? []);
           setGuestOrigin(window.location.origin);
+          setHostUnreachable(false);
           const me = await fetchMySeat(window.location.origin, code);
           setMySeatId(me.seat?.seatId ?? null);
           if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
+          if (found.phase === "match") {
+            const response = await fetch("/api/matches/current", {
+              credentials: "include",
+              cache: "no-store",
+            });
+            if (response.ok) {
+              const body = (await response.json()) as {
+                view: SeatView;
+                matchId: string;
+                decisionRationales?: Record<string, DecisionRationaleView>;
+              };
+              setView(body.view);
+              setDecisionRationales(body.decisionRationales ?? {});
+              setResumableMatchId(body.matchId);
+              return;
+            }
+          }
           setScreen("guest-confirm");
           return;
         } catch {
+          setHostUnreachable(true);
           setScreen("join");
         }
       }
@@ -428,11 +533,30 @@ export function App() {
       setDisplayNameDraft(
         invite.seats?.find((s) => s.seatId === "1")?.displayName ?? "你",
       );
+      setRecoveryFailed(false);
       setScreen("host-invite");
     } catch (err) {
       if (err instanceof Error && err.message === "redirecting") return;
-      setError(err instanceof Error ? err.message : "创建房间失败");
+      const message =
+        err instanceof Error ? err.message : "创建房间失败";
+      setError(message);
+      if (message.includes("无法恢复上一房间")) {
+        setRecoveryFailed(true);
+      }
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function abandonRecovery() {
+    setBusy(true);
+    setError(null);
+    try {
+      await abandonFailedRoomRecovery();
+      setRecoveryFailed(false);
+      await createRoom();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "放弃旧房间失败");
       setBusy(false);
     }
   }
@@ -455,6 +579,7 @@ export function App() {
   async function refreshLobby(origin: string, code: string) {
     try {
       const found = await fetchRoom(origin, code);
+      setHostUnreachable(false);
       setRoom(found);
       setLobbySeats(found.seats ?? []);
       const me = await fetchMySeat(origin, code);
@@ -477,6 +602,9 @@ export function App() {
         }
       }
     } catch {
+      if (screen === "guest-confirm") {
+        setHostUnreachable(true);
+      }
       /* ignore poll errors */
     }
   }
@@ -572,6 +700,50 @@ export function App() {
     }, 1500);
     return () => window.clearInterval(id);
   }, [room, screen, guestOrigin, view]);
+
+  // Guest stuck on join with a code while host process is down: retry same Origin.
+  useEffect(() => {
+    if (screen !== "join" || !hostUnreachable) return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    if (!code || !/^\d{4}$/.test(code)) return;
+    const origin = window.location.origin;
+    const id = window.setInterval(() => {
+      void (async () => {
+        try {
+          const found = await fetchRoom(origin, code);
+          setRoom(found);
+          setLobbySeats(found.seats ?? []);
+          setGuestOrigin(origin);
+          setHostUnreachable(false);
+          const me = await fetchMySeat(origin, code);
+          setMySeatId(me.seat?.seatId ?? null);
+          if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
+          if (found.phase === "match") {
+            const response = await fetch("/api/matches/current", {
+              credentials: "include",
+              cache: "no-store",
+            });
+            if (response.ok) {
+              const body = (await response.json()) as {
+                view: SeatView;
+                matchId: string;
+                decisionRationales?: Record<string, DecisionRationaleView>;
+              };
+              setView(body.view);
+              setDecisionRationales(body.decisionRationales ?? {});
+              setResumableMatchId(body.matchId);
+              return;
+            }
+          }
+          setScreen("guest-confirm");
+        } catch {
+          /* keep waiting */
+        }
+      })();
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [screen, hostUnreachable]);
 
   useEffect(() => {
     if (screen === "host-invite" && !capabilities) {
@@ -764,6 +936,8 @@ export function App() {
       <main className="shell shell-home">
         <HomeEntry
           busy={busy}
+          recoveryFailed={recoveryFailed}
+          onAbandonRecovery={() => void abandonRecovery()}
           onLocal={openLocalSetup}
           onCreateRoom={() => void createRoom()}
           onJoinRoom={() => {
@@ -817,6 +991,11 @@ export function App() {
           <p className="eyebrow">加入房间</p>
           <h1>政变</h1>
         </header>
+        {hostUnreachable ? (
+          <p className="lede">
+            主机暂时不可达，正在按原地址重试。若主机更换了 IP/端口，请改用新的加入链接。
+          </p>
+        ) : null}
         <JoinRoomPage
           busy={busy}
           initialCode={params.get("code") ?? ""}
@@ -831,6 +1010,7 @@ export function App() {
             setRoom(found);
             setLobbySeats(found.seats ?? []);
             setGuestOrigin(origin);
+            setHostUnreachable(false);
             setMySeatId(null);
             setError(null);
             setScreen("guest-confirm");
@@ -854,6 +1034,9 @@ export function App() {
           <p className="eyebrow">加入方</p>
           <h1>政变</h1>
         </header>
+        {hostUnreachable ? (
+          <p className="lede">主机暂时不可达，正在重试原地址…</p>
+        ) : null}
         <GuestRoomConfirm
           room={room}
           origin={guestOrigin}

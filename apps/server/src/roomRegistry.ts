@@ -1,5 +1,6 @@
 /**
- * In-memory room registry for LAN lobby (tickets 10–11 — no SQLite yet).
+ * In-memory room registry for LAN lobby.
+ * Persistence across host restart is handled by RoomStore (ticket 14).
  */
 
 import { allocateRoomCode, buildJoinUrl, isValidRoomCode } from "./roomInvite.js";
@@ -53,6 +54,8 @@ export type ConfigureSeatInput =
 
 export type RoomRegistry = {
   create(): RoomRecord;
+  /** Replace in-memory map with a persisted room (boot recovery). */
+  restore(room: RoomRecord): void;
   getByCode(code: string): RoomRecord | null;
   listCodes(): string[];
   dissolve(code: string): boolean;
@@ -182,6 +185,10 @@ export function createRoomRegistry(): RoomRegistry {
       };
       rooms.set(code, room);
       return room;
+    },
+    restore(room) {
+      rooms.clear();
+      rooms.set(room.code, structuredClone(room));
     },
     getByCode(code) {
       if (!isValidRoomCode(code)) return null;

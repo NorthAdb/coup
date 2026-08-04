@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "npm run build && node dist/main.js",
-    "test": "npm run build && node --test dist/startServer.test.js dist/matchRuntime.test.js dist/matchSetup.test.js dist/matchStore.test.js dist/createApp.test.js dist/capabilityProbe.test.js dist/agentDecision.test.js dist/decisionRationale.test.js dist/agents/protocol.test.js dist/agents/opencodeAdapter.test.js dist/agents/claudeAdapter.test.js dist/agents/cliRunner.test.js"
+    "test": "npm run build && node --test dist/startServer.test.js dist/roomInvite.test.js dist/lanAddresses.test.js dist/roomApi.test.js dist/matchRuntime.test.js dist/matchSetup.test.js dist/matchStore.test.js dist/createApp.test.js dist/capabilityProbe.test.js dist/agentDecision.test.js dist/decisionRationale.test.js dist/agentPresentation.test.js dist/agents/protocol.test.js dist/agents/opencodeAdapter.test.js dist/agents/claudeAdapter.test.js dist/agents/cliRunner.test.js"
   },
   "dependencies": {
     "@coup/domain": "0.0.0",

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { homedir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { SeatDecision } from "@coup/protocol";
@@ -14,6 +14,7 @@ import {
 } from "./capabilityProbe.js";
 import {
   advanceAgentSeats,
+  pendingAgentSeatIds,
   startMatch,
   submitHumanDecision,
   toSeatView,
@@ -27,6 +28,29 @@ import {
   type MatchRunRecord,
   type MatchStore,
 } from "./matchStore.js";
+import {
+  listLanIpv4Candidates,
+  pickDefaultLanIpv4,
+  type NetIfaceMap,
+} from "./lanAddresses.js";
+import {
+  createRoomRegistry,
+  roomInvitePayload,
+  type RoomRegistry,
+} from "./roomRegistry.js";
+
+export type BindMode = "local" | "host";
+
+export type HostingState = {
+  bindMode: BindMode;
+  listenHost: string;
+  port: number;
+};
+
+export type HostingController = {
+  getState(): HostingState;
+  ensureHostMode(): Promise<HostingState & { bindMode: "host" }>;
+};
 
 export type CreateAppOptions = {
   webRoot: string;
@@ -37,6 +61,10 @@ export type CreateAppOptions = {
   dbPath?: string;
   /** Inject an already-open store (tests). */
   store?: MatchStore;
+  /** LAN host bind / rebind control (omit in pure inject tests that stub it). */
+  hosting?: HostingController;
+  listNetworkInterfaces?: () => NetIfaceMap;
+  rooms?: RoomRegistry;
 };
 
 function defaultDbPath() {
@@ -144,19 +172,53 @@ export async function createApp(options: CreateAppOptions) {
   const runProbe =
     options.probe ??
     (() => probeCapabilities({ runner: createProcessCliRunner() }));
+  const rooms = options.rooms ?? createRoomRegistry();
+  const listIfaces = options.listNetworkInterfaces ?? networkInterfaces;
+  let selectedLanHost: string | null = null;
 
   const resumable = store.findResumableRun();
   let activeMatch: ActiveMatch | null = resumable
     ? activeMatchFromRun(resumable)
     : null;
   let agentPhase: AgentDecisionPhase | "idle" = "idle";
+  let agentSeatId: string | null = null;
+  let thinkingSeatIds: string[] = [];
+
+  function lanSnapshot(port: number, code: string) {
+    const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
+    const addresses = candidates.map((c) => c.address);
+    if (selectedLanHost && !addresses.includes(selectedLanHost)) {
+      selectedLanHost = null;
+    }
+    const lanHost =
+      selectedLanHost ?? pickDefaultLanIpv4(candidates);
+    selectedLanHost = lanHost;
+    const room = rooms.getByCode(code);
+    if (!room) return null;
+    return {
+      ...roomInvitePayload({
+        room,
+        lanHost,
+        port,
+        candidates: addresses,
+      }),
+      bindMode: options.hosting?.getState().bindMode ?? "local",
+      lanOrigin: lanHost ? `http://${lanHost}:${port}` : null,
+    };
+  }
 
   function runtimeOptions() {
     return {
       agentRuntime,
       persistence,
-      onAgentPhase: (phase: AgentDecisionPhase) => {
+      onAgentPhase: (phase: AgentDecisionPhase, seatId?: string) => {
         agentPhase = phase;
+        if (seatId !== undefined) {
+          agentSeatId = seatId;
+        }
+      },
+      onMatchAdvanced: (match: ActiveMatch) => {
+        thinkingSeatIds = pendingAgentSeatIds(match);
       },
     };
   }
@@ -168,12 +230,17 @@ export async function createApp(options: CreateAppOptions) {
     | { ok: false; matchId: string; error: string }
   > {
     agentPhase = "thinking";
+    agentSeatId = null;
+    thinkingSeatIds = pendingAgentSeatIds(match);
     try {
       const next = await advanceAgentSeats(match, runtimeOptions());
       agentPhase = "idle";
+      agentSeatId = null;
+      thinkingSeatIds = [];
       return { ok: true, match: next };
     } catch (error) {
       agentPhase = "failed";
+      thinkingSeatIds = [];
       const matchId = match.state.matchId;
       const run = store.getRun(matchId);
       if (run && run.runStatus === "in_progress") {
@@ -196,12 +263,141 @@ export async function createApp(options: CreateAppOptions) {
     return reply.send(report);
   });
 
+  app.get("/api/hosting", async (_request, reply) => {
+    const state = options.hosting?.getState() ?? {
+      bindMode: "local" as const,
+      listenHost: "127.0.0.1",
+      port: 0,
+    };
+    const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
+    return reply.send({
+      ...state,
+      candidates: candidates.map((c) => c.address),
+      selectedHost: selectedLanHost ?? pickDefaultLanIpv4(candidates),
+    });
+  });
+
+  app.post("/api/hosting/enter", async (_request, reply) => {
+    if (!options.hosting) {
+      return reply.code(500).send({ error: "hosting_unavailable" });
+    }
+    const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
+    const addresses = candidates.map((c) => c.address);
+    const current = options.hosting.getState();
+    if (current.bindMode === "host") {
+      return reply.send({
+        status: "ready",
+        ...current,
+        candidates: addresses,
+        selectedHost: selectedLanHost ?? pickDefaultLanIpv4(candidates),
+      });
+    }
+
+    const preferredPort = 8787;
+    // LAN origins first — host should land on LAN Origin, not loopback.
+    const retryOrigins = [
+      ...addresses.map((ip) => `http://${ip}:${preferredPort}`),
+      `http://127.0.0.1:${preferredPort}`,
+    ];
+    // Flush response before rebinding — server.close() waits for in-flight requests.
+    const payload = {
+      status: "rebinding" as const,
+      preferredPort,
+      candidates: addresses,
+      retryOrigins,
+    };
+    void reply.then(
+      () => {
+        queueMicrotask(() => {
+          void options.hosting?.ensureHostMode().catch(() => {
+            /* bind errors surface on next client poll */
+          });
+        });
+      },
+      () => undefined,
+    );
+    return reply.send(payload);
+  });
+
+  app.post("/api/rooms", async (_request, reply) => {
+    if (!options.hosting) {
+      return reply.code(500).send({ error: "hosting_unavailable" });
+    }
+    const hostState = options.hosting.getState();
+    if (hostState.bindMode !== "host") {
+      return reply.code(409).send({ error: "need_host_mode" });
+    }
+
+    const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
+    const addresses = candidates.map((c) => c.address);
+    const lanHost = selectedLanHost ?? pickDefaultLanIpv4(candidates);
+    if (!lanHost) {
+      return reply.code(400).send({ error: "no_lan_ipv4" });
+    }
+    selectedLanHost = lanHost;
+
+    // One active room for now (spec: single room).
+    for (const code of rooms.listCodes()) {
+      rooms.dissolve(code);
+    }
+    const room = rooms.create();
+    const payload = roomInvitePayload({
+      room,
+      lanHost,
+      port: hostState.port,
+      candidates: addresses,
+    });
+    return reply.send({
+      ...payload,
+      bindMode: hostState.bindMode,
+      lanOrigin: `http://${lanHost}:${hostState.port}`,
+    });
+  });
+
+  app.get<{ Params: { code: string } }>(
+    "/api/rooms/:code",
+    async (request, reply) => {
+      const room = rooms.getByCode(request.params.code);
+      if (!room) {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      const state = options.hosting?.getState();
+      const port = state?.port ?? 0;
+      const snap = lanSnapshot(port, room.code);
+      return reply.send(snap);
+    },
+  );
+
+  app.patch<{
+    Params: { code: string };
+    Body: { selectedHost?: string };
+  }>("/api/rooms/:code", async (request, reply) => {
+    const room = rooms.getByCode(request.params.code);
+    if (!room) {
+      return reply.code(404).send({ error: "room_not_found" });
+    }
+    const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
+    const addresses = candidates.map((c) => c.address);
+    const nextHost = request.body?.selectedHost;
+    if (!nextHost || !addresses.includes(nextHost)) {
+      return reply.code(400).send({ error: "invalid_lan_host" });
+    }
+    selectedLanHost = nextHost;
+    const port = options.hosting?.getState().port ?? 0;
+    const snap = lanSnapshot(port, room.code);
+    return reply.send(snap);
+  });
+
   app.get("/api/matches", async (_request, reply) => {
     return reply.send({ matches: store.listRuns() });
   });
 
   app.get("/api/matches/current/agent-phase", async (_request, reply) => {
-    return reply.send({ phase: agentPhase });
+    return reply.send({
+      phase: agentPhase,
+      seatId: agentSeatId,
+      thinkingSeatIds,
+    });
   });
 
   app.get<{ Params: { matchId: string } }>(
@@ -244,11 +440,16 @@ export async function createApp(options: CreateAppOptions) {
       );
       activeMatch = activeMatchFromRun(resumed);
       agentPhase = "thinking";
+      agentSeatId = null;
+      thinkingSeatIds = pendingAgentSeatIds(activeMatch);
       try {
         activeMatch = await advanceAgentSeats(activeMatch, runtimeOptions());
         agentPhase = "idle";
+        agentSeatId = null;
+        thinkingSeatIds = [];
       } catch (error) {
         agentPhase = "failed";
+        thinkingSeatIds = [];
         store.technicalAbort(activeMatch.state.matchId, abortReasonFrom(error));
         activeMatch = null;
         return reply.code(502).send({
@@ -301,13 +502,18 @@ export async function createApp(options: CreateAppOptions) {
 
     try {
       agentPhase = "thinking";
+      agentSeatId = null;
+      thinkingSeatIds = [];
       activeMatch = await startMatch({
         seats: parsed.setup.seats,
         ...runtimeOptions(),
       });
       agentPhase = "idle";
+      agentSeatId = null;
+      thinkingSeatIds = [];
     } catch (error) {
       agentPhase = "failed";
+      thinkingSeatIds = [];
       const startedId = store.findResumableRun()?.matchId;
       if (startedId) {
         store.technicalAbort(startedId, abortReasonFrom(error));
@@ -359,10 +565,15 @@ export async function createApp(options: CreateAppOptions) {
     let result: Awaited<ReturnType<typeof submitHumanDecision>>;
     try {
       agentPhase = "thinking";
+      agentSeatId = null;
+      thinkingSeatIds = [];
       result = await submitHumanDecision(activeMatch, body, runtimeOptions());
       agentPhase = "idle";
+      agentSeatId = null;
+      thinkingSeatIds = [];
     } catch (error) {
       agentPhase = "failed";
+      thinkingSeatIds = [];
       const run = store.getRun(matchId);
       if (run && run.runStatus === "in_progress") {
         store.technicalAbort(matchId, abortReasonFrom(error));
@@ -383,6 +594,13 @@ export async function createApp(options: CreateAppOptions) {
 
   await app.register(fastifyStatic, {
     root: options.webRoot,
+  });
+
+  app.setNotFoundHandler(async (request, reply) => {
+    if (request.method === "GET" && !request.url.startsWith("/api")) {
+      return reply.sendFile("index.html");
+    }
+    return reply.code(404).send({ error: "not_found" });
   });
 
   return app;

@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import type { LegalDecision, SeatView } from "@coup/protocol";
 import { MatchDesk } from "./MatchDesk";
 import { SetupPage } from "./SetupPage";
+import { HomeEntry } from "./HomeEntry";
+import { HostInvitePanel } from "./HostInvitePanel";
+import { JoinRoomPage } from "./JoinRoomPage";
+import { GuestRoomConfirm } from "./GuestRoomConfirm";
 import type { DecisionRationaleView } from "./matchCopy";
 import {
   buildCreateMatchPayload,
@@ -11,10 +15,38 @@ import {
   type CapabilityReport,
   type MatchSetupDraft,
 } from "./matchSetup";
+import {
+  enterHostModeAndCreateRoom,
+  fetchRoom,
+  type RoomInvite,
+} from "./lanRoom";
 
-type AgentPhase = "idle" | "thinking" | "validating" | "retrying" | "failed";
+type AgentPhase =
+  | "idle"
+  | "thinking"
+  | "validating"
+  | "retrying"
+  | "failed";
+
+type Screen =
+  | "home"
+  | "local-setup"
+  | "host-invite"
+  | "join"
+  | "guest-confirm";
+
+function initialScreen(): Screen {
+  const params = new URLSearchParams(window.location.search);
+  if (window.location.pathname === "/join" || params.has("code")) {
+    return "join";
+  }
+  return "home";
+}
 
 export function App() {
+  const [screen, setScreen] = useState<Screen>(() => initialScreen());
+  const [room, setRoom] = useState<RoomInvite | null>(null);
+  const [guestOrigin, setGuestOrigin] = useState(window.location.origin);
   const [view, setView] = useState<SeatView | null>(null);
   const [decisionRationales, setDecisionRationales] = useState<
     Record<string, DecisionRationaleView>
@@ -54,7 +86,9 @@ export function App() {
       try {
         const response = await fetch("/api/matches/current/agent-phase");
         if (!response.ok || cancelled) return;
-        const body = (await response.json()) as { phase?: AgentPhase };
+        const body = (await response.json()) as {
+          phase?: AgentPhase;
+        };
         if (body.phase && !cancelled) {
           setAgentPhase(body.phase);
         }
@@ -113,6 +147,58 @@ export function App() {
 
   useEffect(() => {
     void (async () => {
+      if (sessionStorage.getItem("coup.createRoom") === "1") {
+        sessionStorage.removeItem("coup.createRoom");
+        setBusy(true);
+        try {
+          const created = await fetch("/api/rooms", { method: "POST" });
+          if (!created.ok) {
+            const body = (await created.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            throw new Error(body?.error ?? "无法创建房间");
+          }
+          const invite = (await created.json()) as RoomInvite;
+          setRoom(invite);
+          setScreen("host-invite");
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "创建房间失败");
+          setScreen("home");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      const restoreCode = sessionStorage.getItem("coup.restoreInvite");
+      if (restoreCode) {
+        sessionStorage.removeItem("coup.restoreInvite");
+        try {
+          const found = await fetchRoom(window.location.origin, restoreCode);
+          setRoom(found);
+          setScreen("host-invite");
+        } catch {
+          setScreen("home");
+        }
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("code");
+      if (
+        (window.location.pathname === "/join" || code) &&
+        code &&
+        /^\d{4}$/.test(code)
+      ) {
+        try {
+          const found = await fetchRoom(window.location.origin, code);
+          setRoom(found);
+          setGuestOrigin(window.location.origin);
+          setScreen("guest-confirm");
+          return;
+        } catch {
+          setScreen("join");
+        }
+      }
+
       try {
         const response = await fetch("/api/matches/current");
         if (response.ok) {
@@ -130,8 +216,6 @@ export function App() {
       } catch {
         setResumableMatchId(null);
       }
-      await refreshCapabilities();
-      await refreshMatchList();
     })();
   }, []);
 
@@ -231,8 +315,6 @@ export function App() {
         const body = (await response.json().catch(() => null)) as {
           error?: string;
           hint?: string;
-          aborted?: boolean;
-          matchId?: string | null;
         } | null;
         void refreshCapabilities();
         await refreshMatchList();
@@ -255,10 +337,10 @@ export function App() {
   }
 
   function returnToSetup() {
-    // Clear client view only; server keeps the in-progress run for resume.
     setView(null);
     setDecisionRationales({});
     setError(null);
+    setScreen("local-setup");
     void (async () => {
       try {
         const response = await fetch("/api/matches/current");
@@ -324,6 +406,49 @@ export function App() {
     }
   }
 
+  async function createRoom() {
+    setBusy(true);
+    setError(null);
+    try {
+      const invite = await enterHostModeAndCreateRoom();
+      setRoom(invite);
+      setScreen("host-invite");
+    } catch (err) {
+      if (err instanceof Error && err.message === "redirecting") return;
+      setError(err instanceof Error ? err.message : "创建房间失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function selectLanHost(host: string) {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/rooms/${room.code}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ selectedHost: host }),
+      });
+      if (!response.ok) {
+        throw new Error("无法切换网卡地址");
+      }
+      setRoom((await response.json()) as RoomInvite);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "切换失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openLocalSetup() {
+    setScreen("local-setup");
+    setError(null);
+    void refreshCapabilities();
+    void refreshMatchList();
+  }
+
   if (view) {
     return (
       <>
@@ -342,6 +467,92 @@ export function App() {
     );
   }
 
+  if (screen === "home") {
+    return (
+      <main className="shell shell-home">
+        <HomeEntry
+          busy={busy}
+          onLocal={openLocalSetup}
+          onCreateRoom={() => void createRoom()}
+          onJoinRoom={() => {
+            setError(null);
+            setScreen("join");
+          }}
+        />
+        {error ? <p className="error home-error">{error}</p> : null}
+      </main>
+    );
+  }
+
+  if (screen === "host-invite" && room) {
+    return (
+      <main className="shell">
+        <header className="top">
+          <p className="eyebrow">局域网主机</p>
+          <h1>政变</h1>
+        </header>
+        <HostInvitePanel
+          room={room}
+          busy={busy}
+          onBack={() => setScreen("home")}
+          onSelectHost={(host) => void selectLanHost(host)}
+          onCopy={() => {
+            if (room.joinUrl) {
+              void navigator.clipboard?.writeText(room.joinUrl);
+            }
+          }}
+        />
+        {error ? <p className="error">{error}</p> : null}
+      </main>
+    );
+  }
+
+  if (screen === "join") {
+    const params = new URLSearchParams(window.location.search);
+    return (
+      <main className="shell">
+        <header className="top">
+          <p className="eyebrow">加入房间</p>
+          <h1>政变</h1>
+        </header>
+        <JoinRoomPage
+          busy={busy}
+          initialCode={params.get("code") ?? ""}
+          initialLink={
+            params.get("code")
+              ? `${window.location.origin}/join?code=${params.get("code")}`
+              : ""
+          }
+          onBack={() => setScreen("home")}
+          onError={(message) => setError(message)}
+          onJoined={(found, origin) => {
+            setRoom(found);
+            setGuestOrigin(origin);
+            setError(null);
+            setScreen("guest-confirm");
+          }}
+        />
+        {error ? <p className="error">{error}</p> : null}
+      </main>
+    );
+  }
+
+  if (screen === "guest-confirm" && room) {
+    return (
+      <main className="shell">
+        <header className="top">
+          <p className="eyebrow">加入方</p>
+          <h1>政变</h1>
+        </header>
+        <GuestRoomConfirm
+          room={room}
+          origin={guestOrigin}
+          onBack={() => setScreen("join")}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className="shell">
       <header className="top">
@@ -350,6 +561,13 @@ export function App() {
         <p className="lede">
           配置 2–6 人桌：座位 1 固定为你，其余 Agent 座位选择 CLI 与模型后开局。
         </p>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => setScreen("home")}
+        >
+          ← 返回入口
+        </button>
       </header>
 
       <SetupPage

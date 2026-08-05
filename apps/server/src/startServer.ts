@@ -46,12 +46,55 @@ function isAddrInUse(error: unknown): boolean {
 async function closeListener(app: FastifyInstance): Promise<void> {
   const server = app.server;
   if (!server.listening) return;
+  // Drop idle keep-alive connections so server.close() completes promptly
+  // instead of waiting for the keep-alive timeout (~5s).
+  server.closeIdleConnections?.();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => {
       if (error) reject(error);
       else resolve();
     });
   });
+}
+
+/**
+ * Listen on the underlying Node server directly.
+ * Fastify's app.listen() refuses a second call on the same instance
+ * (FST_ERR_REOPENED_SERVER) once it has listened once, so runtime rebinds
+ * (loopback -> 0.0.0.0 for host mode) must go through the raw server.
+ */
+function rawListen(
+  server: FastifyInstance["server"],
+  host: string,
+  port: number,
+): Promise<{ listenHost: string; port: number }> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.removeListener("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.removeListener("error", onError);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("Server did not bind to a TCP address"));
+        return;
+      }
+      resolve({ listenHost: address.address, port: address.port });
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen({ host, port });
+  });
+}
+
+async function rebindApp(
+  app: FastifyInstance,
+  host: string,
+  port: number,
+): Promise<{ listenHost: string; port: number }> {
+  await closeListener(app);
+  return rawListen(app.server, host, port);
 }
 
 async function listenApp(
@@ -109,33 +152,19 @@ export async function startServer(
       }
       const app = appRef;
       if (!app) throw new Error("hosting_unavailable");
-      await closeListener(app);
-      // Runtime rebind must use the preferred port so clients can rediscover
-      // (no silent ephemeral fallback).
       try {
-        await app.listen({
-          host: ALL_INTERFACES_HOST,
-          port: preferredHostPort,
-        });
+        const bound = await rebindApp(app, ALL_INTERFACES_HOST, preferredHostPort);
+        bindMode = "host";
+        listenHost = bound.listenHost;
+        port = bound.port;
+        return { bindMode: "host", listenHost, port };
       } catch (error) {
-        const bound = await listenApp(app, "local", 0);
+        const bound = await rebindApp(app, LOOPBACK_HOST, 0);
         bindMode = "local";
         listenHost = bound.listenHost;
         port = bound.port;
         throw error;
       }
-      const address = app.server.address();
-      if (!address || typeof address === "string") {
-        const bound = await listenApp(app, "local", 0);
-        bindMode = "local";
-        listenHost = bound.listenHost;
-        port = bound.port;
-        throw new Error("Server did not bind to a TCP address");
-      }
-      bindMode = "host";
-      listenHost = ALL_INTERFACES_HOST;
-      port = address.port;
-      return { bindMode: "host", listenHost, port };
     },
   };
 

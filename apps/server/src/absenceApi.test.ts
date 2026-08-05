@@ -170,6 +170,43 @@ async function startHostGuestMatch(
 }
 
 describe("absence presence projection", () => {
+  it("does not track the local host when an old client calls resume-seat", async () => {
+    let now = 1_000_000;
+    const app = await createApp({
+      webRoot: await tempWebRoot(),
+      dbPath: await tempDbPath(),
+      ...hostAppOptions(),
+      now: () => now,
+    });
+
+    try {
+      const ctx = await startHostGuestMatch(app);
+      const resumed = await app.inject({
+        method: "POST",
+        url: `/api/rooms/${ctx.code}/resume-seat`,
+        headers: {
+          origin: ctx.host.origin,
+          cookie: ctx.hostCookie,
+          "x-csrf-token": ctx.host.csrfToken,
+        },
+      });
+      assert.equal(resumed.statusCode, 200);
+
+      now += HEARTBEAT_LEASE_MS + 1;
+      const presence = await app.inject({
+        method: "GET",
+        url: `/api/rooms/${ctx.code}/presence`,
+        headers: { origin: ctx.host.origin, cookie: ctx.hostCookie },
+      });
+      const body = presence.json() as {
+        absences: Array<{ seatId: string }>;
+      };
+      assert.equal(body.absences.some((absence) => absence.seatId === "1"), false);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("moves reconnecting → absent → timed_out on injected clock after missed heartbeat", async () => {
     let now = 1_000_000;
     const app = await createApp({

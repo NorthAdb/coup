@@ -59,6 +59,24 @@ export function lightBeatHoldMs(
   return pace === "fast" ? 280 : 550;
 }
 
+/** Challenge / pass-challenge linger on the seat bubble (~3s balanced). */
+export function challengeCalloutBeatHoldMs(
+  pace: DeskPace,
+  prefersReducedMotion: boolean,
+): number {
+  if (prefersReducedMotion) return 2500;
+  return pace === "fast" ? 1800 : 3000;
+}
+
+export function isChallengeCalloutEvent(
+  event: SeatView["projectedHistory"][number],
+): boolean {
+  return (
+    event.type === "challenge_declared" ||
+    (event.type === "response_passed" && event.responseType === "challenge")
+  );
+}
+
 type CalloutSeat = { seatId: string; displayName: string };
 
 /** Central-stage "what just happened" copy for a single public event. */

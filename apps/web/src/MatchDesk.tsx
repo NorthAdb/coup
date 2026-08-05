@@ -66,6 +66,7 @@ type MatchDeskProps = {
   decisionRationales: Record<string, DecisionRationaleView>;
   onSubmitDecision: (decision: LegalDecision, label: string) => void;
   onReturnToSetup: () => void;
+  returnLabel?: string;
   absences?: SeatAbsenceView[];
   pausedForAbsenceSeatId?: string | null;
   isHost?: boolean;
@@ -280,6 +281,7 @@ export function MatchDesk({
   decisionRationales,
   onSubmitDecision,
   onReturnToSetup,
+  returnLabel = "返回开局",
   absences = [],
   pausedForAbsenceSeatId = null,
   isHost = false,
@@ -440,12 +442,13 @@ export function MatchDesk({
 
     return () => {
       cancelled = true;
+      if (replayGenRef.current === gen) {
+        setReplaying(false);
+      }
     };
   }, [
-    view.projectedHistory,
-    view.publicState.seats,
-    view.legalDecisions.length,
-    view.publicState.status,
+    view.matchId,
+    view.projectedHistory.length,
     pace,
     reducedMotion,
   ]);
@@ -615,7 +618,7 @@ export function MatchDesk({
             disabled={busy}
             onClick={() => onReturnToSetup()}
           >
-            返回开局
+            {returnLabel}
           </button>
         </div>
       </header>

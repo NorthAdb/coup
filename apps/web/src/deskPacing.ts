@@ -52,7 +52,7 @@ export function calloutHoldMs(
   if (prefersReducedMotion) {
     return 2500;
   }
-  return pace === "fast" ? 2200 : 4000;
+  return pace === "fast" ? 1800 : 3000;
 }
 
 export function loadDeskPace(

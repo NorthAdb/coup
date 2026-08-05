@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { LobbySeat, RoomInvite } from "./lanRoom";
 import { lobbyStartBlockHint } from "./lanRoom";
 import {
@@ -23,8 +24,9 @@ type HostInvitePanelProps = {
   onConfigure: (seatId: string, config: HostSeatConfig) => void;
   onProbe: () => void;
   onStart: () => void;
+  onResumeMatch?: () => void;
   onSelectHost: (host: string) => void;
-  onCopy: () => void;
+  onCopy: () => Promise<boolean>;
   onBack: () => void;
 };
 
@@ -61,12 +63,28 @@ export function HostInvitePanel({
   onConfigure,
   onProbe,
   onStart,
+  onResumeMatch,
   onSelectHost,
   onCopy,
   onBack,
 }: HostInvitePanelProps) {
-  const gate = hostStartBlockHint(seats, capabilities);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
+  const inMatch = room.phase === "match";
+  const gate = inMatch ? null : hostStartBlockHint(seats, capabilities);
   const canStart = gate === null;
+
+  async function handleCopy() {
+    let copied = false;
+    try {
+      copied = await onCopy();
+    } catch {
+      copied = false;
+    }
+    setCopyState(copied ? "copied" : "failed");
+    window.setTimeout(() => setCopyState("idle"), 2200);
+  }
 
   return (
     <section className="panel host-console" aria-label="主机大厅">
@@ -80,10 +98,17 @@ export function HostInvitePanel({
           <p className="code-xl">{room.code}</p>
           {room.joinUrl ? (
             <>
-              <button type="button" disabled={busy} onClick={() => onCopy()}>
-                复制加入链接
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void handleCopy()}
+              >
+                {copyState === "copied" ? "已复制" : "复制加入链接"}
               </button>
               <code className="join-url">{room.joinUrl}</code>
+              {copyState === "failed" ? (
+                <p className="hint">自动复制失败，请手动选择下方链接。</p>
+              ) : null}
             </>
           ) : (
             <p className="hint">无可用局域网地址，无法生成加入链接。</p>
@@ -106,23 +131,37 @@ export function HostInvitePanel({
           ) : null}
 
           <div className="host-console-actions">
-            <button
-              type="button"
-              className="ghost"
-              disabled={busy || probing}
-              onClick={onProbe}
-            >
-              {probing ? "检测中…" : "重新检测 Agent"}
-            </button>
-            <button
-              type="button"
-              disabled={busy || !canStart}
-              onClick={onStart}
-            >
-              开始对局
-            </button>
+            {inMatch ? (
+              <button
+                type="button"
+                disabled={busy || !onResumeMatch}
+                onClick={() => onResumeMatch?.()}
+              >
+                返回对局
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={busy || probing}
+                  onClick={onProbe}
+                >
+                  {probing ? "检测中…" : "重新检测 Agent"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || !canStart}
+                  onClick={onStart}
+                >
+                  开始对局
+                </button>
+              </>
+            )}
           </div>
-          {gate ? (
+          {inMatch ? (
+            <p className="hint ok">对局进行中，座位配置已锁定。</p>
+          ) : gate ? (
             <p className="hint">{gate}</p>
           ) : (
             <p className="hint ok">
@@ -141,7 +180,7 @@ export function HostInvitePanel({
             mySeatId={mySeatId}
             busy={busy}
             capabilities={capabilities}
-            onConfigure={onConfigure}
+            onConfigure={inMatch ? undefined : onConfigure}
             displayNameDraft={displayNameDraft}
             onDisplayNameDraftChange={onDisplayNameDraftChange}
             onRename={onRename}

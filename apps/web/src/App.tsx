@@ -19,6 +19,7 @@ import {
   abandonFailedRoomRecovery,
   claimSeat,
   configureLobbySeat,
+  copyText,
   createRoomOnCurrentOrigin,
   enterHostModeAndCreateRoom,
   fetchMySeat,
@@ -98,6 +99,7 @@ export function App() {
     events: Array<{ seq: number; event: { type: string } }>;
   } | null>(null);
   const [absences, setAbsences] = useState<SeatAbsenceView[]>([]);
+  const [lanRoomViewOnly, setLanRoomViewOnly] = useState(false);
   const [pausedForAbsenceSeatId, setPausedForAbsenceSeatId] = useState<
     string | null
   >(null);
@@ -249,8 +251,15 @@ export function App() {
         /* recovery probe is best-effort before other entry paths */
       }
 
-      if (sessionStorage.getItem("coup.createRoom") === "1") {
-        sessionStorage.removeItem("coup.createRoom");
+      const createRoomParams = new URLSearchParams(window.location.search);
+      if (createRoomParams.get("createRoom") === "1") {
+        createRoomParams.delete("createRoom");
+        const nextQuery = createRoomParams.toString();
+        window.history.replaceState(
+          null,
+          "",
+          `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`,
+        );
         setBusy(true);
         try {
           const invite = await createRoomOnCurrentOrigin();
@@ -456,6 +465,7 @@ export function App() {
     setView(null);
     setDecisionRationales({});
     setError(null);
+    setLanRoomViewOnly(false);
     setScreen("local-setup");
     void (async () => {
       try {
@@ -472,6 +482,48 @@ export function App() {
       await refreshCapabilities();
       await refreshMatchList();
     })();
+  }
+
+  function returnToLanRoom() {
+    setView(null);
+    setDecisionRationales({});
+    setAbsences([]);
+    setPausedForAbsenceSeatId(null);
+    setError(null);
+    setLanRoomViewOnly(true);
+    setScreen(mySeatId === "1" ? "host-invite" : "guest-confirm");
+  }
+
+  async function resumeLanMatch() {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/matches/current", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error("当前对局不可用");
+      }
+      const body = (await response.json()) as {
+        view: SeatView;
+        matchId: string;
+        decisionRationales?: Record<string, DecisionRationaleView>;
+        absences?: SeatAbsenceView[];
+        pausedForAbsenceSeatId?: string | null;
+      };
+      setView(body.view);
+      setDecisionRationales(body.decisionRationales ?? {});
+      setAbsences(body.absences ?? []);
+      setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId ?? null);
+      setResumableMatchId(body.matchId);
+      setLanRoomViewOnly(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "无法返回对局");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submitDecision(decision: LegalDecision, label: string) {
@@ -533,6 +585,7 @@ export function App() {
       setDisplayNameDraft(
         invite.seats?.find((s) => s.seatId === "1")?.displayName ?? "你",
       );
+      setLanRoomViewOnly(false);
       setRecoveryFailed(false);
       setScreen("host-invite");
     } catch (err) {
@@ -584,8 +637,7 @@ export function App() {
       setLobbySeats(found.seats ?? []);
       const me = await fetchMySeat(origin, code);
       setMySeatId((prev) => me.seat?.seatId ?? prev);
-      if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
-      if (found.phase === "match" && !view) {
+      if (found.phase === "match" && !view && !lanRoomViewOnly) {
         const response = await fetch("/api/matches/current", {
           credentials: "include",
           cache: "no-store",
@@ -595,10 +647,10 @@ export function App() {
             view: SeatView;
             matchId: string;
             decisionRationales?: Record<string, DecisionRationaleView>;
-          };
-          setView(body.view);
-          setDecisionRationales(body.decisionRationales ?? {});
-          setResumableMatchId(body.matchId);
+            };
+            setView(body.view);
+            setDecisionRationales(body.decisionRationales ?? {});
+            setResumableMatchId(body.matchId);
         }
       }
     } catch {
@@ -636,6 +688,7 @@ export function App() {
       );
       setResumableMatchId(body.matchId);
       setRoom({ ...room, phase: body.phase });
+      setLanRoomViewOnly(false);
       await refreshMatchList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "无法开局");
@@ -699,7 +752,7 @@ export function App() {
       void refreshLobby(origin, room.code);
     }, 1500);
     return () => window.clearInterval(id);
-  }, [room, screen, guestOrigin, view]);
+  }, [room, screen, guestOrigin, view, lanRoomViewOnly]);
 
   // Guest stuck on join with a code while host process is down: retry same Origin.
   useEffect(() => {
@@ -791,13 +844,15 @@ export function App() {
       }
     };
 
-    void resumeRoomSeat(room.code)
-      .then((result) => {
-        if (!cancelled) setAbsences(result.absences);
-      })
-      .catch(() => {
-        /* ignore */
-      });
+    if (mySeatId !== "1") {
+      void resumeRoomSeat(room.code)
+        .then((result) => {
+          if (!cancelled) setAbsences(result.absences);
+        })
+        .catch(() => {
+          /* ignore */
+        });
+    }
 
     void refreshMatch();
     void beat();
@@ -809,6 +864,36 @@ export function App() {
       window.clearInterval(beatId);
     };
   }, [view?.matchId, room?.code, room?.phase, mySeatId]);
+
+  // A remote human who has returned to the room view still needs a lease
+  // heartbeat while the match continues in the authority.
+  useEffect(() => {
+    if (
+      !lanRoomViewOnly ||
+      view ||
+      !room ||
+      room.phase !== "match" ||
+      mySeatId === null ||
+      mySeatId === "1"
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const beat = async () => {
+      try {
+        const result = await postRoomHeartbeat(room.code);
+        if (!cancelled) setAbsences(result.absences);
+      } catch {
+        /* the room view can continue while the host is briefly unreachable */
+      }
+    };
+    void beat();
+    const id = window.setInterval(() => void beat(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [lanRoomViewOnly, view, room?.code, room?.phase, mySeatId]);
 
   async function handleAbsenceDisposition(
     seatId: string,
@@ -900,7 +985,8 @@ export function App() {
           onSubmitDecision={(decision, label) =>
             void submitDecision(decision, label)
           }
-          onReturnToSetup={returnToSetup}
+          returnLabel={lanMatch ? "返回房间" : "返回开局"}
+          onReturnToSetup={lanMatch ? returnToLanRoom : returnToSetup}
           absences={absences}
           pausedForAbsenceSeatId={pausedForAbsenceSeatId}
           isHost={lanMatch && mySeatId === "1"}
@@ -970,13 +1056,12 @@ export function App() {
           onConfigure={(seatId, config) => void handleConfigure(seatId, config)}
           onProbe={() => void refreshCapabilities()}
           onStart={() => void handleStartRoom()}
+          onResumeMatch={() => void resumeLanMatch()}
           onBack={() => setScreen("home")}
           onSelectHost={(host) => void selectLanHost(host)}
-          onCopy={() => {
-            if (room.joinUrl) {
-              void navigator.clipboard?.writeText(room.joinUrl);
-            }
-          }}
+          onCopy={() =>
+            room.joinUrl ? copyText(room.joinUrl) : Promise.resolve(false)
+          }
         />
         {error ? <p className="error">{error}</p> : null}
       </main>
@@ -1010,6 +1095,7 @@ export function App() {
             setRoom(found);
             setLobbySeats(found.seats ?? []);
             setGuestOrigin(origin);
+            setLanRoomViewOnly(false);
             setHostUnreachable(false);
             setMySeatId(null);
             setError(null);
@@ -1047,6 +1133,7 @@ export function App() {
           onDisplayNameDraftChange={setDisplayNameDraft}
           onClaim={(seatId) => void handleClaim(seatId)}
           onRename={() => void handleRename(guestOrigin)}
+          onResumeMatch={() => void resumeLanMatch()}
           onBack={() => setScreen("join")}
         />
         {error ? <p className="error">{error}</p> : null}

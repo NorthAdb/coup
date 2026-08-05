@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 import {
   beatWeightForEvent,
   buildResultBeatSteps,
+  challengeCalloutBeatHoldMs,
   heavyBeatHoldMs,
+  isChallengeCalloutEvent,
   lightBeatHoldMs,
   stageBeatFromEvent,
 } from "./resultBeat.ts";
@@ -113,5 +115,33 @@ describe("result beat holds", () => {
     assert.ok(heavyBeatHoldMs("fast", false) < heavyBeatHoldMs("balanced", false));
     assert.ok(heavyBeatHoldMs("balanced", true) >= 1000);
     assert.ok(lightBeatHoldMs("balanced", true) >= 300);
+  });
+
+  it("holds challenge and pass-challenge seat bubbles ~3s on balanced pace", () => {
+    assert.equal(challengeCalloutBeatHoldMs("balanced", false), 3000);
+    assert.equal(
+      isChallengeCalloutEvent({
+        type: "challenge_declared",
+        seatId: "seat-2",
+        againstSeatId: "seat-1",
+      }),
+      true,
+    );
+    assert.equal(
+      isChallengeCalloutEvent({
+        type: "response_passed",
+        seatId: "seat-2",
+        responseType: "challenge",
+      }),
+      true,
+    );
+    assert.equal(
+      isChallengeCalloutEvent({
+        type: "response_passed",
+        seatId: "seat-2",
+        responseType: "block",
+      }),
+      false,
+    );
   });
 });

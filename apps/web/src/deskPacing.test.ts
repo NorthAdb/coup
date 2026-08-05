@@ -36,9 +36,9 @@ describe("desk pacing", () => {
     assert.equal(drawHoldMs("fast", true), 0);
   });
 
-  it("keeps seat callouts readable (~4s balanced)", () => {
-    assert.equal(calloutHoldMs("balanced", false), 4000);
-    assert.ok(calloutHoldMs("fast", false) < 4000);
+  it("keeps seat callouts readable (~3s balanced)", () => {
+    assert.equal(calloutHoldMs("balanced", false), 3000);
+    assert.ok(calloutHoldMs("fast", false) < 3000);
     assert.ok(calloutHoldMs("balanced", true) >= 1500);
   });
 

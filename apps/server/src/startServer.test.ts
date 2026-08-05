@@ -93,4 +93,43 @@ describe("local launch shell", () => {
       await blocker.close();
     }
   });
+
+  it("runtime rebind via /api/hosting/enter keeps the server listening on 0.0.0.0", async () => {
+    const webRoot = await tempWebRoot();
+    const started = await startServer({
+      webRoot,
+      openBrowser: false,
+      dbPath: path.join(webRoot, "coup.sqlite"),
+      preferredPort: 8793,
+    });
+
+    try {
+      assert.equal(started.bindMode, "local");
+      const probe = await fetch(`${started.url}api/hosting`, {
+        headers: { origin: "http://192.168.1.7:8787" },
+      });
+      assert.equal(probe.headers.get("access-control-allow-origin"), "*");
+
+      const response = await fetch(`${started.url}api/hosting/enter`, {
+        method: "POST",
+      });
+      const body = (await response.json()) as { status: string };
+      assert.equal(body.status, "rebinding");
+
+      let address: ReturnType<typeof started.app.server.address> = null;
+      for (let i = 0; i < 60; i++) {
+        address = started.app.server.address();
+        if (address && typeof address !== "string") break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.ok(address && typeof address !== "string");
+      assert.equal(address.address, "0.0.0.0");
+      assert.equal(address.port, 8793);
+
+      const live = await fetch("http://127.0.0.1:8793/api/hosting");
+      assert.equal(live.status, 200);
+    } finally {
+      await started.close();
+    }
+  });
 });

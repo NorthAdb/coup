@@ -37,19 +37,29 @@ describe("seatCalloutFromEvent", () => {
       )?.text,
       "声明刺杀 → 灰狐",
     );
-    assert.deepEqual(
+    const challenge = seatCalloutFromEvent(
+      {
+        type: "challenge_declared",
+        seatId: "seat-2",
+        againstSeatId: "seat-1",
+      },
+      seats,
+    );
+    assert.equal(challenge?.tone, "challenge");
+    assert.deepEqual(challenge?.parts, [
+      { type: "text", text: "质疑 " },
+      { type: "seat", seatId: "seat-1", text: "你" },
+    ]);
+    assert.equal(
       seatCalloutFromEvent(
         {
-          type: "challenge_declared",
+          type: "response_passed",
           seatId: "seat-2",
-          againstSeatId: "seat-1",
+          responseType: "challenge",
         },
         seats,
-      )?.parts,
-      [
-        { type: "text", text: "质疑 " },
-        { type: "seat", seatId: "seat-1", text: "你" },
-      ],
+      )?.tone,
+      "pass",
     );
     assert.equal(
       seatCalloutFromEvent(

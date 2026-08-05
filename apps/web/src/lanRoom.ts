@@ -43,6 +43,41 @@ function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+export function buildCreateRoomUrl(origin: string): string {
+  const url = new URL("/", origin);
+  url.searchParams.set("createRoom", "1");
+  return url.toString();
+}
+
+export async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall back for non-secure LAN origins or denied clipboard permission.
+    }
+  }
+
+  if (!document.body) return false;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  textarea.remove();
+  return copied;
+}
+
 export async function ensureSession(origin = ""): Promise<string> {
   const base = origin || "";
   const response = await fetch(`${base}/api/session`, {
@@ -86,15 +121,20 @@ export async function waitForHostOrigin(
 ): Promise<string> {
   for (let i = 0; i < attempts; i++) {
     for (const origin of retryOrigins) {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 1000);
       try {
         const response = await fetch(`${origin}/api/hosting`, {
           cache: "no-store",
+          signal: controller.signal,
         });
         if (!response.ok) continue;
         const body = (await response.json()) as { bindMode?: string };
         if (body.bindMode === "host") return origin;
       } catch {
         /* try next */
+      } finally {
+        window.clearTimeout(timeoutId);
       }
     }
     await sleep(200);
@@ -112,9 +152,9 @@ export async function enterHostModeAndCreateRoom(): Promise<RoomInvite> {
   if (enterBody.status === "rebinding") {
     const apiBase = await waitForHostOrigin(enterBody.retryOrigins);
     // Create the room only after navigation so the invite is issued once
-    // on the LAN Origin (avoids dissolving a just-created room).
-    sessionStorage.setItem("coup.createRoom", "1");
-    window.location.assign(`${apiBase}/`);
+    // on the LAN Origin (avoids dissolving a just-created room). Query
+    // parameters cross origins; sessionStorage does not.
+    window.location.assign(buildCreateRoomUrl(apiBase));
     throw new Error("redirecting");
   }
 
@@ -126,8 +166,7 @@ export async function enterHostModeAndCreateRoom(): Promise<RoomInvite> {
   if (selected && port > 0) {
     const lanOrigin = `http://${selected}:${port}`;
     if (lanOrigin !== window.location.origin) {
-      sessionStorage.setItem("coup.createRoom", "1");
-      window.location.assign(`${lanOrigin}/`);
+      window.location.assign(buildCreateRoomUrl(lanOrigin));
       throw new Error("redirecting");
     }
   }

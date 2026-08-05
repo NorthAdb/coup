@@ -252,7 +252,7 @@ button {
   margin: 0.6rem 0 0;
   font-size: 1rem;
   font-weight: 600;
-  color: var(--ink);
+  color: #f0e6d4;
 }
 
 .lobby-seat-list {
@@ -289,7 +289,7 @@ button {
 }
 
 .lobby-seat-name {
-  color: var(--ink);
+  color: #f0e6d4;
 }
 
 .lobby-rename-row {

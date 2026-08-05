@@ -315,6 +315,15 @@ export async function createApp(options: CreateAppOptions) {
   const now = () => (options.now ? options.now() : Date.now());
 
   function tickPresence() {
+    if (activeMatch) {
+      for (const seat of activeMatch.state.seats) {
+        if (seat.controller !== "remote_human") {
+          // Presence is a remote-human lease; clean up stale entries from
+          // older clients or a previous controller assignment.
+          presence.clearSeat(seat.seatId);
+        }
+      }
+    }
     presence.tick(now());
   }
 
@@ -565,6 +574,9 @@ export async function createApp(options: CreateAppOptions) {
   });
 
   app.get("/api/hosting", async (_request, reply) => {
+    // This endpoint is a public, read-only probe used while the browser
+    // moves from the loopback origin to the LAN origin.
+    reply.header("access-control-allow-origin", "*");
     const state = options.hosting?.getState() ?? {
       bindMode: "local" as const,
       listenHost: "127.0.0.1",
@@ -596,8 +608,13 @@ export async function createApp(options: CreateAppOptions) {
 
     const preferredPort = 8787;
     // LAN origins first — host should land on LAN Origin, not loopback.
+    // Lead with the RFC1918-ranked default so VPN/TUN adapters (e.g.
+    // 198.18.x.x) don't win the redirect race over the real LAN NIC.
+    const defaultHost = selectedLanHost ?? pickDefaultLanIpv4(candidates);
+    const others = addresses.filter((ip) => ip !== defaultHost);
     const retryOrigins = [
-      ...addresses.map((ip) => `http://${ip}:${preferredPort}`),
+      ...(defaultHost ? [`http://${defaultHost}:${preferredPort}`] : []),
+      ...others.map((ip) => `http://${ip}:${preferredPort}`),
       `http://127.0.0.1:${preferredPort}`,
     ];
     // Flush response before rebinding — server.close() waits for in-flight requests.
@@ -1105,6 +1122,21 @@ export async function createApp(options: CreateAppOptions) {
         (holder.kind !== "remote_human" && holder.kind !== "local_human")
       ) {
         return reply.code(403).send({ error: "seat_credential_required" });
+      }
+      if (holder.kind === "local_human") {
+        // Local human seats have no remote heartbeat lease. Older clients may
+        // still call this endpoint on match entry; keep that call harmless.
+        presence.clearSeat(holder.seatId);
+        tickPresence();
+        return reply.send({
+          resumed: false,
+          seat: {
+            seatId: holder.seatId,
+            kind: holder.kind,
+            displayName: holder.displayName,
+          },
+          absences: presence.projectAll(now()),
+        });
       }
       tickPresence();
       presence.trackSeat(holder.seatId);

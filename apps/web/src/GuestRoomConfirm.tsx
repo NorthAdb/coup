@@ -3,7 +3,6 @@ import { LobbySeatList } from "./LobbySeatList";
 
 type GuestRoomConfirmProps = {
   room: RoomInvite;
-  origin: string;
   seats: LobbySeat[];
   mySeatId: string | null;
   busy: boolean;
@@ -17,7 +16,6 @@ type GuestRoomConfirmProps = {
 
 export function GuestRoomConfirm({
   room,
-  origin,
   seats,
   mySeatId,
   busy,
@@ -39,13 +37,17 @@ export function GuestRoomConfirm({
           <h2>房间 {room.code}</h2>
           <p className="lede">
             {room.phase === "match"
-              ? `已确认主机上存在该房间（${origin}）。`
-              : `已确认主机上存在该房间（${origin}）。选择开放座位占座；开局由主机决定。`}
+              ? "已确认房间存在。"
+              : room.phase === "rematch"
+                ? "已确认房间存在，正处于续局等待。"
+                : "已确认房间存在。选择开放座位占座；开局由主机决定。"}
           </p>
           <p className="hint ok">
             {room.phase === "match"
               ? "对局进行中，座位已锁定。"
-              : "等待主机开局…"}
+              : room.phase === "rematch"
+                ? "等待确认加入新对局…"
+                : "等待主机开局…"}
           </p>
           {room.phase === "match" && onResumeMatch ? (
             <button type="button" disabled={busy} onClick={onResumeMatch}>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { seatModelLabel } from "./matchCopy.ts";
+import { seatModelLabel } from "./matchCopy.js";
 
 describe("seatModelLabel", () => {
   it("shows human identity for local human seats", () => {

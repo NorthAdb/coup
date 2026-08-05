@@ -1,31 +1,23 @@
 import { useEffect, useState } from "react";
 import type { LegalDecision, SeatView } from "@coup/protocol";
-import { MatchDesk } from "./MatchDesk";
-import { SetupPage } from "./SetupPage";
+import { MatchDesk } from "@coup/web-desk";
 import { HomeEntry } from "./HomeEntry";
 import { HostInvitePanel } from "./HostInvitePanel";
 import { JoinRoomPage } from "./JoinRoomPage";
 import { GuestRoomConfirm } from "./GuestRoomConfirm";
-import type { DecisionRationaleView } from "./matchCopy";
-import {
-  buildCreateMatchPayload,
-  loadSetupDraft,
-  reconcileDraftModels,
-  saveSetupDraft,
-  type CapabilityReport,
-  type MatchSetupDraft,
-} from "./matchSetup";
+import { AbsenceDrawer, absenceSeatStatus } from "./AbsenceDrawer";
 import {
   abandonFailedRoomRecovery,
   claimSeat,
   configureLobbySeat,
-  copyText,
+  confirmRoomRematch,
   createRoomOnCurrentOrigin,
+  declineRoomRematch,
   enterHostModeAndCreateRoom,
+  enterRoomRematch,
   fetchMySeat,
   fetchRoom,
   fetchRoomRecovery,
-  patchRoomHost,
   postRoomHeartbeat,
   postSeatDisposition,
   renameSeat,
@@ -36,7 +28,6 @@ import {
   type RoomInvite,
   type SeatAbsenceView,
 } from "./lanRoom";
-import type { HostSeatConfig } from "./LobbySeatList";
 
 type AgentPhase =
   | "idle"
@@ -45,12 +36,7 @@ type AgentPhase =
   | "retrying"
   | "failed";
 
-type Screen =
-  | "home"
-  | "local-setup"
-  | "host-invite"
-  | "join"
-  | "guest-confirm";
+type Screen = "home" | "host-invite" | "join" | "guest-confirm";
 
 function initialScreen(): Screen {
   const params = new URLSearchParams(window.location.search);
@@ -66,111 +52,16 @@ export function App() {
   const [lobbySeats, setLobbySeats] = useState<LobbySeat[]>([]);
   const [mySeatId, setMySeatId] = useState<string | null>(null);
   const [displayNameDraft, setDisplayNameDraft] = useState("客人");
-  const [guestOrigin, setGuestOrigin] = useState(window.location.origin);
   const [view, setView] = useState<SeatView | null>(null);
-  const [decisionRationales, setDecisionRationales] = useState<
-    Record<string, DecisionRationaleView>
-  >({});
+  const [decisionRationales] = useState<Record<string, never>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [agentPhase, setAgentPhase] = useState<AgentPhase>("idle");
-  const [setupDraft, setSetupDraft] = useState<MatchSetupDraft>(() =>
-    loadSetupDraft(),
-  );
-  const [capabilities, setCapabilities] = useState<CapabilityReport | null>(
-    null,
-  );
-  const [probing, setProbing] = useState(false);
-  const [resumableMatchId, setResumableMatchId] = useState<string | null>(null);
-  const [recoveryFailed, setRecoveryFailed] = useState(false);
-  const [hostUnreachable, setHostUnreachable] = useState(false);
-  const [matches, setMatches] = useState<
-    Array<{
-      matchId: string;
-      runStatus: string;
-      winnerSeatId: string | null;
-      resumedFromMatchId: string | null;
-      stateVersion: number;
-    }>
-  >([]);
-  const [eventBrowse, setEventBrowse] = useState<{
-    matchId: string;
-    runStatus: string;
-    events: Array<{ seq: number; event: { type: string } }>;
-  } | null>(null);
   const [absences, setAbsences] = useState<SeatAbsenceView[]>([]);
   const [lanRoomViewOnly, setLanRoomViewOnly] = useState(false);
   const [pausedForAbsenceSeatId, setPausedForAbsenceSeatId] = useState<
     string | null
   >(null);
-
-  useEffect(() => {
-    if (!busy || !view) {
-      return;
-    }
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const response = await fetch("/api/matches/current/agent-phase");
-        if (!response.ok || cancelled) return;
-        const body = (await response.json()) as {
-          phase?: AgentPhase;
-        };
-        if (body.phase && !cancelled) {
-          setAgentPhase(body.phase);
-        }
-      } catch {
-        /* ignore polling errors */
-      }
-    };
-    void tick();
-    const id = window.setInterval(() => void tick(), 400);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [busy, view]);
-
-  async function refreshMatchList() {
-    try {
-      const response = await fetch("/api/matches");
-      if (!response.ok) return;
-      const body = (await response.json()) as {
-        matches: Array<{
-          matchId: string;
-          runStatus: string;
-          winnerSeatId: string | null;
-          resumedFromMatchId: string | null;
-          stateVersion: number;
-        }>;
-      };
-      setMatches(body.matches);
-    } catch {
-      // ignore list failures on setup
-    }
-  }
-
-  async function refreshCapabilities() {
-    setProbing(true);
-    setError(null);
-    try {
-      const response = await fetch("/api/capabilities");
-      if (!response.ok) {
-        throw new Error("能力探测失败");
-      }
-      const body = (await response.json()) as CapabilityReport;
-      setCapabilities(body);
-      setSetupDraft((current) => {
-        const next = reconcileDraftModels(current, body);
-        saveSetupDraft(next);
-        return next;
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "能力探测失败");
-    } finally {
-      setProbing(false);
-    }
-  }
+  const [recoveryFailed, setRecoveryFailed] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -207,18 +98,13 @@ export function App() {
             const body = (await response.json()) as {
               view: SeatView;
               matchId: string;
-              decisionRationales?: Record<string, DecisionRationaleView>;
             };
             setView(body.view);
-            setDecisionRationales(body.decisionRationales ?? {});
-            setResumableMatchId(body.matchId);
             return true;
           };
 
-          // Seat cookie distinguishes host vs guest on the shared LAN Origin.
+          // Seat cookie distinguishes host vs guest on the same Origin.
           if (me.seat?.kind === "remote_human") {
-            setGuestOrigin(window.location.origin);
-            setHostUnreachable(false);
             if (await enterMatchIfPossible()) return;
             setScreen("guest-confirm");
             return;
@@ -228,8 +114,7 @@ export function App() {
             setScreen("host-invite");
             return;
           }
-          // Restored room but no seat cookie: do not fall into silent create —
-          // join?code= below can still attach; otherwise host must abandon.
+          // Restored room but no seat cookie: host must abandon or guest joins by code.
           const joinParams = new URLSearchParams(window.location.search);
           const joinCode = joinParams.get("code");
           if (
@@ -241,7 +126,7 @@ export function App() {
           ) {
             setRecoveryFailed(true);
             setError(
-              "已恢复上一房间，但本机没有座位凭证。客人请用加入链接回席；主机可放弃旧房后开新房。",
+              "已恢复上一房间，但本机没有座位凭证。主机可放弃旧房后开新房，客人请重新输入房间号。",
             );
             setScreen("home");
             return;
@@ -271,8 +156,7 @@ export function App() {
           );
           setScreen("host-invite");
         } catch (err) {
-          const message =
-            err instanceof Error ? err.message : "创建房间失败";
+          const message = err instanceof Error ? err.message : "创建房间失败";
           setError(message);
           if (message.includes("无法恢复上一房间")) {
             setRecoveryFailed(true);
@@ -294,8 +178,6 @@ export function App() {
           const found = await fetchRoom(window.location.origin, code);
           setRoom(found);
           setLobbySeats(found.seats ?? []);
-          setGuestOrigin(window.location.origin);
-          setHostUnreachable(false);
           const me = await fetchMySeat(window.location.origin, code);
           setMySeatId(me.seat?.seatId ?? null);
           if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
@@ -308,271 +190,20 @@ export function App() {
               const body = (await response.json()) as {
                 view: SeatView;
                 matchId: string;
-                decisionRationales?: Record<string, DecisionRationaleView>;
               };
               setView(body.view);
-              setDecisionRationales(body.decisionRationales ?? {});
-              setResumableMatchId(body.matchId);
               return;
             }
           }
           setScreen("guest-confirm");
           return;
-        } catch {
-          setHostUnreachable(true);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "无法查询房间");
           setScreen("join");
         }
       }
-
-      try {
-        const response = await fetch("/api/matches/current");
-        if (response.ok) {
-          const body = (await response.json()) as {
-            view: SeatView;
-            matchId: string;
-            decisionRationales?: Record<string, DecisionRationaleView>;
-          };
-          setView(body.view);
-          setDecisionRationales(body.decisionRationales ?? {});
-          setResumableMatchId(body.matchId);
-          return;
-        }
-        setResumableMatchId(null);
-      } catch {
-        setResumableMatchId(null);
-      }
     })();
   }, []);
-
-  function updateSetupDraft(draft: MatchSetupDraft) {
-    setSetupDraft(draft);
-    saveSetupDraft(draft);
-  }
-
-  async function continueMatch() {
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch("/api/matches/current");
-      if (!response.ok) {
-        setResumableMatchId(null);
-        throw new Error("没有可继续的对局");
-      }
-      const body = (await response.json()) as {
-        view: SeatView;
-        matchId: string;
-        decisionRationales?: Record<string, DecisionRationaleView>;
-      };
-      setView(body.view);
-      setDecisionRationales(body.decisionRationales ?? {});
-      setResumableMatchId(body.matchId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "无法继续对局");
-      await refreshMatchList();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function browseEvents(matchId: string) {
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/matches/${matchId}/events`);
-      if (!response.ok) {
-        throw new Error("无法加载事件列表");
-      }
-      const body = (await response.json()) as {
-        matchId: string;
-        runStatus: string;
-        events: Array<{ seq: number; event: { type: string } }>;
-      };
-      setEventBrowse(body);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "无法加载事件列表");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function resumeMatch(matchId: string) {
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/matches/${matchId}/resume`, {
-        method: "POST",
-      });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-        throw new Error(body?.error ?? "无法从快照恢复");
-      }
-      const body = (await response.json()) as {
-        view: SeatView;
-        resumedFromMatchId: string;
-        decisionRationales?: Record<string, DecisionRationaleView>;
-      };
-      setView(body.view);
-      setDecisionRationales(body.decisionRationales ?? {});
-      setResumableMatchId(body.view.matchId);
-      setEventBrowse(null);
-      await refreshMatchList();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "恢复失败");
-      await refreshMatchList();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function startMatch() {
-    setBusy(true);
-    setError(null);
-    saveSetupDraft(setupDraft);
-    try {
-      const response = await fetch("/api/matches", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildCreateMatchPayload(setupDraft)),
-      });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-          hint?: string;
-        } | null;
-        void refreshCapabilities();
-        await refreshMatchList();
-        throw new Error(body?.hint ?? body?.error ?? "无法创建对局");
-      }
-      const body = (await response.json()) as {
-        view: SeatView;
-        decisionRationales?: Record<string, DecisionRationaleView>;
-      };
-      setView(body.view);
-      setDecisionRationales(body.decisionRationales ?? {});
-      setResumableMatchId(body.view.matchId);
-      setEventBrowse(null);
-      await refreshMatchList();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "创建失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function returnToSetup() {
-    setView(null);
-    setDecisionRationales({});
-    setError(null);
-    setLanRoomViewOnly(false);
-    setScreen("local-setup");
-    void (async () => {
-      try {
-        const response = await fetch("/api/matches/current");
-        if (response.ok) {
-          const body = (await response.json()) as { matchId: string };
-          setResumableMatchId(body.matchId);
-        } else {
-          setResumableMatchId(null);
-        }
-      } catch {
-        setResumableMatchId(null);
-      }
-      await refreshCapabilities();
-      await refreshMatchList();
-    })();
-  }
-
-  function returnToLanRoom() {
-    setView(null);
-    setDecisionRationales({});
-    setAbsences([]);
-    setPausedForAbsenceSeatId(null);
-    setError(null);
-    setLanRoomViewOnly(true);
-    setScreen(mySeatId === "1" ? "host-invite" : "guest-confirm");
-  }
-
-  async function resumeLanMatch() {
-    if (!room) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch("/api/matches/current", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        throw new Error("当前对局不可用");
-      }
-      const body = (await response.json()) as {
-        view: SeatView;
-        matchId: string;
-        decisionRationales?: Record<string, DecisionRationaleView>;
-        absences?: SeatAbsenceView[];
-        pausedForAbsenceSeatId?: string | null;
-      };
-      setView(body.view);
-      setDecisionRationales(body.decisionRationales ?? {});
-      setAbsences(body.absences ?? []);
-      setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId ?? null);
-      setResumableMatchId(body.matchId);
-      setLanRoomViewOnly(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "无法返回对局");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function submitDecision(decision: LegalDecision, label: string) {
-    if (!view) return;
-    setBusy(true);
-    setAgentPhase("thinking");
-    setError(null);
-    try {
-      const response = await fetch("/api/matches/current/decision", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          protocolVersion: 1,
-          requestId: `req-${view.stateVersion}-${label}`,
-          stateVersion: view.stateVersion,
-          decision,
-        }),
-      });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-          aborted?: boolean;
-          matchId?: string;
-        } | null;
-        if (body?.aborted && body.matchId) {
-          setView(null);
-          setDecisionRationales({});
-          setResumableMatchId(null);
-          setAgentPhase("failed");
-          await refreshMatchList();
-          throw new Error(
-            `技术中止（无胜者）：${body.error ?? "agent_failed"}。可在开局页从快照恢复。`,
-          );
-        }
-        throw new Error(body?.error ?? "提交失败");
-      }
-      const body = (await response.json()) as {
-        view: SeatView;
-        decisionRationales?: Record<string, DecisionRationaleView>;
-      };
-      setView(body.view);
-      setDecisionRationales(body.decisionRationales ?? {});
-      setAgentPhase("idle");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "提交失败");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function createRoom() {
     setBusy(true);
@@ -585,13 +216,10 @@ export function App() {
       setDisplayNameDraft(
         invite.seats?.find((s) => s.seatId === "1")?.displayName ?? "你",
       );
-      setLanRoomViewOnly(false);
       setRecoveryFailed(false);
       setScreen("host-invite");
     } catch (err) {
-      if (err instanceof Error && err.message === "redirecting") return;
-      const message =
-        err instanceof Error ? err.message : "创建房间失败";
+      const message = err instanceof Error ? err.message : "创建房间失败";
       setError(message);
       if (message.includes("无法恢复上一房间")) {
         setRecoveryFailed(true);
@@ -614,62 +242,77 @@ export function App() {
     }
   }
 
-  async function selectLanHost(host: string) {
+  function returnToLanRoom() {
+    setView(null);
+    setAbsences([]);
+    setPausedForAbsenceSeatId(null);
+    setError(null);
+    setLanRoomViewOnly(true);
+    setScreen(mySeatId === "1" ? "host-invite" : "guest-confirm");
+  }
+
+  async function resumeLanMatch() {
     if (!room) return;
     setBusy(true);
     setError(null);
     try {
-      const next = await patchRoomHost(room.code, host);
-      setRoom(next);
-      if (next.seats) setLobbySeats(next.seats);
+      const response = await fetch("/api/matches/current", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error("当前对局不可用");
+      }
+      const body = (await response.json()) as {
+        view: SeatView;
+        matchId: string;
+        absences?: SeatAbsenceView[];
+        pausedForAbsenceSeatId?: string | null;
+      };
+      setView(body.view);
+      setAbsences(body.absences ?? []);
+      setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId ?? null);
+      setLanRoomViewOnly(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "切换失败");
+      setError(err instanceof Error ? err.message : "无法返回对局");
     } finally {
       setBusy(false);
     }
   }
 
-  async function refreshLobby(origin: string, code: string) {
-    try {
-      const found = await fetchRoom(origin, code);
-      setHostUnreachable(false);
-      setRoom(found);
-      setLobbySeats(found.seats ?? []);
-      const me = await fetchMySeat(origin, code);
-      setMySeatId((prev) => me.seat?.seatId ?? prev);
-      if (found.phase === "match" && !view && !lanRoomViewOnly) {
-        const response = await fetch("/api/matches/current", {
-          credentials: "include",
-          cache: "no-store",
-        });
-        if (response.ok) {
-          const body = (await response.json()) as {
-            view: SeatView;
-            matchId: string;
-            decisionRationales?: Record<string, DecisionRationaleView>;
-            };
-            setView(body.view);
-            setDecisionRationales(body.decisionRationales ?? {});
-            setResumableMatchId(body.matchId);
-        }
-      }
-    } catch {
-      if (screen === "guest-confirm") {
-        setHostUnreachable(true);
-      }
-      /* ignore poll errors */
-    }
-  }
-
-  async function handleConfigure(seatId: string, config: HostSeatConfig) {
-    if (!room) return;
+  async function submitDecision(decision: LegalDecision, label: string) {
+    if (!view) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await configureLobbySeat(room.code, seatId, config);
-      setLobbySeats(result.seats);
+      const response = await fetch("/api/matches/current/decision", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          protocolVersion: 1,
+          requestId: `req-${view.stateVersion}-${label}`,
+          stateVersion: view.stateVersion,
+          decision,
+        }),
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        if (body?.error === "seat_absent") {
+          setError("你当前处于离席状态，请先回席。");
+          throw new Error("seat_absent");
+        }
+        throw new Error(body?.error ?? "提交失败");
+      }
+      const body = (await response.json()) as {
+        view: SeatView;
+        absences?: SeatAbsenceView[];
+      };
+      setView(body.view);
+      if (body.absences) setAbsences(body.absences);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "配置座位失败");
+      setError(err instanceof Error ? err.message : "提交失败");
     } finally {
       setBusy(false);
     }
@@ -682,17 +325,64 @@ export function App() {
     try {
       const body = await startRoomMatch(room.code);
       setView(body.view);
-      setDecisionRationales(
-        (body.decisionRationales as Record<string, DecisionRationaleView>) ??
-          {},
-      );
-      setResumableMatchId(body.matchId);
       setRoom({ ...room, phase: body.phase });
       setLanRoomViewOnly(false);
-      await refreshMatchList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "无法开局");
-      void refreshCapabilities();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRematch() {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await enterRoomRematch(room.code);
+      setRoom({
+        ...room,
+        phase: next.phase,
+        seats: next.seats,
+      });
+      setLobbySeats(next.seats);
+      setScreen("host-invite");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "无法进入续局等待");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRematchJoin() {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await confirmRoomRematch(room.code);
+      setLobbySeats(result.seats);
+      setMySeatId(result.seat.seatId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加入对局失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRematchLeave() {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await declineRoomRematch(room.code);
+      setView(null);
+      setRoom(null);
+      setLobbySeats([]);
+      setMySeatId(null);
+      setAbsences([]);
+      setScreen("home");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "离开对局失败");
     } finally {
       setBusy(false);
     }
@@ -704,7 +394,7 @@ export function App() {
     setError(null);
     try {
       const result = await claimSeat(
-        guestOrigin,
+        window.location.origin,
         room.code,
         seatId,
         displayNameDraft.trim() || "客人",
@@ -719,13 +409,13 @@ export function App() {
     }
   }
 
-  async function handleRename(origin: string) {
+  async function handleRename() {
     if (!room || !mySeatId) return;
     setBusy(true);
     setError(null);
     try {
       const result = await renameSeat(
-        origin,
+        window.location.origin,
         room.code,
         mySeatId,
         displayNameDraft.trim() || "客人",
@@ -739,70 +429,87 @@ export function App() {
     }
   }
 
+  async function handleConfigure(
+    seatId: string,
+    config: { kind: "open" } | { kind: "closed" },
+  ) {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await configureLobbySeat(room.code, seatId, config);
+      setLobbySeats(result.seats);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "配置座位失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshLobby(origin: string, code: string) {
+    try {
+      const found = await fetchRoom(origin, code);
+      setRoom(found);
+      setLobbySeats(found.seats ?? []);
+      const me = await fetchMySeat(origin, code);
+      setMySeatId((prev) => me.seat?.seatId ?? prev);
+      if (found.phase === "match" && !view && !lanRoomViewOnly) {
+        const response = await fetch("/api/matches/current", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (response.ok) {
+          const body = (await response.json()) as {
+            view: SeatView;
+            matchId: string;
+          };
+          setView(body.view);
+        }
+      }
+    } catch {
+      /* ignore poll errors */
+    }
+  }
+
   useEffect(() => {
-    if (
-      !room ||
-      (screen !== "host-invite" && screen !== "guest-confirm")
-    ) {
+    if (!room || (screen !== "host-invite" && screen !== "guest-confirm")) {
       return;
     }
-    const origin =
-      screen === "guest-confirm" ? guestOrigin : window.location.origin;
+    const origin = window.location.origin;
     const id = window.setInterval(() => {
       void refreshLobby(origin, room.code);
     }, 1500);
     return () => window.clearInterval(id);
-  }, [room, screen, guestOrigin, view, lanRoomViewOnly]);
+  }, [room, screen, view, lanRoomViewOnly]);
 
-  // Guest stuck on join with a code while host process is down: retry same Origin.
+  // 终局后客人停在结果画面，轮询房间以发现主机开启的续局等待。
   useEffect(() => {
-    if (screen !== "join" || !hostUnreachable) return;
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
-    if (!code || !/^\d{4}$/.test(code)) return;
-    const origin = window.location.origin;
-    const id = window.setInterval(() => {
-      void (async () => {
-        try {
-          const found = await fetchRoom(origin, code);
-          setRoom(found);
-          setLobbySeats(found.seats ?? []);
-          setGuestOrigin(origin);
-          setHostUnreachable(false);
-          const me = await fetchMySeat(origin, code);
-          setMySeatId(me.seat?.seatId ?? null);
-          if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
-          if (found.phase === "match") {
-            const response = await fetch("/api/matches/current", {
-              credentials: "include",
-              cache: "no-store",
-            });
-            if (response.ok) {
-              const body = (await response.json()) as {
-                view: SeatView;
-                matchId: string;
-                decisionRationales?: Record<string, DecisionRationaleView>;
-              };
-              setView(body.view);
-              setDecisionRationales(body.decisionRationales ?? {});
-              setResumableMatchId(body.matchId);
-              return;
-            }
-          }
-          setScreen("guest-confirm");
-        } catch {
-          /* keep waiting */
-        }
-      })();
-    }, 2000);
-    return () => window.clearInterval(id);
-  }, [screen, hostUnreachable]);
-
-  useEffect(() => {
-    if (screen === "host-invite" && !capabilities) {
-      void refreshCapabilities();
+    if (
+      !view ||
+      !room ||
+      view.publicState.status !== "finished" ||
+      mySeatId === "1"
+    ) {
+      return;
     }
-  }, [screen, capabilities]);
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const found = await fetchRoom(window.location.origin, room.code);
+        if (cancelled) return;
+        setRoom(found);
+        setLobbySeats(found.seats ?? []);
+      } catch {
+        /* keep waiting */
+      }
+    };
+    void poll();
+    const id = window.setInterval(() => void poll(), 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [view?.publicState?.status, view?.matchId, room?.code, mySeatId]);
 
   // LAN match: poll view/presence and keep remote-seat heartbeat alive.
   useEffect(() => {
@@ -819,16 +526,13 @@ export function App() {
         const body = (await response.json()) as {
           view: SeatView;
           matchId: string;
-          decisionRationales?: Record<string, DecisionRationaleView>;
           absences?: SeatAbsenceView[];
           pausedForAbsenceSeatId?: string | null;
         };
         if (cancelled) return;
         setView(body.view);
-        setDecisionRationales(body.decisionRationales ?? {});
         setAbsences(body.absences ?? []);
         setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId ?? null);
-        setResumableMatchId(body.matchId);
       } catch {
         /* ignore */
       }
@@ -906,22 +610,14 @@ export function App() {
       const body = await postSeatDisposition(room.code, seatId, action);
       if (body.aborted) {
         setView(null);
-        setDecisionRationales({});
         setAbsences([]);
         setPausedForAbsenceSeatId(null);
-        setResumableMatchId(null);
         setRoom(null);
         setScreen("home");
-        await refreshMatchList();
         return;
       }
       if (body.view) {
         setView(body.view as SeatView);
-      }
-      if (body.decisionRationales) {
-        setDecisionRationales(
-          body.decisionRationales as Record<string, DecisionRationaleView>,
-        );
       }
       if (Array.isArray(body.absences)) {
         setAbsences(body.absences as SeatAbsenceView[]);
@@ -952,12 +648,10 @@ export function App() {
           view: SeatView;
           absences?: SeatAbsenceView[];
           pausedForAbsenceSeatId?: string | null;
-          decisionRationales?: Record<string, DecisionRationaleView>;
         };
         setView(body.view);
         setAbsences(body.absences ?? result.absences);
         setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId ?? null);
-        setDecisionRationales(body.decisionRationales ?? {});
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "回席失败");
@@ -966,11 +660,49 @@ export function App() {
     }
   }
 
-  function openLocalSetup() {
-    setScreen("local-setup");
-    setError(null);
-    void refreshCapabilities();
-    void refreshMatchList();
+  function myRematchStatus(): "awaiting" | "confirmed" | "left" | null {
+    if (!room || room.phase !== "rematch" || !mySeatId) return null;
+    return (
+      lobbySeats.find((s) => s.seatId === mySeatId)?.rematchStatus ?? null
+    );
+  }
+
+  function rematchPrompt() {
+    const status = myRematchStatus();
+    if (!status) return null;
+    if (status === "confirmed") {
+      return (
+        <div className="rematch-prompt" role="status">
+          <strong>已确认加入</strong>
+          <p>等待主机开始新对局…</p>
+        </div>
+      );
+    }
+    if (status === "left") return null;
+    return (
+      <div className="rematch-prompt" role="dialog" aria-label="续局确认">
+        <strong>上一局已结束</strong>
+        <p>主机开启了续局等待。你要加入新对局吗？</p>
+        <div className="rematch-actions">
+          <button
+            type="button"
+            className="response-button primary"
+            disabled={busy}
+            onClick={() => void handleRematchJoin()}
+          >
+            加入对局
+          </button>
+          <button
+            type="button"
+            className="response-button"
+            disabled={busy}
+            onClick={() => void handleRematchLeave()}
+          >
+            离开对局
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (view) {
@@ -980,39 +712,50 @@ export function App() {
         <MatchDesk
           view={view}
           busy={busy}
-          agentPhase={agentPhase}
+          agentPhase="idle"
           decisionRationales={decisionRationales}
           onSubmitDecision={(decision, label) =>
             void submitDecision(decision, label)
           }
           returnLabel={lanMatch ? "返回房间" : "返回开局"}
-          onReturnToSetup={lanMatch ? returnToLanRoom : returnToSetup}
-          absences={absences}
-          pausedForAbsenceSeatId={pausedForAbsenceSeatId}
-          isHost={lanMatch && mySeatId === "1"}
-          showResume={
-            lanMatch &&
-            mySeatId !== null &&
-            mySeatId !== "1" &&
-            absences.some(
-              (a) =>
-                a.seatId === mySeatId &&
-                (a.phase === "reconnecting" ||
-                  a.phase === "absent" ||
-                  a.phase === "timed_out"),
-            )
+          onReturnToSetup={lanMatch ? returnToLanRoom : returnToLanRoom}
+          onRematch={
+            lanMatch && mySeatId === "1" ? () => void handleRematch() : undefined
           }
-          onAbsenceDisposition={
-            lanMatch
-              ? (seatId, action) =>
-                  void handleAbsenceDisposition(seatId, action)
-              : undefined
-          }
-          onResumeSeat={
-            lanMatch ? () => void handleResumeSeat() : undefined
+          seatStatusFor={(seatId) => absenceSeatStatus(absences, seatId)}
+          absenceSlot={
+            <AbsenceDrawer
+              absences={absences}
+              seatNames={Object.fromEntries(
+                view.publicState.seats.map((seat) => [
+                  seat.seatId,
+                  seat.displayName,
+                ]),
+              )}
+              isHost={lanMatch && mySeatId === "1"}
+              busy={busy}
+              pausedForAbsenceSeatId={pausedForAbsenceSeatId}
+              onDisposition={(seatId, action) =>
+                void handleAbsenceDisposition(seatId, action)
+              }
+              showResume={
+                lanMatch &&
+                mySeatId !== null &&
+                mySeatId !== "1" &&
+                absences.some(
+                  (a) =>
+                    a.seatId === mySeatId &&
+                    (a.phase === "reconnecting" ||
+                      a.phase === "absent" ||
+                      a.phase === "timed_out"),
+                )
+              }
+              onResume={() => void handleResumeSeat()}
+            />
           }
         />
         {error ? <p className="desk-error">{error}</p> : null}
+        {view.publicState.status === "finished" ? rematchPrompt() : null}
       </>
     );
   }
@@ -1024,7 +767,6 @@ export function App() {
           busy={busy}
           recoveryFailed={recoveryFailed}
           onAbandonRecovery={() => void abandonRecovery()}
-          onLocal={openLocalSetup}
           onCreateRoom={() => void createRoom()}
           onJoinRoom={() => {
             setError(null);
@@ -1040,7 +782,7 @@ export function App() {
     return (
       <main className="shell">
         <header className="top">
-          <p className="eyebrow">局域网主机</p>
+          <p className="eyebrow">房间大厅</p>
           <h1>政变</h1>
         </header>
         <HostInvitePanel
@@ -1048,20 +790,13 @@ export function App() {
           seats={lobbySeats}
           mySeatId={mySeatId}
           busy={busy}
-          probing={probing}
-          capabilities={capabilities}
           displayNameDraft={displayNameDraft}
           onDisplayNameDraftChange={setDisplayNameDraft}
-          onRename={() => void handleRename(window.location.origin)}
+          onRename={() => void handleRename()}
           onConfigure={(seatId, config) => void handleConfigure(seatId, config)}
-          onProbe={() => void refreshCapabilities()}
           onStart={() => void handleStartRoom()}
           onResumeMatch={() => void resumeLanMatch()}
           onBack={() => setScreen("home")}
-          onSelectHost={(host) => void selectLanHost(host)}
-          onCopy={() =>
-            room.joinUrl ? copyText(room.joinUrl) : Promise.resolve(false)
-          }
         />
         {error ? <p className="error">{error}</p> : null}
       </main>
@@ -1076,27 +811,14 @@ export function App() {
           <p className="eyebrow">加入房间</p>
           <h1>政变</h1>
         </header>
-        {hostUnreachable ? (
-          <p className="lede">
-            主机暂时不可达，正在按原地址重试。若主机更换了 IP/端口，请改用新的加入链接。
-          </p>
-        ) : null}
         <JoinRoomPage
           busy={busy}
           initialCode={params.get("code") ?? ""}
-          initialLink={
-            params.get("code")
-              ? `${window.location.origin}/join?code=${params.get("code")}`
-              : ""
-          }
           onBack={() => setScreen("home")}
           onError={(message) => setError(message)}
           onJoined={(found, origin) => {
             setRoom(found);
             setLobbySeats(found.seats ?? []);
-            setGuestOrigin(origin);
-            setLanRoomViewOnly(false);
-            setHostUnreachable(false);
             setMySeatId(null);
             setError(null);
             setScreen("guest-confirm");
@@ -1120,22 +842,19 @@ export function App() {
           <p className="eyebrow">加入方</p>
           <h1>政变</h1>
         </header>
-        {hostUnreachable ? (
-          <p className="lede">主机暂时不可达，正在重试原地址…</p>
-        ) : null}
         <GuestRoomConfirm
           room={room}
-          origin={guestOrigin}
           seats={lobbySeats}
           mySeatId={mySeatId}
           busy={busy}
           displayNameDraft={displayNameDraft}
           onDisplayNameDraftChange={setDisplayNameDraft}
           onClaim={(seatId) => void handleClaim(seatId)}
-          onRename={() => void handleRename(guestOrigin)}
+          onRename={() => void handleRename()}
           onResumeMatch={() => void resumeLanMatch()}
           onBack={() => setScreen("join")}
         />
+        {rematchPrompt()}
         {error ? <p className="error">{error}</p> : null}
       </main>
     );
@@ -1143,38 +862,17 @@ export function App() {
 
   return (
     <main className="shell">
-      <header className="top">
-        <p className="eyebrow">本机自用</p>
-        <h1>政变</h1>
-        <p className="lede">
-          配置 2–6 人桌：座位 1 固定为你，其余 Agent 座位选择 CLI 与模型后开局。
-        </p>
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => setScreen("home")}
-        >
-          ← 返回入口
-        </button>
-      </header>
-
-      <SetupPage
-        draft={setupDraft}
-        capabilities={capabilities}
-        probing={probing}
+      <HomeEntry
         busy={busy}
-        resumableMatchId={resumableMatchId}
-        matches={matches}
-        eventBrowse={eventBrowse}
-        onChange={updateSetupDraft}
-        onStart={() => void startMatch()}
-        onProbe={() => void refreshCapabilities()}
-        onContinue={() => void continueMatch()}
-        onBrowseEvents={(matchId) => void browseEvents(matchId)}
-        onResume={(matchId) => void resumeMatch(matchId)}
+        recoveryFailed={recoveryFailed}
+        onAbandonRecovery={() => void abandonRecovery()}
+        onCreateRoom={() => void createRoom()}
+        onJoinRoom={() => {
+          setError(null);
+          setScreen("join");
+        }}
       />
-
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="error home-error">{error}</p> : null}
     </main>
   );
 }

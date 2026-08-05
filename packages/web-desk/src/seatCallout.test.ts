@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import {
   seatCalloutFromEvent,
   seatCalloutsFromEvents,
-} from "./matchCopy.ts";
+} from "./matchCopy.js";
 
 const seats = [
   {

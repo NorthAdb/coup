@@ -247,21 +247,17 @@ describe("host restart room recovery", () => {
 
     const eventsBefore = await first.inject({
       method: "GET",
-      url: `/api/matches/${matchId}/events`,
+      url: "/api/matches/current",
+      headers: { origin: ctx.guest.origin, cookie: ctx.guestCookie },
     });
     assert.equal(eventsBefore.statusCode, 200);
     const beforeBody = eventsBefore.json() as {
-      events: Array<{ seq: number }>;
-      runStatus: string;
+      matchId: string;
+      view: { stateVersion: number; projectedHistory: unknown[] };
     };
-    assert.equal(beforeBody.runStatus, "in_progress");
-    const lastSeq = beforeBody.events.at(-1)?.seq;
-    assert.ok(typeof lastSeq === "number");
-
-    const matchesBefore = await first.inject({ method: "GET", url: "/api/matches" });
-    const matchCountBefore = (
-      matchesBefore.json() as { matches: unknown[] }
-    ).matches.length;
+    assert.equal(beforeBody.matchId, matchId);
+    const lastSeq = beforeBody.view.projectedHistory.length;
+    assert.ok(lastSeq > 0);
 
     await first.close();
 
@@ -288,23 +284,17 @@ describe("host restart room recovery", () => {
 
       const eventsAfter = await second.inject({
         method: "GET",
-        url: `/api/matches/${matchId}/events`,
+        url: "/api/matches/current",
+        headers: { origin: ctx.guest.origin, cookie: ctx.guestCookie },
       });
       assert.equal(eventsAfter.statusCode, 200);
       const afterBody = eventsAfter.json() as {
-        events: Array<{ seq: number }>;
-        runStatus: string;
         matchId: string;
+        view: { stateVersion: number; projectedHistory: unknown[] };
       };
       assert.equal(afterBody.matchId, matchId);
-      assert.equal(afterBody.runStatus, "in_progress");
-      assert.equal(afterBody.events.at(-1)?.seq, lastSeq);
-
-      const matchesAfter = await second.inject({ method: "GET", url: "/api/matches" });
-      const matchCountAfter = (
-        matchesAfter.json() as { matches: unknown[] }
-      ).matches.length;
-      assert.equal(matchCountAfter, matchCountBefore);
+      assert.equal(afterBody.view.stateVersion, beforeBody.view.stateVersion);
+      assert.equal(afterBody.view.projectedHistory.length, lastSeq);
 
       const me = await openSession(second, "http://192.168.1.42:8787");
       const roomGet = await second.inject({
@@ -608,13 +598,10 @@ describe("host restart room recovery", () => {
 
       const run = await second.inject({
         method: "GET",
-        url: `/api/matches/${matchId}/events`,
+        url: "/api/matches/current",
+        headers: { origin: host.origin, cookie: host.cookie },
       });
-      assert.equal(run.statusCode, 200);
-      assert.equal(
-        (run.json() as { runStatus: string }).runStatus,
-        "technical_abort",
-      );
+      assert.equal(run.statusCode, 404);
 
       const created = await second.inject({
         method: "POST",

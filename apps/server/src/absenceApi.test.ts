@@ -457,7 +457,7 @@ describe("pause when absent seat owes a decision", () => {
 });
 
 describe("host dispositions", () => {
-  it("extend_wait resets soft timeout; swap_agent revokes credential", async () => {
+  it("extend_wait resets soft timeout; swap_agent is rejected on the internet version", async () => {
     let now = 3_000_000;
     const app = await createApp({
       webRoot: await tempWebRoot(),
@@ -527,23 +527,22 @@ describe("host dispositions", () => {
           modelId: "stub/placeholder",
         },
       });
-      assert.equal(swapped.statusCode, 200);
+      assert.equal(swapped.statusCode, 400);
+      assert.equal(
+        (swapped.json() as { error: string }).error,
+        "invalid_disposition",
+      );
 
-      const revoked = await app.inject({
+      // Credential stays valid — no agent swap on the internet version.
+      const stillValid = await app.inject({
         method: "GET",
         url: `/api/rooms/${ctx.code}/me`,
         headers: { origin: ctx.guest.origin, cookie: ctx.guestCookie },
       });
-      assert.equal((revoked.json() as { seat: unknown }).seat, null);
-
-      const room = await app.inject({
-        method: "GET",
-        url: `/api/rooms/${ctx.code}`,
-        headers: { origin: ctx.host.origin, cookie: ctx.hostCookie },
-      });
-      const seats = (room.json() as { seats: Array<{ seatId: string; kind: string }> })
-        .seats;
-      assert.equal(seats.find((s) => s.seatId === "2")?.kind, "local_agent");
+      assert.equal(
+        (stillValid.json() as { seat: { seatId: string } }).seat.seatId,
+        "2",
+      );
     } finally {
       await app.close();
     }
@@ -652,14 +651,14 @@ describe("host dispositions", () => {
       };
       assert.equal(body.aborted, true);
 
-      const events = await app.inject({
+      // No events endpoint on the internet version; the aborted run is gone
+      // from the active view.
+      const current = await app.inject({
         method: "GET",
-        url: `/api/matches/${body.matchId}/events`,
+        url: "/api/matches/current",
+        headers: { origin: ctx.guest.origin, cookie: ctx.guestCookie },
       });
-      assert.equal(
-        (events.json() as { runStatus: string }).runStatus,
-        "technical_abort",
-      );
+      assert.equal(current.statusCode, 404);
 
       const revoked = await app.inject({
         method: "GET",

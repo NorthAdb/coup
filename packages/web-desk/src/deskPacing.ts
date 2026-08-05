@@ -28,9 +28,9 @@ export function revealHoldMs(
 ): number {
   // Keep readable even with reduced motion — identity must stay on screen.
   if (prefersReducedMotion) {
-    return pace === "fast" ? 2500 : 5000;
+    return pace === "fast" ? 2500 : 3000;
   }
-  return pace === "fast" ? 2500 : 5000;
+  return pace === "fast" ? 2500 : 3000;
 }
 
 /** Hold time for the post-prove shuffle/draw beat (ms). */

@@ -8,7 +8,7 @@ import {
   isChallengeCalloutEvent,
   lightBeatHoldMs,
   stageBeatFromEvent,
-} from "./resultBeat.ts";
+} from "./resultBeat.js";
 
 const seats = [
   { seatId: "seat-1", displayName: "你" },

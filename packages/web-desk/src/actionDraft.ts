@@ -1,5 +1,5 @@
 import type { LegalDecision } from "@coup/protocol";
-import { ACTION_LABEL } from "./matchCopy.ts";
+import { ACTION_LABEL } from "./matchCopy.js";
 
 export type UntargetedActionType =
   | "income"

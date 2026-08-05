@@ -4,7 +4,7 @@ import {
   seatTintClass,
   seatTintClassForId,
   SEAT_TINT_COUNT,
-} from "./seatColor.ts";
+} from "./seatColor.js";
 
 describe("seatTintClass", () => {
   it("assigns a stable class by seat order for up to six seats", () => {

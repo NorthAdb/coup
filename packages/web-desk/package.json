@@ -1,0 +1,30 @@
+{
+  "name": "@coup/web-desk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/deskPacing.test.js dist/matchCopy.test.js dist/seatCallout.test.js dist/resultBeat.test.js dist/seatColor.test.js dist/exchangeKeep.test.js dist/actionDraft.test.js"
+  },
+  "dependencies": {
+    "@coup/protocol": "0.0.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "typescript": "^5.9.2"
+  }
+}

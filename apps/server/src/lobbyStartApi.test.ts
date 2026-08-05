@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createApp } from "./createApp.js";
+import { evaluateLobbyStartGates } from "./lobbyStart.js";
+import { createRoomRegistry, type RoomRecord } from "./roomRegistry.js";
 
 const tempDirs: string[] = [];
 
@@ -149,7 +151,7 @@ async function configureSeat(
 }
 
 describe("lobby seat configuration", () => {
-  it("lets the host set remaining seats to open, local_agent, or closed", async () => {
+  it("lets the host set remaining seats to open or closed, and rejects agent kinds", async () => {
     const app = await createApp({
       webRoot: await tempWebRoot(),
       dbPath: await tempDbPath(),
@@ -195,13 +197,11 @@ describe("lobby seat configuration", () => {
           modelId: "stub/placeholder",
         },
       });
-      assert.equal(agentSeat.statusCode, 200);
-      const agentBody = agentSeat.json() as { seats: LobbySeat[] };
-      const seat4 = agentBody.seats.find((s) => s.seatId === "4");
-      assert.equal(seat4?.kind, "local_agent");
-      assert.equal(seat4?.displayName, "灰狐");
-      assert.equal(seat4?.cli, "stub");
-      assert.equal(seat4?.modelId, "stub/placeholder");
+      assert.equal(agentSeat.statusCode, 400);
+      assert.equal(
+        (agentSeat.json() as { error: string }).error,
+        "invalid_seat_kind",
+      );
 
       const guest = await openSession(app, "http://192.168.1.42:8787");
       const guestDenied = await app.inject({
@@ -227,7 +227,7 @@ describe("lobby seat configuration", () => {
 });
 
 describe("lobby start gates", () => {
-  it("blocks start while open seats remain and allows host+agent without remotes", async () => {
+  it("blocks start while open seats remain; host alone cannot start", async () => {
     const app = await createApp({
       webRoot: await tempWebRoot(),
       dbPath: await tempDbPath(),
@@ -240,43 +240,39 @@ describe("lobby start gates", () => {
       const cookie = `${host.cookie}; ${seatCookie}`;
       const code = body.code;
 
-      await configureSeat(app, host, cookie, code, "4", {
-        kind: "local_agent",
-        displayName: "灰狐",
-        cli: "stub",
-        modelId: "stub/placeholder",
+      const guest = await openSession(app, "http://192.168.1.42:8787");
+      const claimed = await app.inject({
+        method: "POST",
+        url: `/api/rooms/${code}/seats/2/claim`,
+        headers: {
+          origin: guest.origin,
+          cookie: guest.cookie,
+          "x-csrf-token": guest.csrfToken,
+          "content-type": "application/json",
+        },
+        payload: { displayName: "阿黛尔" },
       });
-      for (const seatId of ["3", "5", "6"]) {
+      assert.equal(claimed.statusCode, 200);
+      const guestSeatCookie = cookieFrom(
+        claimed.headers["set-cookie"],
+        "coup_seat",
+      );
+      assert.ok(guestSeatCookie);
+      const guestCookie = `${guest.cookie}; ${guestSeatCookie}`;
+
+      for (const seatId of ["3", "4", "5", "6"]) {
         await configureSeat(app, host, cookie, code, seatId, {
           kind: "closed",
         });
       }
-      // Seat 2 still open — start must fail.
+      // Seat 2 is claimed by the guest — no open seats remain; start allowed.
 
-      const blocked = await app.inject({
-        method: "POST",
-        url: `/api/rooms/${code}/start`,
-        headers: {
-          origin: host.origin,
-          cookie,
-          "x-csrf-token": host.csrfToken,
-        },
-      });
-      assert.equal(blocked.statusCode, 400);
-      assert.equal(
-        (blocked.json() as { error: string }).error,
-        "open_seats_remain",
-      );
-
-      await configureSeat(app, host, cookie, code, "2", { kind: "closed" });
-
-      const guest = await openSession(app, "http://192.168.1.42:8787");
       const guestStart = await app.inject({
         method: "POST",
         url: `/api/rooms/${code}/start`,
         headers: {
           origin: guest.origin,
-          cookie: guest.cookie,
+          cookie: guestCookie,
           "x-csrf-token": guest.csrfToken,
         },
       });
@@ -448,5 +444,61 @@ describe("multi-human match from lobby", () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+function finishedMatchPhaseRoom(
+  openSeats: string[] = [],
+): { room: RoomRecord; registry: ReturnType<typeof createRoomRegistry> } {
+  const registry = createRoomRegistry();
+  const room = registry.create();
+  for (const seatId of ["2", "3", "4", "5", "6"]) {
+    if (openSeats.includes(seatId)) continue;
+    if (seatId === "2") {
+      const claimed = registry.claimSeat(room.code, "2", {
+        displayName: "阿黛尔",
+        credentialHash: "hash-2",
+      });
+      assert.equal(claimed.ok, true);
+      continue;
+    }
+    const configured = registry.configureSeat(room.code, seatId, {
+      kind: "closed",
+    });
+    assert.equal(configured.ok, true);
+  }
+  const begun = registry.beginMatch(room.code, "match-1");
+  assert.equal(begun.ok, true);
+  const after = registry.getByCode(room.code);
+  assert.ok(after);
+  return { room: after, registry };
+}
+
+describe("same-room rematch gates", () => {
+  it("blocks start from a match-phase room unless rematch is allowed", () => {
+    const { room } = finishedMatchPhaseRoom();
+    assert.deepEqual(evaluateLobbyStartGates(room), {
+      ok: false,
+      reason: "room_not_lobby",
+    });
+    assert.deepEqual(evaluateLobbyStartGates(room, { allowMatchPhase: true }), {
+      ok: true,
+    });
+  });
+
+  it("still enforces seat gates when a rematch is allowed", () => {
+    const { room } = finishedMatchPhaseRoom(["3"]);
+    assert.deepEqual(evaluateLobbyStartGates(room, { allowMatchPhase: true }), {
+      ok: false,
+      reason: "open_seats_remain",
+    });
+  });
+
+  it("lets a match-phase room begin a new match run", () => {
+    const { room, registry } = finishedMatchPhaseRoom();
+    const rematched = registry.beginMatch(room.code, "match-2");
+    assert.equal(rematched.ok, true);
+    assert.equal(rematched.room.phase, "match");
+    assert.equal(rematched.room.matchId, "match-2");
   });
 });

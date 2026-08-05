@@ -1,4 +1,4 @@
-import type { TextPart } from "./matchCopy.ts";
+import type { TextPart } from "@coup/web-desk";
 
 export type AgentBusyPhase =
   | "idle"

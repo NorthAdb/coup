@@ -4,31 +4,14 @@ import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { activeDecidingSeatId, forceEliminateForHostAbsence } from "@coup/domain";
 import type { SeatDecision } from "@coup/protocol";
-import { createAgentRuntime, type AgentRuntime } from "./agents/index.js";
-import { createProcessCliRunner } from "./agents/cliRunner.js";
 import {
-  probeCapabilities,
-  recheckSetupSeats,
-  sanitizeCapabilityReport,
-  type CapabilityProbeOptions,
-  type CapabilityReport,
-} from "./capabilityProbe.js";
-import {
-  advanceAgentSeats,
-  pendingAgentSeatIds,
   startMatch,
   submitHumanDecision,
   toSeatView,
   type ActiveMatch,
   type MatchPersistence,
 } from "./matchRuntime.js";
-import type { AgentDecisionPhase } from "./agentDecision.js";
-import { parseMatchSetup } from "./matchSetup.js";
-import {
-  openMatchStore,
-  type MatchRunRecord,
-  type MatchStore,
-} from "./matchStore.js";
+import { openMatchStore, type MatchRunRecord, type MatchStore } from "./matchStore.js";
 import {
   listLanIpv4Candidates,
   pickDefaultLanIpv4,
@@ -81,14 +64,11 @@ export type HostingController = {
 
 export type CreateAppOptions = {
   webRoot: string;
-  agentRuntime?: AgentRuntime;
-  /** Override capability probing (tests / fixtures). */
-  probe?: (options?: CapabilityProbeOptions) => Promise<CapabilityReport>;
   /** SQLite path; defaults to ~/.coup/coup.sqlite. */
   dbPath?: string;
   /** Inject an already-open store (tests). */
   store?: MatchStore;
-  /** LAN host bind / rebind control (omit in pure inject tests that stub it). */
+  /** Host bind / rebind control (omit in pure inject tests that stub it). */
   hosting?: HostingController;
   listNetworkInterfaces?: () => NetIfaceMap;
   rooms?: RoomRegistry;
@@ -96,7 +76,7 @@ export type CreateAppOptions = {
   /** Injectable clock for absence timers (tests). */
   now?: () => number;
   presence?: SeatPresenceTracker;
-  /** LAN room persistence (defaults to same dbPath as MatchStore). */
+  /** Room persistence (defaults to same dbPath as MatchStore). */
   roomStore?: RoomStore;
 };
 
@@ -110,9 +90,6 @@ export function activeMatchFromRun(run: MatchRunRecord): ActiveMatch {
     events: run.events,
     humanSeatId: run.humanSeatId,
     displayNames: run.displayNames,
-    seatAgents: run.seatAgents,
-    seatWorkspaces: {},
-    decisionRationales: {},
   };
 }
 
@@ -123,7 +100,7 @@ function humanFacingPayload(
 ) {
   return {
     view: toSeatView(match, seatId, requestId),
-    decisionRationales: match.decisionRationales,
+    decisionRationales: {},
   };
 }
 
@@ -138,7 +115,7 @@ export function persistenceForStore(store: MatchStore): MatchPersistence {
         matchId: match.state.matchId,
         humanSeatId: match.humanSeatId,
         displayNames: match.displayNames,
-        seatAgents: match.seatAgents,
+        seatAgents: {},
         state: match.state,
         events: match.events,
       });
@@ -152,67 +129,68 @@ export function persistenceForStore(store: MatchStore): MatchPersistence {
 
 function abortReasonFrom(error: unknown): string {
   if (!(error instanceof Error) || !error.message) {
-    return "agent_failed";
+    return "technical_failure";
   }
   const message = error.message;
   const colon = message.indexOf(":");
   const head = (colon >= 0 ? message.slice(0, colon) : message).trim();
   const known = new Set([
-    "agent_unsupported_protocol",
-    "agent_request_id_mismatch",
-    "agent_version_mismatch",
-    "agent_decision_not_legal",
-    "agent_advance_exceeded_guard",
-    "agent_start_failed",
-    "agent_resume_failed",
-    "agent_decision_failed",
-    "agent_illegal_decision",
-    "agent_timeout",
-    "agent_cli_not_installed",
-    "agent_cli_unsupported",
-    "agent_auth_failed",
-    "agent_credentials_missing",
-    "agent_billing_unavailable",
-    "agent_model_unavailable",
-    "agent_model_forbidden",
-    "agent_tools_not_denied",
-    "agent_tool_permission_requested",
-    "agent_isolation_violated",
-    "agent_persist_failed",
-    "agent_empty_output",
-    "agent_invalid_json",
-    "agent_schema_mismatch",
-    "agent_subprocess_exited",
-    "agent_session_error",
-    "agent_rate_limited",
-    "agent_provider_transient",
+    "match_requires_local_human",
+    "illegal_decision",
+    "persistence_failed",
+    "technical_failure",
   ]);
   if (known.has(head)) return head;
   if (known.has(message)) return message;
-  if (
-    head.startsWith("opencode_") ||
-    head.startsWith("claude_") ||
-    message.startsWith("agent ")
-  ) {
-    return "agent_failed";
-  }
-  // Never persist raw CLI/model text — only a stable category token.
-  return "agent_failed";
+  // Never persist raw error text — only a stable category token.
+  return "technical_failure";
+}
+
+/**
+ * 房间号限速：对查询失败的来源 IP 计数，超过阈值直接 429，
+ * 把 4 位房间号的穷举从分钟级拖到小时级。
+ */
+function createRoomCodeThrottle(limit = 10, windowMs = 60_000) {
+  const fails = new Map<string, number[]>();
+  return {
+    recordFail(ip: string) {
+      const now = Date.now();
+      const recent = (fails.get(ip) ?? []).filter((t) => now - t < windowMs);
+      recent.push(now);
+      fails.set(ip, recent);
+    },
+    blocked(ip: string): boolean {
+      const now = Date.now();
+      const recent = (fails.get(ip) ?? []).filter((t) => now - t < windowMs);
+      fails.set(ip, recent);
+      return recent.length >= limit;
+    },
+    clear(ip: string) {
+      fails.delete(ip);
+    },
+  };
 }
 
 export async function createApp(options: CreateAppOptions) {
-  const app = Fastify({ logger: false });
+  const app = Fastify({
+    logger: false,
+    // 将来经 Nginx 反代（域名）时开启，让 request.ip 取真实客户端 IP；
+    // 直连 IP:8787 时保持默认（socket IP）。
+    trustProxy: process.env.COUP_TRUST_PROXY === "1",
+  });
   const dbPath = options.dbPath ?? defaultDbPath();
   const store = options.store ?? openMatchStore(dbPath);
   const roomStore = options.roomStore ?? openRoomStore(dbPath);
   const persistence = persistenceForStore(store);
-  const agentRuntime = options.agentRuntime ?? createAgentRuntime();
-  const runProbe =
-    options.probe ??
-    (() => probeCapabilities({ runner: createProcessCliRunner() }));
   const rooms = options.rooms ?? createRoomRegistry();
   const sessions = options.sessions ?? createSessionStore();
   const listIfaces = options.listNetworkInterfaces ?? networkInterfaces;
+  const envOrigins = (process.env.COUP_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const publicHost = process.env.COUP_PUBLIC_HOST?.trim() || null;
+  const roomCodeThrottle = createRoomCodeThrottle();
   let selectedLanHost: string | null = null;
   let recoveryStatus: RoomRecoveryStatus = "none";
   let recoveryReason: string | null = null;
@@ -229,7 +207,9 @@ export async function createApp(options: CreateAppOptions) {
         ? [selectedLanHost]
         : []),
     ];
-    return allowedOrigins({ port, lanHosts: hosts });
+    return [
+      ...new Set([...allowedOrigins({ port, lanHosts: hosts }), ...envOrigins]),
+    ];
   }
 
   function originAllowed(origin: string | undefined): boolean {
@@ -308,9 +288,6 @@ export async function createApp(options: CreateAppOptions) {
 
   let activeMatch: ActiveMatch | null = null;
   let activeRoomCode: string | null = null;
-  let agentPhase: AgentDecisionPhase | "idle" = "idle";
-  let agentSeatId: string | null = null;
-  let thinkingSeatIds: string[] = [];
   const presence = options.presence ?? createSeatPresenceTracker();
   const now = () => (options.now ? options.now() : Date.now());
 
@@ -395,10 +372,6 @@ export async function createApp(options: CreateAppOptions) {
         activeRoomCode = room.code;
         recoveryStatus = "restored";
       }
-    } else {
-      // No LAN room — keep MVP local resumable-run behavior.
-      const resumable = store.findResumableRun();
-      activeMatch = resumable ? activeMatchFromRun(resumable) : null;
     }
   }
 
@@ -480,9 +453,10 @@ export async function createApp(options: CreateAppOptions) {
     if (selectedLanHost && !addresses.includes(selectedLanHost)) {
       selectedLanHost = null;
     }
-    const lanHost =
-      selectedLanHost ?? pickDefaultLanIpv4(candidates);
-    selectedLanHost = lanHost;
+    const lanHost = publicHost ?? selectedLanHost ?? pickDefaultLanIpv4(candidates);
+    if (lanHost && !publicHost) {
+      selectedLanHost = lanHost;
+    }
     const room = rooms.getByCode(code);
     if (!room) return null;
     return {
@@ -497,61 +471,9 @@ export async function createApp(options: CreateAppOptions) {
     };
   }
 
-  function runtimeOptions() {
-    return {
-      agentRuntime,
-      persistence,
-      onAgentPhase: (phase: AgentDecisionPhase, seatId?: string) => {
-        agentPhase = phase;
-        if (seatId !== undefined) {
-          agentSeatId = seatId;
-        }
-      },
-      onMatchAdvanced: (match: ActiveMatch) => {
-        thinkingSeatIds = pendingAgentSeatIds(match);
-      },
-    };
-  }
-
-  async function advanceActiveOrAbort(
-    match: ActiveMatch,
-  ): Promise<
-    | { ok: true; match: ActiveMatch }
-    | { ok: false; matchId: string; error: string }
-  > {
-    agentPhase = "thinking";
-    agentSeatId = null;
-    thinkingSeatIds = pendingAgentSeatIds(match);
-    try {
-      const next = await advanceAgentSeats(match, runtimeOptions());
-      agentPhase = "idle";
-      agentSeatId = null;
-      thinkingSeatIds = [];
-      return { ok: true, match: next };
-    } catch (error) {
-      agentPhase = "failed";
-      thinkingSeatIds = [];
-      const matchId = match.state.matchId;
-      const run = store.getRun(matchId);
-      if (run && run.runStatus === "in_progress") {
-        store.technicalAbort(matchId, abortReasonFrom(error));
-      }
-      return {
-        ok: false,
-        matchId,
-        error: abortReasonFrom(error),
-      };
-    }
-  }
-
   app.addHook("onClose", async () => {
     store.close();
     roomStore.close();
-  });
-
-  app.get("/api/capabilities", async (_request, reply) => {
-    const report = sanitizeCapabilityReport(await runProbe());
-    return reply.send(report);
   });
 
   app.get("/api/session", async (request, reply) => {
@@ -574,8 +496,7 @@ export async function createApp(options: CreateAppOptions) {
   });
 
   app.get("/api/hosting", async (_request, reply) => {
-    // This endpoint is a public, read-only probe used while the browser
-    // moves from the loopback origin to the LAN origin.
+    // Public, read-only probe of the bind state.
     reply.header("access-control-allow-origin", "*");
     const state = options.hosting?.getState() ?? {
       bindMode: "local" as const,
@@ -586,7 +507,7 @@ export async function createApp(options: CreateAppOptions) {
     return reply.send({
       ...state,
       candidates: candidates.map((c) => c.address),
-      selectedHost: selectedLanHost ?? pickDefaultLanIpv4(candidates),
+      selectedHost: publicHost ?? selectedLanHost ?? pickDefaultLanIpv4(candidates),
     });
   });
 
@@ -594,35 +515,22 @@ export async function createApp(options: CreateAppOptions) {
     if (!options.hosting) {
       return reply.code(500).send({ error: "hosting_unavailable" });
     }
-    const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
-    const addresses = candidates.map((c) => c.address);
     const current = options.hosting.getState();
     if (current.bindMode === "host") {
       return reply.send({
         status: "ready",
         ...current,
-        candidates: addresses,
-        selectedHost: selectedLanHost ?? pickDefaultLanIpv4(candidates),
+        candidates: [],
+        selectedHost: publicHost ?? null,
       });
     }
-
-    const preferredPort = 8787;
-    // LAN origins first — host should land on LAN Origin, not loopback.
-    // Lead with the RFC1918-ranked default so VPN/TUN adapters (e.g.
-    // 198.18.x.x) don't win the redirect race over the real LAN NIC.
-    const defaultHost = selectedLanHost ?? pickDefaultLanIpv4(candidates);
-    const others = addresses.filter((ip) => ip !== defaultHost);
-    const retryOrigins = [
-      ...(defaultHost ? [`http://${defaultHost}:${preferredPort}`] : []),
-      ...others.map((ip) => `http://${ip}:${preferredPort}`),
-      `http://127.0.0.1:${preferredPort}`,
-    ];
-    // Flush response before rebinding — server.close() waits for in-flight requests.
+    // Flush response before rebinding — server.close() waits for in-flight
+    // requests, so the rebind must happen after this request has finished.
     const payload = {
       status: "rebinding" as const,
-      preferredPort,
-      candidates: addresses,
-      retryOrigins,
+      preferredPort: 8787,
+      candidates: [],
+      retryOrigins: [],
     };
     void reply.then(
       () => {
@@ -683,14 +591,9 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(409).send({ error: "no_recovery_to_abandon" });
     }
 
-    // Prefer the room-linked matchId. Corrupt payloads have no parseable link;
-    // then only fall back to the single in-progress run (LAN is one-room/one-match).
     const matchId =
       failedRecoveryRoom?.matchId ??
-      (activeRoomCode ? rooms.getByCode(activeRoomCode)?.matchId : null) ??
-      (recoveryReason === "corrupt"
-        ? (store.findResumableRun()?.matchId ?? null)
-        : null);
+      (activeRoomCode ? rooms.getByCode(activeRoomCode)?.matchId : null);
     if (matchId) {
       const run = store.getRun(matchId);
       if (run && run.runStatus === "in_progress") {
@@ -723,9 +626,10 @@ export async function createApp(options: CreateAppOptions) {
         message:
           recoveryStatus === "failed"
             ? "无法恢复上一房间：须先放弃并作废旧房后才能创建新房"
-            : "已恢复上一房间：须先放弃并作废旧房后才能创建新房",
+            : "已恢复上一房间：须先放弃旧房才能创建新房",
       });
     }
+
     const hostState = options.hosting.getState();
     if (hostState.bindMode !== "host") {
       return reply.code(409).send({ error: "need_host_mode" });
@@ -733,11 +637,13 @@ export async function createApp(options: CreateAppOptions) {
 
     const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
     const addresses = candidates.map((c) => c.address);
-    const lanHost = selectedLanHost ?? pickDefaultLanIpv4(candidates);
+    const lanHost = publicHost ?? selectedLanHost ?? pickDefaultLanIpv4(candidates);
     if (!lanHost) {
       return reply.code(400).send({ error: "no_lan_ipv4" });
     }
-    selectedLanHost = lanHost;
+    if (!publicHost) {
+      selectedLanHost = lanHost;
+    }
 
     // One active room for now (spec: single room).
     for (const code of rooms.listCodes()) {
@@ -804,8 +710,7 @@ export async function createApp(options: CreateAppOptions) {
         seatId: result.seat.seatId,
         kind: result.seat.kind,
         displayName: result.seat.displayName,
-        cli: result.seat.cli,
-        modelId: result.seat.modelId,
+        rematchStatus: result.seat.rematchStatus,
       },
       seats: publicSeats(result.room),
     });
@@ -857,8 +762,7 @@ export async function createApp(options: CreateAppOptions) {
         seatId: result.seat.seatId,
         kind: result.seat.kind,
         displayName: result.seat.displayName,
-        cli: result.seat.cli,
-        modelId: result.seat.modelId,
+        rematchStatus: result.seat.rematchStatus,
       },
       seats: publicSeats(result.room),
     });
@@ -866,12 +770,7 @@ export async function createApp(options: CreateAppOptions) {
 
   app.patch<{
     Params: { code: string; seatId: string };
-    Body: {
-      kind?: string;
-      displayName?: string;
-      cli?: string;
-      modelId?: string | null;
-    };
+    Body: { kind?: string };
   }>("/api/rooms/:code/seats/:seatId/config", async (request, reply) => {
     if (!requireSession(request, reply)) return;
     const room = rooms.getByCode(request.params.code);
@@ -892,52 +791,12 @@ export async function createApp(options: CreateAppOptions) {
     }
 
     const kind = request.body?.kind;
-    if (kind !== "open" && kind !== "closed" && kind !== "local_agent") {
+    if (kind !== "open" && kind !== "closed") {
       return reply.code(400).send({ error: "invalid_seat_kind" });
     }
 
-    let configInput:
-      | { kind: "open" }
-      | { kind: "closed" }
-      | {
-          kind: "local_agent";
-          displayName: string;
-          cli: "opencode" | "claude" | "stub";
-          modelId: string | null;
-        };
-    if (kind === "open") {
-      configInput = { kind: "open" };
-    } else if (kind === "closed") {
-      configInput = { kind: "closed" };
-    } else {
-      const cli = request.body?.cli;
-      if (cli !== "opencode" && cli !== "claude" && cli !== "stub") {
-        return reply.code(400).send({ error: "invalid_cli" });
-      }
-      const displayName =
-        typeof request.body?.displayName === "string" &&
-        request.body.displayName.trim().length > 0
-          ? request.body.displayName.trim().slice(0, 24)
-          : "Agent";
-      const modelId =
-        request.body?.modelId === undefined
-          ? null
-          : request.body.modelId === null
-            ? null
-            : typeof request.body.modelId === "string"
-              ? request.body.modelId
-              : undefined;
-      if (modelId === undefined) {
-        return reply.code(400).send({ error: "invalid_model_id" });
-      }
-      configInput = { kind: "local_agent", displayName, cli, modelId };
-    }
-
-    const result = rooms.configureSeat(
-      room.code,
-      request.params.seatId,
-      configInput,
-    );
+    const configInput = kind === "open" ? { kind: "open" as const } : { kind: "closed" as const };
+    const result = rooms.configureSeat(room.code, request.params.seatId, configInput);
     if (!result.ok) {
       if (result.reason === "room_not_found") {
         return reply.code(404).send({ error: "room_not_found" });
@@ -956,12 +815,125 @@ export async function createApp(options: CreateAppOptions) {
         seatId: result.seat.seatId,
         kind: result.seat.kind,
         displayName: result.seat.displayName,
-        cli: result.seat.cli,
-        modelId: result.seat.modelId,
+        rematchStatus: result.seat.rematchStatus,
       },
       seats: publicSeats(result.room),
     });
   });
+
+  app.post<{ Params: { code: string } }>(
+    "/api/rooms/:code/rematch",
+    async (request, reply) => {
+      const host = requireHostSeat(request, reply, request.params.code);
+      if (!host) return;
+      const { room } = host;
+      if (room.phase !== "match") {
+        return reply.code(409).send({ error: "room_not_match" });
+      }
+      const run = room.matchId != null ? store.getRun(room.matchId) : null;
+      if (!run || run.runStatus === "in_progress") {
+        return reply.code(409).send({ error: "match_in_progress" });
+      }
+      const entered = rooms.enterRematch(room.code);
+      if (!entered.ok) {
+        return reply.code(409).send({ error: entered.reason });
+      }
+      persistActiveRoom();
+      return reply.send({
+        code: entered.room.code,
+        phase: entered.room.phase,
+        seats: publicSeats(entered.room),
+        matchId: entered.room.matchId,
+      });
+    },
+  );
+
+  app.post<{ Params: { code: string } }>(
+    "/api/rooms/:code/rematch/join",
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const room = rooms.getByCode(request.params.code);
+      if (!room) {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      if (room.phase !== "rematch") {
+        return reply.code(409).send({ error: "room_not_rematch" });
+      }
+      const cookies = parseCookies(
+        typeof request.headers.cookie === "string"
+          ? request.headers.cookie
+          : undefined,
+      );
+      const seatToken = cookies[SEAT_COOKIE];
+      const holder = seatToken
+        ? rooms.findSeatByCredential(room.code, hashToken(seatToken))
+        : null;
+      if (!holder || holder.kind !== "remote_human") {
+        return reply.code(403).send({ error: "seat_credential_required" });
+      }
+      const confirmed = rooms.confirmRematchSeat(room.code, holder.seatId);
+      if (!confirmed.ok) {
+        if (confirmed.reason === "seat_not_awaiting") {
+          return reply.code(409).send({ error: "seat_not_awaiting" });
+        }
+        return reply.code(409).send({ error: confirmed.reason });
+      }
+      const issued = issueSeatToken();
+      const rotated = rooms.rotateSeatCredential(
+        room.code,
+        holder.seatId,
+        issued.hash,
+      );
+      if (!rotated.ok) {
+        return reply.code(409).send({ error: rotated.reason });
+      }
+      persistActiveRoom();
+      appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
+      return reply.send({
+        seat: {
+          seatId: rotated.seat.seatId,
+          kind: rotated.seat.kind,
+          displayName: rotated.seat.displayName,
+          rematchStatus: rotated.seat.rematchStatus,
+        },
+        seats: publicSeats(rotated.room),
+      });
+    },
+  );
+
+  app.post<{ Params: { code: string } }>(
+    "/api/rooms/:code/rematch/leave",
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const room = rooms.getByCode(request.params.code);
+      if (!room) {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      if (room.phase !== "rematch") {
+        return reply.code(409).send({ error: "room_not_rematch" });
+      }
+      const cookies = parseCookies(
+        typeof request.headers.cookie === "string"
+          ? request.headers.cookie
+          : undefined,
+      );
+      const seatToken = cookies[SEAT_COOKIE];
+      const holder = seatToken
+        ? rooms.findSeatByCredential(room.code, hashToken(seatToken))
+        : null;
+      if (!holder || holder.kind !== "remote_human") {
+        return reply.code(403).send({ error: "seat_credential_required" });
+      }
+      const declined = rooms.declineRematchSeat(room.code, holder.seatId);
+      if (!declined.ok) {
+        return reply.code(409).send({ error: declined.reason });
+      }
+      persistActiveRoom();
+      return reply.send({
+        seats: publicSeats(declined.room),
+      });
+    },
+  );
 
   app.post<{ Params: { code: string } }>(
     "/api/rooms/:code/start",
@@ -984,20 +956,23 @@ export async function createApp(options: CreateAppOptions) {
         return reply.code(403).send({ error: "host_seat_required" });
       }
 
-      const gates = evaluateLobbyStartGates(room);
+      // 同一房间终局后允许继续对局（重开一局）：仅当当前 run 已结束；
+      // 续局等待阶段须全部座位已确认（门禁内校验）。
+      const currentRun =
+        room.matchId != null ? store.getRun(room.matchId) : null;
+      const rematchAllowed =
+        room.phase === "match" &&
+        currentRun !== null &&
+        currentRun.runStatus !== "in_progress";
+      const gates = evaluateLobbyStartGates(room, {
+        allowMatchPhase: rematchAllowed,
+        allowRematchPhase: room.phase === "rematch",
+      });
       if (!gates.ok) {
         return reply.code(400).send({ error: gates.reason });
       }
 
       const setupSeats = lobbySeatsToMatchSetup(room);
-      const report = await runProbe();
-      const gate = recheckSetupSeats(setupSeats, report);
-      if (!gate.ok) {
-        return reply.code(400).send({
-          error: gate.reason,
-          hint: gate.hint,
-        });
-      }
 
       if (activeMatch) {
         const existing = store.findResumableRun();
@@ -1009,19 +984,11 @@ export async function createApp(options: CreateAppOptions) {
       }
 
       try {
-        agentPhase = "thinking";
-        agentSeatId = null;
-        thinkingSeatIds = [];
         activeMatch = await startMatch({
           seats: setupSeats,
-          ...runtimeOptions(),
+          persistence,
         });
-        agentPhase = "idle";
-        agentSeatId = null;
-        thinkingSeatIds = [];
       } catch (error) {
-        agentPhase = "failed";
-        thinkingSeatIds = [];
         const startedId = store.findResumableRun()?.matchId;
         if (startedId) {
           store.technicalAbort(startedId, abortReasonFrom(error));
@@ -1134,6 +1101,7 @@ export async function createApp(options: CreateAppOptions) {
             seatId: holder.seatId,
             kind: holder.kind,
             displayName: holder.displayName,
+            rematchStatus: holder.rematchStatus,
           },
           absences: presence.projectAll(now()),
         });
@@ -1149,6 +1117,7 @@ export async function createApp(options: CreateAppOptions) {
             seatId: holder.seatId,
             kind: holder.kind,
             displayName: holder.displayName,
+            rematchStatus: holder.rematchStatus,
           },
           absences: presence.projectAll(now()),
         });
@@ -1180,12 +1149,7 @@ export async function createApp(options: CreateAppOptions) {
 
   app.post<{
     Params: { code: string; seatId: string };
-    Body: {
-      action?: string;
-      displayName?: string;
-      cli?: string;
-      modelId?: string | null;
-    };
+    Body: { action?: string };
   }>("/api/rooms/:code/seats/:seatId/disposition", async (request, reply) => {
     const host = requireHostSeat(request, reply, request.params.code);
     if (!host) return;
@@ -1209,79 +1173,6 @@ export async function createApp(options: CreateAppOptions) {
       return reply.send({
         action: "extend_wait",
         absences: presence.projectAll(now()),
-      });
-    }
-
-    if (action === "swap_agent") {
-      const displayName =
-        typeof request.body?.displayName === "string" &&
-        request.body.displayName.trim().length > 0
-          ? request.body.displayName.trim()
-          : "Agent";
-      const cli =
-        request.body?.cli === "opencode" ||
-        request.body?.cli === "claude" ||
-        request.body?.cli === "stub"
-          ? request.body.cli
-          : "stub";
-      const modelId =
-        typeof request.body?.modelId === "string" ? request.body.modelId : null;
-      const report = await runProbe();
-      const ready = recheckSetupSeats([{ cli, modelId }], report);
-      if (!ready.ok) {
-        return reply.code(400).send({
-          error: ready.reason,
-          hint: ready.hint,
-        });
-      }
-      const swapped = rooms.swapSeatToLocalAgent(room.code, seatId, {
-        displayName,
-        cli,
-        modelId,
-      });
-      if (!swapped.ok) {
-        return reply.code(409).send({ error: swapped.reason });
-      }
-      persistActiveRoom();
-      const seats = activeMatch.state.seats.map((seat) =>
-        seat.seatId === seatId
-          ? { ...seat, controller: "stub_agent" as const }
-          : seat,
-      );
-      activeMatch = {
-        ...activeMatch,
-        state: { ...activeMatch.state, seats },
-        displayNames: {
-          ...activeMatch.displayNames,
-          [seatId]: displayName,
-        },
-        seatAgents: {
-          ...activeMatch.seatAgents,
-          [seatId]: { cli, modelId },
-        },
-      };
-      store.commitCommand(activeMatch.state.matchId, activeMatch.state, []);
-      presence.clearSeat(seatId);
-      try {
-        activeMatch = await advanceAgentSeats(activeMatch, runtimeOptions());
-      } catch (error) {
-        const matchId = activeMatch.state.matchId;
-        store.technicalAbort(matchId, abortReasonFrom(error));
-        revokeAllRemoteCredentials(room.code);
-        presence.clear();
-        activeMatch = null;
-        activeRoomCode = null;
-        return reply.code(502).send({
-          error: abortReasonFrom(error),
-          aborted: true,
-          matchId,
-        });
-      }
-      return reply.send({
-        action: "swap_agent",
-        ...humanFacingPayload(activeMatch, undefined, "1"),
-        absences: presence.projectAll(now()),
-        seats: publicSeats(swapped.room),
       });
     }
 
@@ -1318,23 +1209,6 @@ export async function createApp(options: CreateAppOptions) {
       rooms.revokeSeatCredential(room.code, seatId);
       persistActiveRoom();
       presence.clearSeat(seatId);
-      if (activeMatch.state.status === "in_progress") {
-        try {
-          activeMatch = await advanceAgentSeats(activeMatch, runtimeOptions());
-        } catch (error) {
-          const matchId = activeMatch.state.matchId;
-          store.technicalAbort(matchId, abortReasonFrom(error));
-          revokeAllRemoteCredentials(room.code);
-          presence.clear();
-          activeMatch = null;
-          activeRoomCode = null;
-          return reply.code(502).send({
-            error: abortReasonFrom(error),
-            aborted: true,
-            matchId,
-          });
-        }
-      }
       return reply.send({
         action: "force_eliminate",
         ...humanFacingPayload(activeMatch, undefined, "1"),
@@ -1367,8 +1241,6 @@ export async function createApp(options: CreateAppOptions) {
               seatId: holder.seatId,
               kind: holder.kind,
               displayName: holder.displayName,
-              cli: holder.cli,
-              modelId: holder.modelId,
             }
           : null,
         seats: publicSeats(room),
@@ -1381,8 +1253,13 @@ export async function createApp(options: CreateAppOptions) {
     async (request, reply) => {
       const room = rooms.getByCode(request.params.code);
       if (!room) {
+        if (roomCodeThrottle.blocked(request.ip)) {
+          return reply.code(429).send({ error: "too_many_attempts" });
+        }
+        roomCodeThrottle.recordFail(request.ip);
         return reply.code(404).send({ error: "room_not_found" });
       }
+      roomCodeThrottle.clear(request.ip);
       const state = options.hosting?.getState();
       const port = state?.port ?? 0;
       const snap = lanSnapshot(port, room.code);
@@ -1390,178 +1267,7 @@ export async function createApp(options: CreateAppOptions) {
     },
   );
 
-  app.patch<{
-    Params: { code: string };
-    Body: { selectedHost?: string };
-  }>("/api/rooms/:code", async (request, reply) => {
-    const room = rooms.getByCode(request.params.code);
-    if (!room) {
-      return reply.code(404).send({ error: "room_not_found" });
-    }
-    const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
-    const addresses = candidates.map((c) => c.address);
-    const nextHost = request.body?.selectedHost;
-    if (!nextHost || !addresses.includes(nextHost)) {
-      return reply.code(400).send({ error: "invalid_lan_host" });
-    }
-    selectedLanHost = nextHost;
-    const port = options.hosting?.getState().port ?? 0;
-    const snap = lanSnapshot(port, room.code);
-    return reply.send(snap);
-  });
-
-  app.get("/api/matches", async (_request, reply) => {
-    return reply.send({ matches: store.listRuns() });
-  });
-
-  app.get("/api/matches/current/agent-phase", async (_request, reply) => {
-    return reply.send({
-      phase: agentPhase,
-      seatId: agentSeatId,
-      thinkingSeatIds,
-    });
-  });
-
-  app.get<{ Params: { matchId: string } }>(
-    "/api/matches/:matchId/events",
-    async (request, reply) => {
-      const run = store.getRun(request.params.matchId);
-      if (!run) {
-        return reply.code(404).send({ error: "match_not_found" });
-      }
-      return reply.send({
-        matchId: run.matchId,
-        runStatus: run.runStatus,
-        winnerSeatId: run.winnerSeatId,
-        events: store.listEvents(run.matchId),
-      });
-    },
-  );
-
-  app.post<{ Params: { matchId: string } }>(
-    "/api/matches/:matchId/resume",
-    async (request, reply) => {
-      const source = store.getRun(request.params.matchId);
-      if (!source) {
-        return reply.code(404).send({ error: "match_not_found" });
-      }
-      if (
-        source.runStatus !== "technical_abort"
-      ) {
-        return reply.code(409).send({ error: "match_not_resumable" });
-      }
-
-      const existing = store.findResumableRun();
-      if (existing) {
-        store.userAbort(existing.matchId);
-      }
-
-      const resumed = store.createResumeRun(
-        source.matchId,
-        `match-${Date.now()}`,
-      );
-      activeMatch = activeMatchFromRun(resumed);
-      agentPhase = "thinking";
-      agentSeatId = null;
-      thinkingSeatIds = pendingAgentSeatIds(activeMatch);
-      try {
-        activeMatch = await advanceAgentSeats(activeMatch, runtimeOptions());
-        agentPhase = "idle";
-        agentSeatId = null;
-        thinkingSeatIds = [];
-      } catch (error) {
-        agentPhase = "failed";
-        thinkingSeatIds = [];
-        store.technicalAbort(activeMatch.state.matchId, abortReasonFrom(error));
-        activeMatch = null;
-        return reply.code(502).send({
-          error: abortReasonFrom(error),
-          aborted: true,
-          matchId: resumed.matchId,
-        });
-      }
-      return reply.send({
-        ...humanFacingPayload(activeMatch),
-        resumedFromMatchId: source.matchId,
-      });
-    },
-  );
-
-  app.post("/api/matches", async (request, reply) => {
-    const body =
-      request.body === undefined || request.body === null
-        ? {
-            seats: [
-              {
-                seatId: "seat-human",
-                controller: "local_human",
-                displayName: "你",
-              },
-              {
-                seatId: "seat-stub",
-                controller: "stub_agent",
-                displayName: "灰狐",
-                cli: "stub",
-                modelId: "stub/placeholder",
-              },
-            ],
-          }
-        : request.body;
-
-    const parsed = parseMatchSetup(body);
-    if (!parsed.ok) {
-      return reply.code(400).send({ error: parsed.reason });
-    }
-
-    const report = await runProbe();
-    const gate = recheckSetupSeats(parsed.setup.seats, report);
-    if (!gate.ok) {
-      return reply.code(400).send({
-        error: gate.reason,
-        hint: gate.hint,
-      });
-    }
-
-    try {
-      agentPhase = "thinking";
-      agentSeatId = null;
-      thinkingSeatIds = [];
-      activeMatch = await startMatch({
-        seats: parsed.setup.seats,
-        ...runtimeOptions(),
-      });
-      activeRoomCode = null;
-      agentPhase = "idle";
-      agentSeatId = null;
-      thinkingSeatIds = [];
-    } catch (error) {
-      agentPhase = "failed";
-      thinkingSeatIds = [];
-      const startedId = store.findResumableRun()?.matchId;
-      if (startedId) {
-        store.technicalAbort(startedId, abortReasonFrom(error));
-      }
-      activeMatch = null;
-      activeRoomCode = null;
-      return reply.code(502).send({
-        error: abortReasonFrom(error),
-        aborted: Boolean(startedId),
-        matchId: startedId ?? null,
-      });
-    }
-    return reply.send(humanFacingPayload(activeMatch));
-  });
-
   app.get("/api/matches/current", async (request, reply) => {
-    if (!activeMatch && recoveryStatus !== "failed") {
-      // MVP local resume only — never silently revive a LAN run while recovery failed.
-      if (recoveryStatus === "none" && !activeRoomCode) {
-        const again = store.findResumableRun();
-        if (again) {
-          activeMatch = activeMatchFromRun(again);
-        }
-      }
-    }
     if (!activeMatch) {
       return reply.code(404).send({ error: "no_active_match" });
     }
@@ -1576,21 +1282,6 @@ export async function createApp(options: CreateAppOptions) {
     const blockedByAbsence =
       deciding !== null &&
       presence.blocksAdvancement(deciding, true);
-
-    // Still try to advance agents when the deciding seat is not an absent remote.
-    if (!blockedByAbsence) {
-      const advanced = await advanceActiveOrAbort(activeMatch);
-      if (!advanced.ok) {
-        activeMatch = null;
-        activeRoomCode = null;
-        return reply.code(502).send({
-          error: advanced.error,
-          aborted: true,
-          matchId: advanced.matchId,
-        });
-      }
-      activeMatch = advanced.match;
-    }
 
     return reply.send({
       ...humanFacingPayload(activeMatch, undefined, seatId),
@@ -1628,19 +1319,11 @@ export async function createApp(options: CreateAppOptions) {
     const matchId = activeMatch.state.matchId;
     let result: Awaited<ReturnType<typeof submitHumanDecision>>;
     try {
-      agentPhase = "thinking";
-      agentSeatId = null;
-      thinkingSeatIds = [];
       result = await submitHumanDecision(activeMatch, body, {
-        ...runtimeOptions(),
+        persistence,
         actingSeatId: seatId,
       });
-      agentPhase = "idle";
-      agentSeatId = null;
-      thinkingSeatIds = [];
     } catch (error) {
-      agentPhase = "failed";
-      thinkingSeatIds = [];
       const run = store.getRun(matchId);
       if (run && run.runStatus === "in_progress") {
         store.technicalAbort(matchId, abortReasonFrom(error));
@@ -1661,7 +1344,8 @@ export async function createApp(options: CreateAppOptions) {
       activeMatch.state.status === "finished" &&
       activeRoomCode
     ) {
-      revokeAllRemoteCredentials(activeRoomCode);
+      // 终局凭证保留到续局等待结束（加入→轮换；离开/处置→作废），
+      // 让客人刷新后仍能认回原座位。
       presence.clear();
     }
     return reply.send({

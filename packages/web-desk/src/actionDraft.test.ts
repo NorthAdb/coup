@@ -5,7 +5,7 @@ import {
   actionDraftToDecision,
   canConfirmActionDraft,
   type ActionDraft,
-} from "./actionDraft.ts";
+} from "./actionDraft.js";
 
 const seats = [
   { seatId: "seat-1", displayName: "你" },

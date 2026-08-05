@@ -1,5 +1,5 @@
 {
-  "name": "@coup/web",
+  "name": "@coup/web-local",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test src/lanRoom.test.ts",
+    "test": "node --experimental-strip-types --test src/agentBusyLabel.test.ts src/busyStage.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

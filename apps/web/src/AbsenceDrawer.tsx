@@ -7,7 +7,6 @@ export type SeatAbsenceView = {
 
 export type AbsenceDispositionAction =
   | "extend_wait"
-  | "swap_agent"
   | "technical_abort"
   | "force_eliminate";
 
@@ -50,7 +49,7 @@ function copyFor(
   }
   return {
     title: `${who} 等待超时`,
-    body: "主机须选择：继续等待 / 换本机 Agent / 技术中止 / 强制揭示淘汰。",
+    body: "主机须选择：继续等待 / 技术中止 / 强制揭示淘汰。",
   };
 }
 
@@ -99,13 +98,6 @@ export function AbsenceDrawer({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => onDisposition(absence.seatId, "swap_agent")}
-                >
-                  换本机 Agent
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
                   onClick={() =>
                     onDisposition(absence.seatId, "technical_abort")
                   }
@@ -140,13 +132,6 @@ export function AbsenceDrawer({
   );
 }
 
-function formatWaitShort(ms: number): string {
-  const totalSec = Math.max(0, Math.ceil(ms / 1000));
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-
 export function absenceSeatStatus(
   absences: SeatAbsenceView[],
   seatId: string,
@@ -154,10 +139,10 @@ export function absenceSeatStatus(
   const absence = absences.find((a) => a.seatId === seatId);
   if (!absence || absence.phase === "present") return null;
   if (absence.phase === "reconnecting") {
-    return `重连中 ${formatWaitShort(absence.remainingMs)}`;
+    return `重连中 ${formatWait(absence.remainingMs)}`;
   }
   if (absence.phase === "absent") {
-    return `已离席 ${formatWaitShort(absence.remainingMs)}`;
+    return `已离席 ${formatWait(absence.remainingMs)}`;
   }
   return "等待超时";
 }

@@ -1,12 +1,11 @@
 import { useState } from "react";
-import { fetchRoom, parseManualJoin, type RoomInvite } from "./lanRoom";
+import { fetchRoom, type RoomInvite } from "./lanRoom";
 
 type JoinRoomPageProps = {
   busy: boolean;
   onBack: () => void;
   onJoined: (room: RoomInvite, origin: string) => void;
   onError: (message: string) => void;
-  initialLink?: string;
   initialCode?: string;
 };
 
@@ -15,29 +14,20 @@ export function JoinRoomPage({
   onBack,
   onJoined,
   onError,
-  initialLink = "",
   initialCode = "",
 }: JoinRoomPageProps) {
-  const [joinLink, setJoinLink] = useState(initialLink);
-  const [address, setAddress] = useState("");
   const [code, setCode] = useState(initialCode);
+  const origin = window.location.origin;
 
   async function submit() {
-    const parsed = parseManualJoin({ joinLink, address, code });
-    if (!parsed.ok) {
-      onError(parsed.reason);
+    const trimmed = code.trim();
+    if (!/^\d{4}$/.test(trimmed)) {
+      onError("请输入 4 位数字房间号");
       return;
     }
     try {
-      // Seat cookies are host-only — claim must happen on the room's Origin.
-      if (parsed.origin !== window.location.origin) {
-        window.location.assign(
-          `${parsed.origin}/join?code=${parsed.code}`,
-        );
-        return;
-      }
-      const room = await fetchRoom(parsed.origin, parsed.code);
-      onJoined(room, parsed.origin);
+      const room = await fetchRoom(origin, trimmed);
+      onJoined(room, origin);
     } catch (err) {
       onError(err instanceof Error ? err.message : "加入失败");
     }
@@ -49,39 +39,24 @@ export function JoinRoomPage({
         ← 返回
       </button>
       <h2>加入</h2>
-      <p className="lede">不能只填房间号。优先用主机发来的完整链接。</p>
+      <p className="lede">输入房主分享的 4 位房间号即可加入。</p>
       <label className="field">
-        加入链接
-        <textarea
-          rows={3}
-          value={joinLink}
+        房间号
+        <input
+          value={code}
           disabled={busy}
-          onChange={(event) => setJoinLink(event.target.value)}
-          placeholder="http://192.168.x.x:8787/join?code=4821"
+          maxLength={4}
+          inputMode="numeric"
+          autoFocus
+          onChange={(event) =>
+            setCode(event.target.value.replace(/\D/g, ""))
+          }
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void submit();
+          }}
+          placeholder="4821"
         />
       </label>
-      <p className="or">或</p>
-      <div className="field-row">
-        <label className="field">
-          主机地址
-          <input
-            value={address}
-            disabled={busy}
-            onChange={(event) => setAddress(event.target.value)}
-            placeholder="192.168.1.42:8787"
-          />
-        </label>
-        <label className="field">
-          房间号
-          <input
-            value={code}
-            disabled={busy}
-            maxLength={4}
-            onChange={(event) => setCode(event.target.value)}
-            placeholder="4821"
-          />
-        </label>
-      </div>
       <button type="button" disabled={busy} onClick={() => void submit()}>
         确认房间
       </button>

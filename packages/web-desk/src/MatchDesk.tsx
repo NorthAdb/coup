@@ -43,12 +43,6 @@ import {
   yourTurnStageBeat,
   type StageBeat,
 } from "./resultBeat";
-import {
-  AbsenceDrawer,
-  absenceSeatStatus,
-  type AbsenceDispositionAction,
-  type SeatAbsenceView,
-} from "./AbsenceDrawer";
 import { RulesPanel } from "./RulesPanel";
 import { seatTintClass, seatTintClassForId } from "./seatColor";
 import { TextPartsView } from "./textParts";
@@ -59,7 +53,7 @@ type DeskOverlay =
   | { kind: "reveal"; character: CharacterId; caption: string }
   | { kind: "draw"; caption: string };
 
-type MatchDeskProps = {
+export type MatchDeskProps = {
   view: SeatView;
   busy: boolean;
   agentPhase: AgentPhase;
@@ -67,15 +61,11 @@ type MatchDeskProps = {
   onSubmitDecision: (decision: LegalDecision, label: string) => void;
   onReturnToSetup: () => void;
   returnLabel?: string;
-  absences?: SeatAbsenceView[];
-  pausedForAbsenceSeatId?: string | null;
-  isHost?: boolean;
-  showResume?: boolean;
-  onAbsenceDisposition?: (
-    seatId: string,
-    action: AbsenceDispositionAction,
-  ) => void;
-  onResumeSeat?: () => void;
+  onRematch?: () => void;
+  /** 座位状态补充文案（如离席/回席）；返回 null 时回落默认状态。 */
+  seatStatusFor?: (seatId: string) => string | null;
+  /** 联机版传入的离席抽屉等旁路 UI；本机版留空。 */
+  absenceSlot?: ReactNode;
 };
 
 function agentPhaseLabel(phase: AgentPhase): string {
@@ -282,12 +272,9 @@ export function MatchDesk({
   onSubmitDecision,
   onReturnToSetup,
   returnLabel = "返回开局",
-  absences = [],
-  pausedForAbsenceSeatId = null,
-  isHost = false,
-  showResume = false,
-  onAbsenceDisposition,
-  onResumeSeat,
+  onRematch,
+  seatStatusFor,
+  absenceSlot,
 }: MatchDeskProps) {
   const [pace, setPace] = useState<DeskPace>(() => loadDeskPace());
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -612,6 +599,16 @@ export function MatchDesk({
           >
             {pace === "fast" ? "快速模式" : "平衡节奏"}
           </button>
+          {finished && onRematch ? (
+            <button
+              type="button"
+              className="quiet-button"
+              disabled={busy}
+              onClick={() => onRematch()}
+            >
+              继续对局
+            </button>
+          ) : null}
           <button
             type="button"
             className="quiet-button"
@@ -698,7 +695,7 @@ export function MatchDesk({
                   <span className="seat-status">
                     {seat.eliminated
                       ? "已淘汰"
-                      : (absenceSeatStatus(absences, seat.seatId) ??
+                      : (seatStatusFor?.(seat.seatId) ??
                         (isCurrent
                           ? "当前回合"
                           : isActive
@@ -1018,25 +1015,7 @@ export function MatchDesk({
         </div>
 
         <aside className="event-rail" aria-label="对局记录">
-          {onAbsenceDisposition || showResume ? (
-            <AbsenceDrawer
-              absences={absences}
-              seatNames={Object.fromEntries(
-                view.publicState.seats.map((seat) => [
-                  seat.seatId,
-                  seat.displayName,
-                ]),
-              )}
-              isHost={isHost}
-              busy={busy}
-              pausedForAbsenceSeatId={pausedForAbsenceSeatId}
-              onDisposition={(seatId, action) =>
-                onAbsenceDisposition?.(seatId, action)
-              }
-              showResume={showResume}
-              onResume={onResumeSeat}
-            />
-          ) : null}
+          {absenceSlot}
           <div className="rail-title">
             <span>对局记录</span>
             <span>{view.projectedHistory.length} 条</span>

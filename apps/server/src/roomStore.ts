@@ -7,7 +7,6 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
-  LobbyAgentCli,
   LobbySeat,
   LobbySeatKind,
   RoomPhase,
@@ -29,29 +28,25 @@ export type RoomStore = {
 
 const ACTIVE_ROW_ID = 1;
 
-function isLobbySeatKind(value: unknown): value is LobbySeatKind {
-  return (
-    value === "local_human" ||
-    value === "open" ||
-    value === "remote_human" ||
-    value === "local_agent" ||
-    value === "closed"
-  );
-}
-
-function isLobbyAgentCli(value: unknown): value is LobbyAgentCli {
-  return value === "opencode" || value === "claude" || value === "stub";
-}
-
 function isRoomPhase(value: unknown): value is RoomPhase {
-  return value === "lobby" || value === "match";
+  return value === "lobby" || value === "match" || value === "rematch";
 }
 
 function parseSeat(raw: unknown): LobbySeat | null {
   if (!raw || typeof raw !== "object") return null;
   const seat = raw as Record<string, unknown>;
   if (typeof seat.seatId !== "string") return null;
-  if (!isLobbySeatKind(seat.kind)) return null;
+  const kindValue: unknown = seat.kind;
+  if (
+    kindValue !== "local_human" &&
+    kindValue !== "open" &&
+    kindValue !== "remote_human" &&
+    // 旧库可能残留 local_agent 座位；解析时容忍但降级为关闭。
+    kindValue !== "local_agent" &&
+    kindValue !== "closed"
+  ) {
+    return null;
+  }
   if (seat.displayName !== null && typeof seat.displayName !== "string") {
     return null;
   }
@@ -61,15 +56,25 @@ function parseSeat(raw: unknown): LobbySeat | null {
   ) {
     return null;
   }
-  if (seat.cli !== null && !isLobbyAgentCli(seat.cli)) return null;
-  if (seat.modelId !== null && typeof seat.modelId !== "string") return null;
+  const rematchValue: unknown = seat.rematchStatus;
+  if (
+    rematchValue !== null &&
+    rematchValue !== undefined &&
+    rematchValue !== "awaiting" &&
+    rematchValue !== "confirmed" &&
+    rematchValue !== "left"
+  ) {
+    return null;
+  }
   return {
     seatId: seat.seatId,
-    kind: seat.kind,
+    kind: kindValue === "local_agent" ? "closed" : (kindValue as LobbySeatKind),
     displayName: seat.displayName,
     credentialHash: seat.credentialHash,
-    cli: seat.cli,
-    modelId: seat.modelId,
+    rematchStatus:
+      rematchValue === undefined || rematchValue === null
+        ? null
+        : rematchValue,
   };
 }
 

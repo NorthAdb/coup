@@ -4,16 +4,15 @@ import { fileURLToPath } from "node:url";
 import { startServer } from "./startServer.js";
 
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
-const webRoot = path.resolve(serverDir, "../../web/dist");
+const webRoot = path.resolve(serverDir, "../../web-local/dist");
 const dbPath =
   process.env.COUP_DB_PATH ?? path.join(homedir(), ".coup", "coup.sqlite");
 
 const started = await startServer({
   webRoot,
   openBrowser: process.env.COUP_OPEN_BROWSER !== "0",
-  dbPath,
-  bindMode: process.env.COUP_BIND_MODE === "host" ? "host" : "local",
   port: process.env.COUP_PORT ? Number(process.env.COUP_PORT) : undefined,
+  dbPath,
 });
 
 console.log(`COUP_READY ${started.url}`);

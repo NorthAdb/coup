@@ -1,5 +1,4 @@
 type HomeEntryProps = {
-  onLocal: () => void;
   onCreateRoom: () => void;
   onJoinRoom: () => void;
   busy: boolean;
@@ -8,7 +7,6 @@ type HomeEntryProps = {
 };
 
 export function HomeEntry({
-  onLocal,
   onCreateRoom,
   onJoinRoom,
   busy,
@@ -18,7 +16,7 @@ export function HomeEntry({
   return (
     <div className="home-b" aria-label="入口">
       <div className="b-hero">
-        <p className="eyebrow">局域网主机</p>
+        <p className="eyebrow">互联网房间</p>
         <h1>创建房间</h1>
         {recoveryFailed ? (
           <>
@@ -35,7 +33,7 @@ export function HomeEntry({
         ) : (
           <>
             <p>
-              你做权威主机。分享 4 位房间号或加入链接；座位配置与开局在后续步骤完成。
+              你创建房间后获得 4 位房间号，把它发给朋友；座位配置与开局在后续步骤完成。
             </p>
             <button
               type="button"
@@ -56,16 +54,7 @@ export function HomeEntry({
           onClick={() => onJoinRoom()}
         >
           <strong>加入房间</strong>
-          <span>粘贴链接，或地址 + 房间号</span>
-        </button>
-        <button
-          type="button"
-          className="side-card ghost"
-          disabled={busy}
-          onClick={() => onLocal()}
-        >
-          <strong>本机对战</strong>
-          <span>仅 loopback · 现有开局页</span>
+          <span>输入房主分享的 4 位房间号</span>
         </button>
       </aside>
     </div>

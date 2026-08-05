@@ -33,48 +33,42 @@ function sampleLobbyRoom(): RoomRecord {
         kind: "local_human",
         displayName: "你",
         credentialHash: "host-hash",
-        cli: null,
-        modelId: null,
+        rematchStatus: null,
       },
       {
         seatId: "2",
         kind: "remote_human",
         displayName: "客人甲",
         credentialHash: "guest-hash",
-        cli: null,
-        modelId: null,
+        rematchStatus: null,
       },
       {
         seatId: "3",
-        kind: "local_agent",
-        displayName: "灰狐",
+        kind: "closed",
+        displayName: null,
         credentialHash: null,
-        cli: "stub",
-        modelId: null,
+        rematchStatus: null,
       },
       {
         seatId: "4",
         kind: "open",
         displayName: null,
         credentialHash: null,
-        cli: null,
-        modelId: null,
+        rematchStatus: null,
       },
       {
         seatId: "5",
         kind: "closed",
         displayName: null,
         credentialHash: null,
-        cli: null,
-        modelId: null,
+        rematchStatus: null,
       },
       {
         seatId: "6",
         kind: "open",
         displayName: null,
         credentialHash: null,
-        cli: null,
-        modelId: null,
+        rematchStatus: null,
       },
     ],
   };
@@ -133,6 +127,46 @@ describe("RoomStore", () => {
     assert.equal(loaded.ok, false);
     if (loaded.ok) throw new Error("expected failure");
     assert.equal(loaded.reason, "corrupt");
+    store.close();
+  });
+
+  it("degrades legacy local_agent seats to closed and drops cli/modelId", async () => {
+    const dbPath = await tempDbPath();
+    const store = openRoomStore(dbPath);
+    store.debugOverwritePayload(
+      JSON.stringify({
+        code: "1111",
+        phase: "lobby",
+        createdAt: 1_700_000_000_000,
+        matchId: null,
+        seats: [
+          {
+            seatId: "1",
+            kind: "local_human",
+            displayName: "你",
+            credentialHash: null,
+            cli: null,
+            modelId: null,
+          },
+          {
+            seatId: "2",
+            kind: "local_agent",
+            displayName: "灰狐",
+            credentialHash: null,
+            cli: "stub",
+            modelId: "stub/placeholder",
+          },
+        ],
+      }),
+    );
+    const loaded = store.loadActiveRoom();
+    assert.equal(loaded.ok, true);
+    if (!loaded.ok || !loaded.room) throw new Error("expected room");
+    assert.equal(loaded.room.seats[1]?.kind, "closed");
+    assert.deepEqual(
+      Object.keys(loaded.room.seats[1] ?? {}).sort(),
+      ["credentialHash", "displayName", "kind", "rematchStatus", "seatId"].sort(),
+    );
     store.close();
   });
 });

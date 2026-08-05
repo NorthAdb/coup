@@ -1,20 +1,19 @@
 /**
- * In-memory room registry for LAN lobby.
- * Persistence across host restart is handled by RoomStore (ticket 14).
+ * In-memory room registry for the single internet room.
+ * Persistence across host restart is handled by RoomStore.
  */
 
-import { allocateRoomCode, buildJoinUrl, isValidRoomCode } from "./roomInvite.js";
+import {
+  allocateRoomCode,
+  buildJoinUrl,
+  isValidRoomCode,
+} from "./roomInvite.js";
 
-export type RoomPhase = "lobby" | "match";
+export type RoomPhase = "lobby" | "match" | "rematch";
 
-export type LobbySeatKind =
-  | "local_human"
-  | "open"
-  | "remote_human"
-  | "local_agent"
-  | "closed";
+export type LobbySeatKind = "local_human" | "open" | "remote_human" | "closed";
 
-export type LobbyAgentCli = "opencode" | "claude" | "stub";
+export type RematchSeatStatus = "awaiting" | "confirmed" | "left";
 
 export type LobbySeat = {
   seatId: string;
@@ -22,8 +21,8 @@ export type LobbySeat = {
   displayName: string | null;
   /** SHA-256 hex of seat credential; never exposed on the wire. */
   credentialHash: string | null;
-  cli: LobbyAgentCli | null;
-  modelId: string | null;
+  /** 续局等待中的确认状态；null 表示不在续局等待。 */
+  rematchStatus: RematchSeatStatus | null;
 };
 
 export type RoomRecord = {
@@ -38,19 +37,10 @@ export type PublicLobbySeat = {
   seatId: string;
   kind: LobbySeatKind;
   displayName: string | null;
-  cli: LobbyAgentCli | null;
-  modelId: string | null;
+  rematchStatus: RematchSeatStatus | null;
 };
 
-export type ConfigureSeatInput =
-  | { kind: "open" }
-  | { kind: "closed" }
-  | {
-      kind: "local_agent";
-      displayName: string;
-      cli: LobbyAgentCli;
-      modelId: string | null;
-    };
+export type ConfigureSeatInput = { kind: "open" } | { kind: "closed" };
 
 export type RoomRegistry = {
   create(): RoomRecord;
@@ -100,6 +90,32 @@ export type RoomRegistry = {
   ):
     | { ok: true; room: RoomRecord }
     | { ok: false; reason: "room_not_found" | "room_not_lobby" };
+  /** 终局后进入续局等待：所有远程座位待确认，凭证保留。 */
+  enterRematch(
+    code: string,
+  ):
+    | { ok: true; room: RoomRecord }
+    | { ok: false; reason: "room_not_found" | "room_not_match" };
+  /** 客人确认加入续局；凭证轮换由调用方完成。 */
+  confirmRematchSeat(
+    code: string,
+    seatId: string,
+  ):
+    | { ok: true; seat: LobbySeat; room: RoomRecord }
+    | {
+        ok: false;
+        reason:
+          | "room_not_found"
+          | "seat_not_found"
+          | "seat_not_awaiting";
+      };
+  /** 客人离开续局：座位转开放占座，作废凭证。 */
+  declineRematchSeat(
+    code: string,
+    seatId: string,
+  ):
+    | { ok: true; seat: LobbySeat; room: RoomRecord }
+    | { ok: false; reason: "room_not_found" | "seat_not_found" };
   rotateSeatCredential(
     code: string,
     seatId: string,
@@ -116,24 +132,6 @@ export type RoomRegistry = {
   ):
     | { ok: true; seat: LobbySeat; room: RoomRecord }
     | { ok: false; reason: "room_not_found" | "seat_not_found" };
-  swapSeatToLocalAgent(
-    code: string,
-    seatId: string,
-    input: {
-      displayName: string;
-      cli: LobbyAgentCli;
-      modelId: string | null;
-    },
-  ):
-    | { ok: true; seat: LobbySeat; room: RoomRecord }
-    | {
-        ok: false;
-        reason:
-          | "room_not_found"
-          | "seat_not_found"
-          | "seat_not_remote_human"
-          | "room_not_match";
-      };
 };
 
 function defaultSeats(): LobbySeat[] {
@@ -143,8 +141,7 @@ function defaultSeats(): LobbySeat[] {
       kind: "local_human",
       displayName: "你",
       credentialHash: null,
-      cli: null,
-      modelId: null,
+      rematchStatus: null,
     },
   ];
   for (let n = 2; n <= 6; n += 1) {
@@ -153,20 +150,18 @@ function defaultSeats(): LobbySeat[] {
       kind: "open",
       displayName: null,
       credentialHash: null,
-      cli: null,
-      modelId: null,
+      rematchStatus: null,
     });
   }
   return seats;
 }
 
 export function publicSeats(room: RoomRecord): PublicLobbySeat[] {
-  return room.seats.map(({ seatId, kind, displayName, cli, modelId }) => ({
+  return room.seats.map(({ seatId, kind, displayName, rematchStatus }) => ({
     seatId,
     kind,
     displayName,
-    cli,
-    modelId,
+    rematchStatus,
   }));
 }
 
@@ -209,8 +204,8 @@ export function createRoomRegistry(): RoomRegistry {
       seat.kind = "remote_human";
       seat.displayName = input.displayName;
       seat.credentialHash = input.credentialHash;
-      seat.cli = null;
-      seat.modelId = null;
+      // 续局等待中占下开放座位即视为已确认加入。
+      seat.rematchStatus = room.phase === "rematch" ? "confirmed" : null;
       return { ok: true, seat, room };
     },
     renameSeat(code, seatId, displayName) {
@@ -234,7 +229,7 @@ export function createRoomRegistry(): RoomRegistry {
     configureSeat(code, seatId, input) {
       const room = rooms.get(code);
       if (!room) return { ok: false, reason: "room_not_found" };
-      if (room.phase !== "lobby") {
+      if (room.phase !== "lobby" && room.phase !== "rematch") {
         return { ok: false, reason: "room_not_lobby" };
       }
       const seat = room.seats.find((s) => s.seatId === seatId);
@@ -246,32 +241,65 @@ export function createRoomRegistry(): RoomRegistry {
         seat.kind = "open";
         seat.displayName = null;
         seat.credentialHash = null;
-        seat.cli = null;
-        seat.modelId = null;
-      } else if (input.kind === "closed") {
+      } else {
         seat.kind = "closed";
         seat.displayName = null;
         seat.credentialHash = null;
-        seat.cli = null;
-        seat.modelId = null;
-      } else {
-        seat.kind = "local_agent";
-        seat.displayName = input.displayName;
-        seat.credentialHash = null;
-        seat.cli = input.cli;
-        seat.modelId = input.modelId;
       }
+      seat.rematchStatus = null;
       return { ok: true, seat, room };
     },
     beginMatch(code, matchId) {
       const room = rooms.get(code);
       if (!room) return { ok: false, reason: "room_not_found" };
-      if (room.phase !== "lobby") {
+      if (
+        room.phase !== "lobby" &&
+        room.phase !== "match" &&
+        room.phase !== "rematch"
+      ) {
         return { ok: false, reason: "room_not_lobby" };
       }
       room.phase = "match";
       room.matchId = matchId;
+      for (const seat of room.seats) {
+        seat.rematchStatus = null;
+      }
       return { ok: true, room };
+    },
+    enterRematch(code) {
+      const room = rooms.get(code);
+      if (!room) return { ok: false, reason: "room_not_found" };
+      if (room.phase !== "match") {
+        return { ok: false, reason: "room_not_match" };
+      }
+      room.phase = "rematch";
+      for (const seat of room.seats) {
+        seat.rematchStatus =
+          seat.kind === "remote_human" ? "awaiting" : null;
+      }
+      return { ok: true, room };
+    },
+    confirmRematchSeat(code, seatId) {
+      const room = rooms.get(code);
+      if (!room) return { ok: false, reason: "room_not_found" };
+      const seat = room.seats.find((s) => s.seatId === seatId);
+      if (!seat) return { ok: false, reason: "seat_not_found" };
+      if (seat.kind !== "remote_human" || seat.rematchStatus !== "awaiting") {
+        return { ok: false, reason: "seat_not_awaiting" };
+      }
+      seat.rematchStatus = "confirmed";
+      return { ok: true, seat, room };
+    },
+    declineRematchSeat(code, seatId) {
+      const room = rooms.get(code);
+      if (!room) return { ok: false, reason: "room_not_found" };
+      const seat = room.seats.find((s) => s.seatId === seatId);
+      if (!seat) return { ok: false, reason: "seat_not_found" };
+      seat.kind = "open";
+      seat.displayName = null;
+      seat.credentialHash = null;
+      seat.rematchStatus = "left";
+      return { ok: true, seat, room };
     },
     rotateSeatCredential(code, seatId, credentialHash) {
       const room = rooms.get(code);
@@ -290,24 +318,6 @@ export function createRoomRegistry(): RoomRegistry {
       const seat = room.seats.find((s) => s.seatId === seatId);
       if (!seat) return { ok: false, reason: "seat_not_found" };
       seat.credentialHash = null;
-      return { ok: true, seat, room };
-    },
-    swapSeatToLocalAgent(code, seatId, input) {
-      const room = rooms.get(code);
-      if (!room) return { ok: false, reason: "room_not_found" };
-      if (room.phase !== "match") {
-        return { ok: false, reason: "room_not_match" };
-      }
-      const seat = room.seats.find((s) => s.seatId === seatId);
-      if (!seat) return { ok: false, reason: "seat_not_found" };
-      if (seat.kind !== "remote_human") {
-        return { ok: false, reason: "seat_not_remote_human" };
-      }
-      seat.kind = "local_agent";
-      seat.displayName = input.displayName;
-      seat.credentialHash = null;
-      seat.cli = input.cli;
-      seat.modelId = input.modelId;
       return { ok: true, seat, room };
     },
   };

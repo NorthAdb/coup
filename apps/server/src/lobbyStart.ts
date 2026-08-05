@@ -5,25 +5,37 @@ export type LobbyStartGateFailure =
   | "open_seats_remain"
   | "too_few_seats"
   | "too_many_seats"
-  | "room_not_lobby";
+  | "room_not_lobby"
+  | "seats_not_confirmed";
 
 export function effectiveLobbySeats(room: RoomRecord): LobbySeat[] {
   return room.seats.filter(
     (seat) =>
-      seat.kind === "local_human" ||
-      seat.kind === "remote_human" ||
-      seat.kind === "local_agent",
+      seat.kind === "local_human" || seat.kind === "remote_human",
   );
 }
 
 export function evaluateLobbyStartGates(
   room: RoomRecord,
+  options?: { allowMatchPhase?: boolean; allowRematchPhase?: boolean },
 ): { ok: true } | { ok: false; reason: LobbyStartGateFailure } {
-  if (room.phase !== "lobby") {
+  const phaseOk =
+    room.phase === "lobby" ||
+    (options?.allowMatchPhase === true && room.phase === "match") ||
+    (options?.allowRematchPhase === true && room.phase === "rematch");
+  if (!phaseOk) {
     return { ok: false, reason: "room_not_lobby" };
   }
   if (room.seats.some((seat) => seat.kind === "open")) {
     return { ok: false, reason: "open_seats_remain" };
+  }
+  if (room.phase === "rematch") {
+    const awaiting = room.seats.some(
+      (seat) => seat.rematchStatus === "awaiting",
+    );
+    if (awaiting) {
+      return { ok: false, reason: "seats_not_confirmed" };
+    }
   }
   const effective = effectiveLobbySeats(room);
   if (effective.length < 2) {
@@ -38,27 +50,9 @@ export function evaluateLobbyStartGates(
 export function lobbySeatsToMatchSetup(
   room: RoomRecord,
 ): MatchSetupSeatInput[] {
-  return effectiveLobbySeats(room).map((seat) => {
-    if (seat.kind === "local_agent") {
-      return {
-        seatId: seat.seatId,
-        controller: "stub_agent" as const,
-        displayName: seat.displayName ?? "Agent",
-        cli: seat.cli ?? "stub",
-        modelId: seat.modelId,
-      };
-    }
-    if (seat.kind === "remote_human") {
-      return {
-        seatId: seat.seatId,
-        controller: "remote_human" as const,
-        displayName: seat.displayName ?? "客人",
-      };
-    }
-    return {
-      seatId: seat.seatId,
-      controller: "local_human" as const,
-      displayName: seat.displayName ?? "你",
-    };
-  });
+  return effectiveLobbySeats(room).map((seat) => ({
+    seatId: seat.seatId,
+    controller: seat.kind === "remote_human" ? "remote_human" : "local_human",
+    displayName: seat.displayName ?? (seat.kind === "local_human" ? "你" : "客人"),
+  }));
 }

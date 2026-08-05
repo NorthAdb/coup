@@ -5,7 +5,7 @@ import {
   keepCountNeeded,
   returnCardIdsFromKeep,
   toggleKeepSelection,
-} from "./exchangeKeep.ts";
+} from "./exchangeKeep.js";
 
 describe("keepCountNeeded", () => {
   it("keeps two from a four-card exchange hand", () => {

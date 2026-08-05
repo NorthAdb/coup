@@ -2,10 +2,10 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { DomainEvent, MatchState } from "@coup/domain";
+import type { CliKind } from "./matchSetup.js";
 
-/** 兼容旧库 seat_agents_json 列；联机版恒为空对象�?*/
-export type LegacySeatAgent = {
-  cli: string;
+export type SeatAgentConfig = {
+  cli: CliKind;
   modelId: string | null;
 };
 
@@ -28,7 +28,7 @@ export type MatchRunRecord = {
   resumedFromMatchId: string | null;
   humanSeatId: string;
   displayNames: Record<string, string>;
-  seatAgents: Record<string, LegacySeatAgent>;
+  seatAgents: Record<string, SeatAgentConfig>;
   state: MatchState;
   events: DomainEvent[];
 };
@@ -37,7 +37,7 @@ export type CreateRunInput = {
   matchId: string;
   humanSeatId: string;
   displayNames: Record<string, string>;
-  seatAgents: Record<string, LegacySeatAgent>;
+  seatAgents: Record<string, SeatAgentConfig>;
   state: MatchState;
   events: DomainEvent[];
   resumedFromMatchId?: string | null;
@@ -191,7 +191,7 @@ export function openMatchStore(dbPath: string): MatchStore {
     resumedFromMatchId: string | null;
     humanSeatId: string;
     displayNames: Record<string, string>;
-    seatAgents: Record<string, LegacySeatAgent>;
+    seatAgents: Record<string, SeatAgentConfig>;
     state: MatchState;
   }) {
     db.prepare(

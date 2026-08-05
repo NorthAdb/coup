@@ -1,12 +1,12 @@
 import type { SeatView } from "@coup/protocol";
-import type { DeskPace } from "./deskPacing.ts";
+import type { DeskPace } from "./deskPacing.js";
 import {
   eventParts,
   joinTextParts,
   seatCalloutFromEvent,
   type SeatCallout,
   type TextPart,
-} from "./matchCopy.ts";
+} from "./matchCopy.js";
 
 export type BeatWeight = "heavy" | "light" | "skip";
 

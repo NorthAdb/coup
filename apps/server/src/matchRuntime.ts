@@ -1,50 +1,17 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import type {
-  DomainCommand,
-  DomainEvent,
-  MatchState,
-} from "@coup/domain";
+import type { DomainCommand, DomainEvent, MatchState } from "@coup/domain";
 import {
-  activeDecidingSeatId,
   applyCommand,
   createMatch,
-  legalDecisionsFor,
   projectForSeat,
 } from "@coup/domain";
 import type { LegalDecision, SeatDecision, SeatView } from "@coup/protocol";
-import {
-  decideWithBoundedRetry,
-  type AgentDecisionPhase,
-} from "./agentDecision.js";
-import {
-  resolveDecisionRationale,
-  type DecisionRationaleEntry,
-} from "./decisionRationale.js";
-import {
-  createAgentRuntime,
-  isLegalDecisionListed,
-  type AgentRuntime,
-} from "./agents/index.js";
-import {
-  defaultAgentDisplayName,
-  type MatchSetupSeatInput,
-} from "./matchSetup.js";
-import type { SeatAgentConfig } from "./matchStore.js";
-
-export type { SeatAgentConfig };
+import type { MatchSetupSeatInput } from "./matchSetup.js";
 
 export type ActiveMatch = {
   state: MatchState;
   events: DomainEvent[];
   humanSeatId: string;
   displayNames: Record<string, string>;
-  seatAgents: Record<string, SeatAgentConfig>;
-  /** Per-seat isolated cwd for CLI sessions. */
-  seatWorkspaces: Record<string, string>;
-  /** In-match-only latest rationale per seat; never persisted. */
-  decisionRationales: Record<string, DecisionRationaleEntry>;
 };
 
 export type MatchPersistence = {
@@ -53,33 +20,8 @@ export type MatchPersistence = {
 };
 
 export type MatchRuntimeOptions = {
-  agentRuntime?: AgentRuntime;
   persistence?: MatchPersistence;
-  /** Optional seatId identifies which Agent seat is currently blocking. */
-  onAgentPhase?: (phase: AgentDecisionPhase, seatId?: string) => void;
-  /** Fired at advance start and after each agent commit with the live match. */
-  onMatchAdvanced?: (match: ActiveMatch) => void;
 };
-
-/** Agent seats that still owe a decision in the current response window. */
-export function pendingAgentSeatIds(match: ActiveMatch): string[] {
-  const { state } = match;
-  if (state.status !== "in_progress") return [];
-  const isAgent = (seatId: string) =>
-    state.seats.find((seat) => seat.seatId === seatId)?.controller ===
-    "stub_agent";
-
-  switch (state.phase) {
-    case "await_action_challenge":
-    case "await_block":
-    case "await_block_challenge":
-      return state.responseQueue.filter(isAgent);
-    default: {
-      const active = activeDecidingSeatId(state);
-      return active && isAgent(active) ? [active] : [];
-    }
-  }
-}
 
 function displayNameFor(match: ActiveMatch, seatId: string): string {
   return match.displayNames[seatId] ?? seatId;
@@ -105,23 +47,17 @@ export function toSeatView(
       currentSeatId: projection.currentSeatId,
       activeSeatId: projection.activeSeatId,
       pendingAction: projection.pendingAction,
-      seats: projection.seats.map((seat) => {
-        const agent = match.seatAgents[seat.seatId];
-        const isHuman =
-          seat.controller === "local_human" ||
-          seat.controller === "remote_human";
-        return {
-          seatId: seat.seatId,
-          controller: seat.controller,
-          displayName: displayNameFor(match, seat.seatId),
-          coins: seat.coins,
-          eliminated: seat.eliminated,
-          revealedCharacters: seat.revealedCharacters,
-          influenceCount: seat.influenceCount,
-          cli: isHuman ? null : (agent?.cli ?? "stub"),
-          modelId: isHuman ? null : (agent?.modelId ?? null),
-        };
-      }),
+      seats: projection.seats.map((seat) => ({
+        seatId: seat.seatId,
+        controller: seat.controller,
+        displayName: displayNameFor(match, seat.seatId),
+        coins: seat.coins,
+        eliminated: seat.eliminated,
+        revealedCharacters: seat.revealedCharacters,
+        influenceCount: seat.influenceCount,
+        cli: null,
+        modelId: null,
+      })),
     },
     privateState: {
       hiddenCharacters: projection.hiddenCharacters,
@@ -192,57 +128,6 @@ function decisionToCommand(
   }
 }
 
-function agentConfigFor(
-  match: ActiveMatch,
-  seatId: string,
-): SeatAgentConfig {
-  return match.seatAgents[seatId] ?? { cli: "stub", modelId: null };
-}
-
-/** Stub always picks the first enumerated legal decision. */
-export function pickStubDecision(match: ActiveMatch, seatId: string) {
-  const legal = legalDecisionsFor(match.state, seatId);
-  return legal[0] ?? null;
-}
-
-function applySeatDecision(
-  match: ActiveMatch,
-  seatId: string,
-  decision: LegalDecision,
-  agentRationale?: string | null,
-): ActiveMatch {
-  const result = applyCommand(
-    match.state,
-    decisionToCommand(seatId, decision, match.state.stateVersion),
-  );
-  if (!result.ok) {
-    throw new Error(`agent_illegal_decision`);
-  }
-  const rationale = resolveDecisionRationale(decision, agentRationale, {
-    seatNames: match.displayNames,
-  });
-  return {
-    ...match,
-    state: result.state,
-    events: [...match.events, ...result.events],
-    decisionRationales: {
-      ...match.decisionRationales,
-      [seatId]: rationale,
-    },
-  };
-}
-
-async function ensureSeatWorkspace(
-  match: ActiveMatch,
-  seatId: string,
-): Promise<string> {
-  const existing = match.seatWorkspaces[seatId];
-  if (existing) return existing;
-  const dir = await mkdtemp(path.join(tmpdir(), `coup-${seatId}-`));
-  match.seatWorkspaces[seatId] = dir;
-  return dir;
-}
-
 function commitApplied(
   previous: ActiveMatch,
   next: ActiveMatch,
@@ -253,119 +138,17 @@ function commitApplied(
   return next;
 }
 
-export async function advanceAgentSeats(
-  match: ActiveMatch,
-  options: MatchRuntimeOptions = {},
-): Promise<ActiveMatch> {
-  const runtime = options.agentRuntime ?? createAgentRuntime();
-  let current = match;
-  options.onMatchAdvanced?.(current);
-  for (let guard = 0; guard < 256; guard += 1) {
-    const activeSeatId = activeDecidingSeatId(current.state);
-    if (!activeSeatId) {
-      return current;
-    }
-    const seat = current.state.seats.find(
-      (entry) => entry.seatId === activeSeatId,
-    );
-    if (!seat || seat.controller !== "stub_agent") {
-      return current;
-    }
-
-    const config = agentConfigFor(current, seat.seatId);
-    if (config.cli === "stub") {
-      const decision = pickStubDecision(current, seat.seatId);
-      if (!decision) {
-        return current;
-      }
-      const previous = current;
-      current = commitApplied(
-        previous,
-        applySeatDecision(current, seat.seatId, decision),
-        options.persistence,
-      );
-      options.onMatchAdvanced?.(current);
-      continue;
-    }
-
-    const cwd = await ensureSeatWorkspace(current, seat.seatId);
-    const adapter = runtime.getAdapter(config.cli);
-    options.onAgentPhase?.("thinking", seat.seatId);
-    const seatDecision = await decideWithBoundedRetry({
-      buildView: (requestId) => toSeatView(current, seat.seatId, requestId),
-      decide: async (view, signal) => {
-        const raw = await adapter.decide({
-          view,
-          modelId: config.modelId,
-          cwd,
-          abortSignal: signal.abortSignal,
-          retry: signal.previousErrorCategory
-            ? { previousErrorCategory: signal.previousErrorCategory }
-            : undefined,
-        });
-        options.onAgentPhase?.("validating", seat.seatId);
-        if (raw.protocolVersion !== 1) {
-          throw new Error("agent_unsupported_protocol");
-        }
-        if (raw.requestId !== view.requestId) {
-          throw new Error("agent_request_id_mismatch");
-        }
-        if (raw.stateVersion !== current.state.stateVersion) {
-          throw new Error("agent_version_mismatch");
-        }
-        if (!isLegalDecisionListed(view.legalDecisions, raw.decision)) {
-          throw new Error("agent_decision_not_legal");
-        }
-        return raw;
-      },
-      attemptIndexBase: 1,
-      stateVersion: current.state.stateVersion,
-      seatId: seat.seatId,
-      onPhase: (phase) => options.onAgentPhase?.(phase, seat.seatId),
-    });
-
-    current = commitApplied(
-      current,
-      applySeatDecision(
-        current,
-        seat.seatId,
-        seatDecision.decision,
-        seatDecision.decisionRationale,
-      ),
-      options.persistence,
-    );
-    options.onMatchAdvanced?.(current);
-  }
-  throw new Error("agent_advance_exceeded_guard");
-}
-
 export async function startMatch(
-  options?: {
+  options: {
     matchId?: string;
     seed?: string;
-    seats?: MatchSetupSeatInput[];
+    seats: MatchSetupSeatInput[];
   } & MatchRuntimeOptions,
 ): Promise<ActiveMatch> {
-  const seats =
-    options?.seats ??
-    ([
-      {
-        seatId: "seat-human",
-        controller: "local_human",
-        displayName: "你",
-      },
-      {
-        seatId: "seat-stub",
-        controller: "stub_agent",
-        displayName: defaultAgentDisplayName(0),
-        cli: "stub",
-        modelId: "stub/placeholder",
-      },
-    ] satisfies MatchSetupSeatInput[]);
-
+  const { seats, persistence } = options;
   const created = createMatch({
-    matchId: options?.matchId ?? `match-${Date.now()}`,
-    seed: options?.seed ?? `seed-${Date.now()}`,
+    matchId: options.matchId ?? `match-${Date.now()}`,
+    seed: options.seed ?? `seed-${Date.now()}`,
     seats: seats.map((seat) => ({
       seatId: seat.seatId,
       controller: seat.controller,
@@ -373,15 +156,8 @@ export async function startMatch(
   });
 
   const displayNames: Record<string, string> = {};
-  const seatAgents: Record<string, SeatAgentConfig> = {};
   for (const seat of seats) {
     displayNames[seat.seatId] = seat.displayName;
-    if (seat.controller === "stub_agent") {
-      seatAgents[seat.seatId] = {
-        cli: seat.cli ?? "stub",
-        modelId: seat.modelId ?? null,
-      };
-    }
   }
 
   const humanSeat = seats.find((seat) => seat.controller === "local_human");
@@ -394,25 +170,9 @@ export async function startMatch(
     events: created.events,
     humanSeatId: humanSeat.seatId,
     displayNames,
-    seatAgents,
-    seatWorkspaces: {},
-    decisionRationales: {},
   };
-  options?.persistence?.onCreated(match);
-  return advanceAgentSeats(match, {
-    agentRuntime: options?.agentRuntime,
-    persistence: options?.persistence,
-    onAgentPhase: options?.onAgentPhase,
-  });
-}
-
-/** @deprecated Prefer startMatch; kept for existing two-seat runtime tests. */
-export async function startTwoSeatMatch(options?: {
-  matchId?: string;
-  seed?: string;
-  agentRuntime?: AgentRuntime;
-}): Promise<ActiveMatch> {
-  return startMatch(options);
+  persistence?.onCreated(match);
+  return match;
 }
 
 export async function submitHumanDecision(
@@ -451,26 +211,16 @@ export async function submitHumanDecision(
     return result;
   }
 
-  const rationale = resolveDecisionRationale(
-    decision.decision,
-    null,
-    { seatNames: match.displayNames },
-  );
-  const updated = commitApplied(
-    match,
-    {
-      ...match,
-      state: result.state,
-      events: [...match.events, ...result.events],
-      decisionRationales: {
-        ...match.decisionRationales,
-        [actingSeatId]: rationale,
-      },
-    },
-    options.persistence,
-  );
   return {
     ok: true,
-    match: await advanceAgentSeats(updated, options),
+    match: commitApplied(
+      match,
+      {
+        ...match,
+        state: result.state,
+        events: [...match.events, ...result.events],
+      },
+      options.persistence,
+    ),
   };
 }

@@ -1177,38 +1177,6 @@ select {
   padding-bottom: 8px;
 }
 
-.rematch-prompt {
-  position: fixed;
-  z-index: 40;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: min(360px, calc(100vw - 32px));
-  padding: 20px 22px;
-  border: 1px solid rgba(232, 196, 120, 0.45);
-  background: rgba(24, 19, 12, 0.96);
-  color: #e5ddcf;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-}
-
-.rematch-prompt strong {
-  display: block;
-  font-size: 17px;
-  margin-bottom: 8px;
-}
-
-.rematch-prompt p {
-  margin: 0 0 14px;
-  color: #aab3bf;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.rematch-actions {
-  display: flex;
-  gap: 8px;
-}
-
 .absence-card {
   margin: 0 12px 10px;
   padding: 10px 12px;

@@ -207,7 +207,7 @@ describe("room invite API", () => {
     }
   });
 
-  it("PATCH selected host refreshes join url", async () => {
+  it("throttles wrong room-code lookups per IP after repeated failures", async () => {
     const app = await createApp({
       webRoot: await tempWebRoot(),
       dbPath: await tempDbPath(),
@@ -227,7 +227,6 @@ describe("room invite API", () => {
         Ethernet: [
           { address: "192.168.1.42", family: "IPv4", internal: false },
         ],
-        "Wi-Fi": [{ address: "10.0.0.8", family: "IPv4", internal: false }],
       }),
     });
 
@@ -238,19 +237,36 @@ describe("room invite API", () => {
         url: "/api/rooms",
         headers,
       });
-      const room = created.json() as { code: string };
-      const patched = await app.inject({
-        method: "PATCH",
-        url: `/api/rooms/${room.code}`,
-        payload: { selectedHost: "10.0.0.8" },
+      const code = (created.json() as { code: string }).code;
+
+      for (let i = 0; i < 10; i += 1) {
+        const miss = await app.inject({
+          method: "GET",
+          url: "/api/rooms/0001",
+        });
+        assert.equal(miss.statusCode, 404);
+      }
+      const blocked = await app.inject({
+        method: "GET",
+        url: "/api/rooms/0001",
       });
-      assert.equal(patched.statusCode, 200);
-      const body = patched.json() as { joinUrl: string; selectedHost: string };
-      assert.equal(body.selectedHost, "10.0.0.8");
+      assert.equal(blocked.statusCode, 429);
       assert.equal(
-        body.joinUrl,
-        `http://10.0.0.8:8787/join?code=${room.code}`,
+        (blocked.json() as { error: string }).error,
+        "too_many_attempts",
       );
+
+      // A successful lookup clears the throttle for that IP.
+      const ok = await app.inject({
+        method: "GET",
+        url: `/api/rooms/${code}`,
+      });
+      assert.equal(ok.statusCode, 200);
+      const after = await app.inject({
+        method: "GET",
+        url: "/api/rooms/0001",
+      });
+      assert.equal(after.statusCode, 404);
     } finally {
       await app.close();
     }

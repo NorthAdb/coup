@@ -1,5 +1,5 @@
 import { agentBusyParts, type AgentBusyPhase, type BusySeat } from "./agentBusyLabel.ts";
-import type { TextPart } from "./matchCopy.ts";
+import type { TextPart } from "@coup/web-desk";
 
 export type BusyStage = {
   eyebrow: string;

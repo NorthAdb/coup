@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createApp } from "./createApp.js";
+import { createRoomRegistry } from "./roomRegistry.js";
 
 const tempDirs: string[] = [];
 
@@ -341,6 +342,72 @@ describe("room invite API", () => {
         url: "/api/rooms/0001",
       });
       assert.equal(after.statusCode, 404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects the eleventh concurrent room with a capacity error", async () => {
+    const app = await createApp({
+      webRoot: await tempWebRoot(),
+      dbPath: await tempDbPath(),
+      hosting: {
+        getState: () => ({ bindMode: "host" as const, listenHost: "0.0.0.0", port: 8787 }),
+        ensureHostMode: async () => ({ bindMode: "host" as const, listenHost: "0.0.0.0", port: 8787 }),
+      },
+      listNetworkInterfaces: () => ({
+        Ethernet: [{ address: "192.168.1.42", family: "IPv4" as const, internal: false }],
+      }),
+    });
+
+    try {
+      const headers = await authedHeaders(app, "http://192.168.1.42:8787");
+      for (let i = 0; i < 10; i += 1) {
+        const created = await app.inject({ method: "POST", url: "/api/rooms", headers });
+        assert.equal(created.statusCode, 200);
+      }
+      const rejected = await app.inject({ method: "POST", url: "/api/rooms", headers });
+      assert.equal(rejected.statusCode, 503);
+      assert.deepEqual(rejected.json(), {
+        error: "room_capacity_reached",
+        message: "房间已满，稍后再试",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reclaims an empty room before checking capacity", async () => {
+    let clock = 1_000_000;
+    const rooms = createRoomRegistry();
+    const app = await createApp({
+      webRoot: await tempWebRoot(),
+      dbPath: await tempDbPath(),
+      rooms,
+      now: () => clock,
+      hosting: {
+        getState: () => ({ bindMode: "host" as const, listenHost: "0.0.0.0", port: 8787 }),
+        ensureHostMode: async () => ({ bindMode: "host" as const, listenHost: "0.0.0.0", port: 8787 }),
+      },
+      listNetworkInterfaces: () => ({
+        Ethernet: [{ address: "192.168.1.42", family: "IPv4" as const, internal: false }],
+      }),
+    });
+
+    try {
+      const headers = await authedHeaders(app, "http://192.168.1.42:8787");
+      const first = await app.inject({ method: "POST", url: "/api/rooms", headers });
+      assert.equal(first.statusCode, 200);
+      const firstCode = (first.json() as { code: string }).code;
+      const firstRoom = rooms.getByCode(firstCode);
+      assert.ok(firstRoom);
+      firstRoom.seats[0]!.kind = "open";
+      firstRoom.seats[0]!.credentialHash = null;
+
+      clock += 30 * 60_000;
+      const replacement = await app.inject({ method: "POST", url: "/api/rooms", headers });
+      assert.equal(replacement.statusCode, 200);
+      assert.equal((await app.inject({ method: "GET", url: `/api/rooms/${firstCode}` })).statusCode, 404);
     } finally {
       await app.close();
     }

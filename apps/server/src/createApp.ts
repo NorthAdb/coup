@@ -30,6 +30,11 @@ import {
 } from "./roomRegistry.js";
 import { openRoomStore, type RoomStore } from "./roomStore.js";
 import {
+  IDLE_ROOM_RECLAIM_MS,
+  isRoomEmpty,
+  MAX_ROOMS,
+} from "./roomLifecycle.js";
+import {
   CSRF_HEADER,
   SEAT_COOKIE,
   SESSION_COOKIE,
@@ -285,6 +290,10 @@ export async function createApp(options: CreateAppOptions) {
   }
 
   const matchesByRoom = new Map<string, ActiveMatch>();
+  const roomActivity = new Map<
+    string,
+    { lastActivityAt: number; emptySince: number | null }
+  >();
   const presence = options.presence ?? createSeatPresenceTracker();
   const now = () => (options.now ? options.now() : Date.now());
 
@@ -300,6 +309,61 @@ export async function createApp(options: CreateAppOptions) {
         }
       }
       presence.tick(roomCode, now());
+    }
+  }
+
+  function markRoomActive(code: string) {
+    const room = rooms.getByCode(code);
+    const current = now();
+    roomActivity.set(code, {
+      lastActivityAt: current,
+      emptySince:
+        room &&
+        isRoomEmpty(room, matchesByRoom.get(code) ?? null, (seatId) =>
+          presence.get(code, seatId),
+        )
+          ? current
+          : null,
+    });
+  }
+
+  function reclaimIdleRooms() {
+    const current = now();
+    for (const code of rooms.listCodes()) {
+      const room = rooms.getByCode(code);
+      if (!room) continue;
+      tickPresence(code);
+      const activity = roomActivity.get(code) ?? {
+        lastActivityAt: current,
+        emptySince: null,
+      };
+      const empty = isRoomEmpty(
+        room,
+        matchesByRoom.get(code) ?? null,
+        (seatId) => presence.get(code, seatId),
+      );
+      if (!empty) {
+        activity.emptySince = null;
+      } else if (activity.emptySince === null) {
+        activity.emptySince = activity.lastActivityAt;
+      }
+      if (
+        empty &&
+        activity.emptySince !== null &&
+        current - activity.emptySince >= IDLE_ROOM_RECLAIM_MS
+      ) {
+        const match = matchesByRoom.get(code);
+        if (match && store.getRun(match.state.matchId)?.runStatus === "in_progress") {
+          store.technicalAbort(match.state.matchId, "room_idle_reclaimed");
+        }
+        rooms.dissolve(code);
+        roomStore.clearRoom(code);
+        matchesByRoom.delete(code);
+        presence.clearRoom(code);
+        roomActivity.delete(code);
+        continue;
+      }
+      roomActivity.set(code, activity);
     }
   }
 
@@ -397,13 +461,16 @@ export async function createApp(options: CreateAppOptions) {
           continue;
         }
         rooms.restore(room);
+        markRoomActive(room.code);
         const match = activeMatchFromRun(run);
         matchesByRoom.set(room.code, match);
+        markRoomActive(room.code);
         recoveryRoomCode = room.code;
         recoveryStatus = "restored";
         trackRemoteSeatsAfterAuthorityRestore(room.code, match);
       } else {
         rooms.restore(room);
+        markRoomActive(room.code);
         recoveryRoomCode = room.code;
         recoveryStatus = "restored";
       }
@@ -477,6 +544,13 @@ export async function createApp(options: CreateAppOptions) {
   app.addHook("onClose", async () => {
     store.close();
     roomStore.close();
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    if (reply.statusCode < 200 || reply.statusCode >= 300) return;
+    if (request.method !== "POST" && request.method !== "PATCH") return;
+    const match = request.url.match(/^\/api\/rooms\/([0-9]{4})(?:\/|$)/);
+    if (match && rooms.getByCode(match[1]!)) markRoomActive(match[1]!);
   });
 
   app.get("/api/session", async (request, reply) => {
@@ -633,6 +707,14 @@ export async function createApp(options: CreateAppOptions) {
       });
     }
 
+    reclaimIdleRooms();
+    if (rooms.listCodes().length >= MAX_ROOMS) {
+      return reply.code(503).send({
+        error: "room_capacity_reached",
+        message: "房间已满，稍后再试",
+      });
+    }
+
     const hostState = options.hosting.getState();
     if (hostState.bindMode !== "host") {
       return reply.code(409).send({ error: "need_host_mode" });
@@ -649,6 +731,7 @@ export async function createApp(options: CreateAppOptions) {
     }
 
     const room = rooms.create();
+    markRoomActive(room.code);
     const hostSeat = room.seats[0];
     const issued = issueSeatToken();
     if (hostSeat) {

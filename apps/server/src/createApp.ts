@@ -106,13 +106,10 @@ function humanFacingPayload(
 
 export function persistenceForStore(store: MatchStore): MatchPersistence {
   return {
-    onCreated(match) {
-      const existing = store.findResumableRun();
-      if (existing && existing.matchId !== match.state.matchId) {
-        store.userAbort(existing.matchId);
-      }
+    onCreated(match, roomCode) {
       store.createRun({
         matchId: match.state.matchId,
+        roomCode,
         humanSeatId: match.humanSeatId,
         displayNames: match.displayNames,
         seatAgents: {},
@@ -974,31 +971,25 @@ export async function createApp(options: CreateAppOptions) {
 
       const setupSeats = lobbySeatsToMatchSetup(room);
 
-      if (activeMatch) {
-        const existing = store.findResumableRun();
-        if (existing && existing.runStatus === "in_progress") {
-          store.userAbort(existing.matchId);
-        }
-        activeMatch = null;
-        activeRoomCode = null;
-      }
-
+      const matchId = `match-${Date.now()}`;
       try {
         activeMatch = await startMatch({
+          matchId,
           seats: setupSeats,
           persistence,
+          roomCode: room.code,
         });
       } catch (error) {
-        const startedId = store.findResumableRun()?.matchId;
-        if (startedId) {
-          store.technicalAbort(startedId, abortReasonFrom(error));
+        const started = store.getRun(matchId);
+        if (started?.runStatus === "in_progress") {
+          store.technicalAbort(matchId, abortReasonFrom(error));
         }
         activeMatch = null;
         activeRoomCode = null;
         return reply.code(502).send({
           error: abortReasonFrom(error),
-          aborted: Boolean(startedId),
-          matchId: startedId ?? null,
+          aborted: Boolean(started),
+          matchId: started ? matchId : null,
         });
       }
 

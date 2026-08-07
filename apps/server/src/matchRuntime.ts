@@ -15,12 +15,13 @@ export type ActiveMatch = {
 };
 
 export type MatchPersistence = {
-  onCreated(match: ActiveMatch): void;
+  onCreated(match: ActiveMatch, roomCode?: string): void;
   onCommitted(match: ActiveMatch, newEvents: DomainEvent[]): void;
 };
 
 export type MatchRuntimeOptions = {
   persistence?: MatchPersistence;
+  roomCode?: string;
 };
 
 function displayNameFor(match: ActiveMatch, seatId: string): string {
@@ -145,7 +146,7 @@ export async function startMatch(
     seats: MatchSetupSeatInput[];
   } & MatchRuntimeOptions,
 ): Promise<ActiveMatch> {
-  const { seats, persistence } = options;
+  const { seats, persistence, roomCode } = options;
   const created = createMatch({
     matchId: options.matchId ?? `match-${Date.now()}`,
     seed: options.seed ?? `seed-${Date.now()}`,
@@ -171,7 +172,7 @@ export async function startMatch(
     humanSeatId: humanSeat.seatId,
     displayNames,
   };
-  persistence?.onCreated(match);
+  persistence?.onCreated(match, roomCode);
   return match;
 }
 

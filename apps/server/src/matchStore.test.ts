@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createMatch } from "@coup/domain";
 import { openMatchStore, type MatchStore } from "./matchStore.js";
+import { persistenceForStore } from "./createApp.js";
 
 const tempDirs: string[] = [];
 
@@ -153,6 +154,40 @@ describe("MatchStore", () => {
       assert.equal(store.findResumableRun("4242")?.matchId, "match-a");
       assert.equal(store.findResumableRun("5151")?.matchId, "match-b");
       assert.deepEqual(store.listRuns("5151").map((run) => run.matchId), ["match-b"]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("creates runs in their room without aborting another room's run", async () => {
+    const dbPath = await tempDbPath();
+    const store = openMatchStore(dbPath);
+    try {
+      const persistence = persistenceForStore(store);
+      const first = sampleMatch("match-room-a");
+      persistence.onCreated(
+        {
+          state: first.state,
+          events: first.events,
+          humanSeatId: "seat-1",
+          displayNames: { "seat-1": "你", "seat-2": "灰狐" },
+        },
+        "4242",
+      );
+      const second = sampleMatch("match-room-b");
+      persistence.onCreated(
+        {
+          state: second.state,
+          events: second.events,
+          humanSeatId: "seat-1",
+          displayNames: { "seat-1": "你", "seat-2": "灰狐" },
+        },
+        "5151",
+      );
+
+      assert.equal(store.findResumableRun("4242")?.matchId, "match-room-a");
+      assert.equal(store.findResumableRun("5151")?.matchId, "match-room-b");
+      assert.equal(store.getRun("match-room-a")?.runStatus, "in_progress");
     } finally {
       store.close();
     }

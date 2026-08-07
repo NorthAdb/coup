@@ -4,10 +4,17 @@
 
 **Blocked by:** 07 presence 房间作用域键, 08 多房建房与大厅并行, 09 per-room 对局运行时与房间作用域对局 API（服务端）
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] 达到并发上限（10）后建房返回 503「房间已满，稍后再试」，不误伤既有房
 - [ ] 空房判定正确：大厅/续局等待无本地或远程人类座位；进行中房本地人类恒有效、相关远程人类全部离席（absent/timed_out）才算空，重连宽限期不算
 - [ ] 空房连续闲置 30 分钟自动解散并释放房号；重新出现有效人类座位即重置计时
 - [ ] 只读查询不延长寿命；状态变更、占座/回席、续局与成功对局命令刷新活动时间
 - [ ] 建房先执行惰性回收再限额；回收的房号可立即复用
+
+## Comments
+
+- 已完成：新增服务端常量 `MAX_ROOMS = 10` 与 30 分钟闲置回收；建房先惰性回收再执行容量检查，满额返回 503 `room_capacity_reached`。
+- 已完成：按大厅/续局及进行中对局的人类座位与 presence 状态判定空房；写命令刷新活动时间，只读查询不刷新；回收清理房间、运行态、持久化与 presence。
+- 测试：`npm run typecheck` 通过；`npm test` 全部通过。
+- Commit：`89cac77`（`Enforce room capacity and reclaim idle rooms`）。

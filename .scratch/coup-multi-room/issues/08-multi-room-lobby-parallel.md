@@ -4,10 +4,16 @@
 
 **Blocked by:** 05 持久化表化与旧数据迁移
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] 已存在房间时创建新房，旧房不被解散
 - [ ] 两个房间可凭各自房号独立查询/进入；A 房占座/改名/配座不影响 B 房
 - [ ] 各房续局等待与开局门禁独立生效
 - [ ] 所有房间（不止第一间）都持久化
 - [ ] 建房后旧房座位凭证不可用于新房（座位凭证仍绑定房间）
+
+## Comments
+
+- 完成说明：建房不再解散旧房；registry 恢复改为追加；房间持久化与启动恢复按房间全量处理；新增 HTTP 验收覆盖两房大厅隔离、跨房座位凭证拒绝与重启后全量恢复。
+- 测试：`npm run typecheck`、`npm test`、`npm run test -w @coup/server` 全部通过。
+- Commit：`cb7e018ad11dd1dc254aff9d4aaa285703967bf2`

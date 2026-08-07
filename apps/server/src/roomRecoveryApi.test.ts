@@ -247,7 +247,7 @@ describe("host restart room recovery", () => {
 
     const eventsBefore = await first.inject({
       method: "GET",
-      url: "/api/matches/current",
+      url: `/api/rooms/${ctx.code}/matches/current`,
       headers: { origin: ctx.guest.origin, cookie: ctx.guestCookie },
     });
     assert.equal(eventsBefore.statusCode, 200);
@@ -284,7 +284,7 @@ describe("host restart room recovery", () => {
 
       const eventsAfter = await second.inject({
         method: "GET",
-        url: "/api/matches/current",
+        url: `/api/rooms/${ctx.code}/matches/current`,
         headers: { origin: ctx.guest.origin, cookie: ctx.guestCookie },
       });
       assert.equal(eventsAfter.statusCode, 200);
@@ -598,7 +598,7 @@ describe("host restart room recovery", () => {
 
       const run = await second.inject({
         method: "GET",
-        url: "/api/matches/current",
+        url: `/api/rooms/${ctx.code}/matches/current`,
         headers: { origin: host.origin, cookie: host.cookie },
       });
       assert.equal(run.statusCode, 404);

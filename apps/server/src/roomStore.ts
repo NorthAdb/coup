@@ -12,19 +12,12 @@ export type LoadRoomsResult =
   | { ok: true; rooms: RoomRecord[]; failures: [] }
   | { ok: false; rooms: RoomRecord[]; failures: RoomLoadFailure[] };
 
-export type LoadActiveRoomResult =
-  | { ok: true; room: RoomRecord | null }
-  | { ok: false; reason: "corrupt" | "invalid" };
-
 export type RoomStore = {
   saveRoom(room: RoomRecord): void;
   loadRooms(): LoadRoomsResult;
   clearRoom(roomCode: string): void;
   clearAllRooms(): void;
-  // Transitional adapters for the pre-multi-room application code.
-  saveActiveRoom(room: RoomRecord): void;
-  loadActiveRoom(): LoadActiveRoomResult;
-  clearActiveRoom(): void;
+  // Test-only payload injection for migration and corruption recovery cases.
   debugOverwritePayload(payload: string): void;
   debugOverwriteLegacyPayload(payload: string): void;
   close(): void;
@@ -139,13 +132,6 @@ export function openRoomStore(dbPath: string): RoomStore {
     loadRooms,
     clearRoom(roomCode) { db.prepare(`DELETE FROM rooms WHERE room_code = ?`).run(roomCode); },
     clearAllRooms() { db.prepare(`DELETE FROM rooms`).run(); },
-    saveActiveRoom(room) { this.saveRoom(room); },
-    loadActiveRoom() {
-      const loaded = loadRooms();
-      if (!loaded.ok && loaded.rooms.length === 0) return { ok: false, reason: loaded.failures[0]?.reason === "corrupt" ? "corrupt" : "invalid" };
-      return { ok: true, room: loaded.rooms[0] ?? null };
-    },
-    clearActiveRoom() { this.clearAllRooms(); },
     debugOverwritePayload(payload) {
       const row = db.prepare(`SELECT room_code AS roomCode FROM rooms ORDER BY room_code LIMIT 1`).get() as { roomCode: string } | undefined;
       if (row) {

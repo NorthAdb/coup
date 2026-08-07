@@ -6,6 +6,20 @@ type HomeEntryProps = {
   onAbandonRecovery?: (roomCode: string) => void;
 };
 
+export function recoveryReasonMessage(reason: string | null): string {
+  const messages: Record<string, string> = {
+    corrupt: "房间数据损坏",
+    invalid: "房间数据无效",
+    migration_error: "房间数据迁移失败",
+    match_missing: "缺少进行中的对局",
+    match_not_active: "进行中的对局不存在",
+    match_room_mismatch: "对局与房间不匹配",
+    rematch_match_not_found: "续局记录不存在",
+    rematch_match_active: "续局记录仍在进行中",
+  };
+  return (reason && messages[reason]) || "无法恢复该房间";
+}
+
 export function HomeEntry({
   onCreateRoom,
   onJoinRoom,
@@ -23,7 +37,7 @@ export function HomeEntry({
             <p>服务器已恢复以下房间，可逐房放弃不需要的房间。</p>
             {recoveryRooms.map((room) => (
               <div key={room.code}>
-                <p>房间 {room.code}：{room.status === "failed" ? `恢复失败（${room.reason ?? "未知原因"}）` : "已恢复"}</p>
+                <p>房间 {room.code}：{room.status === "failed" ? `恢复失败（${recoveryReasonMessage(room.reason)}）` : "已恢复"}</p>
                 <button type="button" disabled={busy} onClick={() => onAbandonRecovery?.(room.code)}>
                   放弃房间 {room.code}
                 </button>

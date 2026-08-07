@@ -128,12 +128,12 @@ describe("RoomStore", () => {
     const room = sampleLobbyRoom();
 
     const first = openRoomStore(dbPath);
-    first.saveActiveRoom(room);
+    first.saveRoom(room);
     first.close();
 
     const second = openRoomStore(dbPath);
-    const loaded = second.loadActiveRoom();
-    assert.deepEqual(loaded, { ok: true, room });
+    const loaded = second.loadRooms();
+    assert.deepEqual(loaded, { ok: true, rooms: [room], failures: [] });
     second.close();
   });
 
@@ -151,18 +151,19 @@ describe("RoomStore", () => {
     };
 
     const store = openRoomStore(dbPath);
-    store.saveActiveRoom(room);
-    const loaded = store.loadActiveRoom();
-    assert.deepEqual(loaded, { ok: true, room });
+    store.saveRoom(room);
+    const loaded = store.loadRooms();
+    assert.deepEqual(loaded, { ok: true, rooms: [room], failures: [] });
     store.close();
   });
 
   it("clears the active room so load returns none", async () => {
     const dbPath = await tempDbPath();
     const store = openRoomStore(dbPath);
-    store.saveActiveRoom(sampleLobbyRoom());
-    store.clearActiveRoom();
-    assert.deepEqual(store.loadActiveRoom(), { ok: true, room: null });
+    const room = sampleLobbyRoom();
+    store.saveRoom(room);
+    store.clearRoom(room.code);
+    assert.deepEqual(store.loadRooms(), { ok: true, rooms: [], failures: [] });
     store.close();
   });
 
@@ -172,10 +173,10 @@ describe("RoomStore", () => {
     store.debugOverwritePayload("{not-json");
     store.close();
     const reopened = openRoomStore(dbPath);
-    const loaded = reopened.loadActiveRoom();
+    const loaded = reopened.loadRooms();
     assert.equal(loaded.ok, false);
     if (loaded.ok) throw new Error("expected failure");
-    assert.equal(loaded.reason, "corrupt");
+    assert.equal(loaded.failures[0]?.reason, "corrupt");
     reopened.close();
   });
 
@@ -210,12 +211,12 @@ describe("RoomStore", () => {
     );
     store.close();
     const reopened = openRoomStore(dbPath);
-    const loaded = reopened.loadActiveRoom();
+    const loaded = reopened.loadRooms();
     assert.equal(loaded.ok, true);
-    if (!loaded.ok || !loaded.room) throw new Error("expected room");
-    assert.equal(loaded.room.seats[1]?.kind, "closed");
+    if (!loaded.ok || !loaded.rooms[0]) throw new Error("expected room");
+    assert.equal(loaded.rooms[0].seats[1]?.kind, "closed");
     assert.deepEqual(
-      Object.keys(loaded.room.seats[1] ?? {}).sort(),
+      Object.keys(loaded.rooms[0].seats[1] ?? {}).sort(),
       ["credentialHash", "displayName", "kind", "rematchStatus", "seatId"].sort(),
     );
     reopened.close();

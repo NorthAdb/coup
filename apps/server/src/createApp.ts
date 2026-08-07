@@ -334,6 +334,22 @@ export async function createApp(options: CreateAppOptions) {
     });
   }
 
+  function dissolveRoom(
+    code: string,
+    matchId?: string | null,
+    abortReason = "room_idle_reclaimed",
+  ) {
+    const activeMatchId = matchId ?? matchesByRoom.get(code)?.state.matchId;
+    if (activeMatchId && store.getRun(activeMatchId)?.runStatus === "in_progress") {
+      store.technicalAbort(activeMatchId, abortReason);
+    }
+    rooms.dissolve(code);
+    roomStore.clearRoom(code);
+    matchesByRoom.delete(code);
+    presence.clearRoom(code);
+    roomActivity.delete(code);
+  }
+
   function reclaimIdleRooms() {
     const current = now();
     for (const code of rooms.listCodes()) {
@@ -359,15 +375,7 @@ export async function createApp(options: CreateAppOptions) {
         activity.emptySince !== null &&
         current - activity.emptySince >= IDLE_ROOM_RECLAIM_MS
       ) {
-        const match = matchesByRoom.get(code);
-        if (match && store.getRun(match.state.matchId)?.runStatus === "in_progress") {
-          store.technicalAbort(match.state.matchId, "room_idle_reclaimed");
-        }
-        rooms.dissolve(code);
-        roomStore.clearRoom(code);
-        matchesByRoom.delete(code);
-        presence.clearRoom(code);
-        roomActivity.delete(code);
+        dissolveRoom(code);
         continue;
       }
       roomActivity.set(code, activity);
@@ -478,7 +486,6 @@ export async function createApp(options: CreateAppOptions) {
           continue;
         }
         rooms.restore(room);
-        markRoomActive(room.code);
         const match = activeMatchFromRun(run);
         matchesByRoom.set(room.code, match);
         markRoomActive(room.code);
@@ -679,18 +686,7 @@ export async function createApp(options: CreateAppOptions) {
     }
     const item = recovery.get(roomCode);
     if (!item) return reply.code(404).send({ error: "recovery_room_not_found" });
-    const matchId = item.room?.matchId;
-    if (matchId) {
-      const run = store.getRun(matchId);
-      if (run && run.runStatus === "in_progress") {
-        store.technicalAbort(matchId, "host_restart_abandoned");
-      }
-    }
-    rooms.dissolve(roomCode);
-    roomStore.clearRoom(roomCode);
-    matchesByRoom.delete(roomCode);
-    presence.clearRoom(roomCode);
-    roomActivity.delete(roomCode);
+    dissolveRoom(roomCode, item.room?.matchId, "host_restart_abandoned");
     recovery.delete(roomCode);
     return reply.send({ status: "none", abandoned: true, roomCode });
   });

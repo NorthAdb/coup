@@ -21,9 +21,9 @@ export function isRoomEmpty(
   }
 
   for (const seat of match.state.seats) {
-    if (seat.eliminated) continue;
     if (seat.controller === "local_human") return false;
     if (seat.controller !== "remote_human") continue;
+    if (seat.eliminated) continue;
     const current = absence(seat.seatId);
     if (!current || (current.phase !== "absent" && current.phase !== "timed_out")) {
       return false;

@@ -62,36 +62,31 @@ export function App() {
   const [pausedForAbsenceSeatId, setPausedForAbsenceSeatId] = useState<
     string | null
   >(null);
-  const [recoveryFailed, setRecoveryFailed] = useState(false);
+  const [recoveryRooms, setRecoveryRooms] = useState<
+    Array<{ code: string; status: "restored" | "failed"; reason: string | null }>
+  >([]);
 
   useEffect(() => {
     void (async () => {
       try {
         const recovery = await fetchRoomRecovery();
-        if (recovery.status === "failed") {
-          setRecoveryFailed(true);
-          setError(recovery.message ?? "无法恢复上一房间");
-          setScreen("home");
-          return;
-        }
-        if (recovery.status === "restored" && recovery.room) {
-          const found = await fetchRoom(
-            window.location.origin,
-            recovery.room.code,
-          );
+        const statuses = recovery.rooms.map(({ code, status, reason }) => ({ code, status, reason }));
+        setRecoveryRooms(statuses);
+        const recovered = recovery.rooms.find((item) => item.status === "restored");
+        if (recovered) {
+          const found = await fetchRoom(window.location.origin, recovered.code);
           setRoom(found);
-          setLobbySeats(found.seats ?? recovery.room.seats);
-          setRecoveryFailed(false);
+          setLobbySeats(found.seats ?? recovered.seats);
           const me = await fetchMySeat(
             window.location.origin,
-            recovery.room.code,
+            recovered.code,
           );
           setMySeatId(me.seat?.seatId ?? null);
           if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
 
           const enterMatchIfPossible = async () => {
-            if (recovery.room.phase !== "match") return false;
-            const response = await fetch(matchCurrentPath(recovery.room.code), {
+            if (recovered.phase !== "match") return false;
+            const response = await fetch(matchCurrentPath(recovered.code), {
               credentials: "include",
               cache: "no-store",
             });
@@ -125,10 +120,7 @@ export function App() {
               /^\d{4}$/.test(joinCode)
             )
           ) {
-            setRecoveryFailed(true);
-            setError(
-              "已恢复上一房间，但本机没有座位凭证。主机可放弃旧房后开新房，客人请重新输入房间号。",
-            );
+            setError("已恢复房间，但本机没有座位凭证。请选择房间号加入，或逐房放弃。");
             setScreen("home");
             return;
           }
@@ -159,9 +151,6 @@ export function App() {
         } catch (err) {
           const message = err instanceof Error ? err.message : "创建房间失败";
           setError(message);
-          if (message.includes("无法恢复上一房间")) {
-            setRecoveryFailed(true);
-          }
           setScreen("home");
         } finally {
           setBusy(false);
@@ -217,25 +206,21 @@ export function App() {
       setDisplayNameDraft(
         invite.seats?.find((s) => s.seatId === "1")?.displayName ?? "你",
       );
-      setRecoveryFailed(false);
       setScreen("host-invite");
     } catch (err) {
       const message = err instanceof Error ? err.message : "创建房间失败";
       setError(message);
-      if (message.includes("无法恢复上一房间")) {
-        setRecoveryFailed(true);
-      }
     } finally {
       setBusy(false);
     }
   }
 
-  async function abandonRecovery() {
+  async function abandonRecovery(roomCode: string) {
     setBusy(true);
     setError(null);
     try {
-      await abandonFailedRoomRecovery();
-      setRecoveryFailed(false);
+      await abandonFailedRoomRecovery(roomCode);
+      setRecoveryRooms((rooms) => rooms.filter((room) => room.code !== roomCode));
       await createRoom();
     } catch (err) {
       setError(err instanceof Error ? err.message : "放弃旧房间失败");
@@ -766,8 +751,8 @@ export function App() {
       <main className="shell shell-home">
         <HomeEntry
           busy={busy}
-          recoveryFailed={recoveryFailed}
-          onAbandonRecovery={() => void abandonRecovery()}
+          recoveryRooms={recoveryRooms}
+          onAbandonRecovery={(code) => void abandonRecovery(code)}
           onCreateRoom={() => void createRoom()}
           onJoinRoom={() => {
             setError(null);
@@ -865,8 +850,8 @@ export function App() {
     <main className="shell">
       <HomeEntry
         busy={busy}
-        recoveryFailed={recoveryFailed}
-        onAbandonRecovery={() => void abandonRecovery()}
+        recoveryRooms={recoveryRooms}
+        onAbandonRecovery={(code) => void abandonRecovery(code)}
         onCreateRoom={() => void createRoom()}
         onJoinRoom={() => {
           setError(null);

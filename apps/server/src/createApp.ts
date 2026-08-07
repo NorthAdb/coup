@@ -56,6 +56,13 @@ export type BindMode = "local" | "host";
 
 export type RoomRecoveryStatus = "none" | "restored" | "failed";
 
+type RoomRecoveryRecord = {
+  code: string;
+  status: RoomRecoveryStatus;
+  reason: string | null;
+  room: RoomRecord | null;
+};
+
 export type HostingState = {
   bindMode: BindMode;
   listenHost: string;
@@ -194,10 +201,7 @@ export async function createApp(options: CreateAppOptions) {
   const publicHost = process.env.COUP_PUBLIC_HOST?.trim() || null;
   const roomCodeThrottle = createRoomCodeThrottle();
   let selectedLanHost: string | null = null;
-  let recoveryStatus: RoomRecoveryStatus = "none";
-  let recoveryReason: string | null = null;
-  let failedRecoveryRoom: RoomRecord | null = null;
-  let recoveryRoomCode: string | null = null;
+  const recovery = new Map<string, RoomRecoveryRecord>();
 
   function currentAllowedOrigins(): string[] {
     const state = options.hosting?.getState();
@@ -428,10 +432,6 @@ export async function createApp(options: CreateAppOptions) {
 
   function persistActiveRoom() {
     const codes = rooms.listCodes();
-    if (codes.length === 0) {
-      roomStore.clearActiveRoom();
-      return;
-    }
     for (const code of codes) {
       const room = rooms.getByCode(code);
       if (room) roomStore.saveRoom(room);
@@ -440,24 +440,39 @@ export async function createApp(options: CreateAppOptions) {
 
   {
     const loaded = roomStore.loadRooms();
-    if (!loaded.ok && loaded.rooms.length === 0) {
-      recoveryStatus = "failed";
-      recoveryReason = loaded.failures[0]?.reason ?? "invalid";
-      failedRecoveryRoom = null;
+    for (const failure of loaded.failures) {
+      if (failure.roomCode) {
+        recovery.set(failure.roomCode, {
+          code: failure.roomCode,
+          status: "failed",
+          reason: failure.reason,
+          room: null,
+        });
+      }
     }
     for (const room of loaded.rooms) {
       if (room.phase === "match") {
         if (!room.matchId) {
-          recoveryStatus = "failed";
-          recoveryReason = "match_missing";
-          failedRecoveryRoom = room;
+          recovery.set(room.code, {
+            code: room.code,
+            status: "failed",
+            reason: "match_missing",
+            room,
+          });
           continue;
         }
         const run = store.getRun(room.matchId);
-        if (!run || run.runStatus !== "in_progress") {
-          recoveryStatus = "failed";
-          recoveryReason = "match_not_active";
-          failedRecoveryRoom = room;
+        if (
+          !run ||
+          run.roomCode !== room.code ||
+          run.runStatus !== "in_progress"
+        ) {
+          recovery.set(room.code, {
+            code: room.code,
+            status: "failed",
+            reason: !run ? "match_not_active" : "match_room_mismatch",
+            room,
+          });
           continue;
         }
         rooms.restore(room);
@@ -465,14 +480,34 @@ export async function createApp(options: CreateAppOptions) {
         const match = activeMatchFromRun(run);
         matchesByRoom.set(room.code, match);
         markRoomActive(room.code);
-        recoveryRoomCode = room.code;
-        recoveryStatus = "restored";
+        recovery.set(room.code, {
+          code: room.code,
+          status: "restored",
+          reason: null,
+          room,
+        });
         trackRemoteSeatsAfterAuthorityRestore(room.code, match);
       } else {
+        if (room.phase === "rematch" && room.matchId) {
+          const run = store.getRun(room.matchId);
+          if (!run || run.roomCode !== room.code || run.runStatus === "in_progress") {
+            recovery.set(room.code, {
+              code: room.code,
+              status: "failed",
+              reason: !run ? "rematch_match_not_found" : "rematch_match_active",
+              room,
+            });
+            continue;
+          }
+        }
         rooms.restore(room);
         markRoomActive(room.code);
-        recoveryRoomCode = room.code;
-        recoveryStatus = "restored";
+        recovery.set(room.code, {
+          code: room.code,
+          status: "restored",
+          reason: null,
+          room,
+        });
       }
     }
   }
@@ -623,73 +658,39 @@ export async function createApp(options: CreateAppOptions) {
   });
 
   app.get("/api/room-recovery", async (_request, reply) => {
-    if (recoveryStatus === "failed") {
-      return reply.send({
-        status: "failed",
-        reason: recoveryReason,
-        message: "无法恢复上一房间",
-        room: failedRecoveryRoom
-          ? {
-              code: failedRecoveryRoom.code,
-              phase: failedRecoveryRoom.phase,
-              matchId: failedRecoveryRoom.matchId,
-              seats: publicSeats(failedRecoveryRoom),
-            }
-          : null,
-      });
-    }
-    if (recoveryStatus === "restored" && recoveryRoomCode) {
-      const room = rooms.getByCode(recoveryRoomCode);
-      if (room) {
-        return reply.send({
-          status: "restored",
-          reason: null,
-          message: null,
-          room: {
-            code: room.code,
-            phase: room.phase,
-            matchId: room.matchId,
-            seats: publicSeats(room),
-          },
-        });
-      }
-    }
-    return reply.send({
-      status: "none",
-      reason: null,
-      message: null,
-      room: null,
-    });
+    const roomsResult = [...recovery.values()].map((item) => ({
+      code: item.code,
+      status: item.status,
+      reason: item.reason,
+      phase: item.room?.phase ?? null,
+      matchId: item.room?.matchId ?? null,
+      seats: item.room ? publicSeats(item.room) : [],
+    }));
+    return reply.send({ rooms: roomsResult });
   });
 
-  app.post("/api/room-recovery/abandon", async (request, reply) => {
+  app.post<{ Body: { roomCode?: string } }>("/api/room-recovery/abandon", async (request, reply) => {
     if (!requireSession(request, reply)) return;
-    if (recoveryStatus !== "failed" && recoveryStatus !== "restored") {
-      return reply.code(409).send({ error: "no_recovery_to_abandon" });
+    const roomCode = request.body?.roomCode;
+    if (typeof roomCode !== "string" || !roomCode) {
+      return reply.code(400).send({ error: "room_code_required" });
     }
-
-    const matchId =
-      failedRecoveryRoom?.matchId ??
-      (recoveryRoomCode ? rooms.getByCode(recoveryRoomCode)?.matchId : null);
+    const item = recovery.get(roomCode);
+    if (!item) return reply.code(404).send({ error: "recovery_room_not_found" });
+    const matchId = item.room?.matchId;
     if (matchId) {
       const run = store.getRun(matchId);
       if (run && run.runStatus === "in_progress") {
         store.technicalAbort(matchId, "host_restart_abandoned");
       }
     }
-
-    for (const code of rooms.listCodes()) {
-      rooms.dissolve(code);
-    }
-    roomStore.clearActiveRoom();
-    failedRecoveryRoom = null;
-    recoveryStatus = "none";
-    recoveryReason = null;
-    recoveryRoomCode = null;
-    matchesByRoom.clear();
-    presence.clearAll();
-
-    return reply.send({ status: "none", abandoned: true });
+    rooms.dissolve(roomCode);
+    roomStore.clearRoom(roomCode);
+    matchesByRoom.delete(roomCode);
+    presence.clearRoom(roomCode);
+    roomActivity.delete(roomCode);
+    recovery.delete(roomCode);
+    return reply.send({ status: "none", abandoned: true, roomCode });
   });
 
   app.post("/api/rooms", async (request, reply) => {
@@ -697,16 +698,6 @@ export async function createApp(options: CreateAppOptions) {
     if (!options.hosting) {
       return reply.code(500).send({ error: "hosting_unavailable" });
     }
-    if (recoveryStatus === "failed" || recoveryStatus === "restored") {
-      return reply.code(409).send({
-        error: "recovery_pending_abandon",
-        message:
-          recoveryStatus === "failed"
-            ? "无法恢复上一房间：须先放弃并作废旧房后才能创建新房"
-            : "已恢复上一房间：须先放弃旧房才能创建新房",
-      });
-    }
-
     reclaimIdleRooms();
     if (rooms.listCodes().length >= MAX_ROOMS) {
       return reply.code(503).send({
@@ -737,9 +728,6 @@ export async function createApp(options: CreateAppOptions) {
     if (hostSeat) {
       hostSeat.credentialHash = issued.hash;
     }
-    recoveryStatus = "none";
-    recoveryReason = null;
-    failedRecoveryRoom = null;
     persistActiveRoom();
     appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
 

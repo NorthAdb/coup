@@ -2,15 +2,15 @@ type HomeEntryProps = {
   onCreateRoom: () => void;
   onJoinRoom: () => void;
   busy: boolean;
-  recoveryFailed?: boolean;
-  onAbandonRecovery?: () => void;
+  recoveryRooms?: Array<{ code: string; status: "restored" | "failed"; reason: string | null }>;
+  onAbandonRecovery?: (roomCode: string) => void;
 };
 
 export function HomeEntry({
   onCreateRoom,
   onJoinRoom,
   busy,
-  recoveryFailed = false,
+  recoveryRooms = [],
   onAbandonRecovery,
 }: HomeEntryProps) {
   return (
@@ -18,17 +18,17 @@ export function HomeEntry({
       <div className="b-hero">
         <p className="eyebrow">互联网房间</p>
         <h1>创建房间</h1>
-        {recoveryFailed ? (
+        {recoveryRooms.length > 0 ? (
           <>
-            <p>无法恢复上一房间。须先放弃并作废旧房间号与座位凭证，才能创建新房。</p>
-            <button
-              type="button"
-              className="primary xl"
-              disabled={busy}
-              onClick={() => onAbandonRecovery?.()}
-            >
-              放弃并开新房间
-            </button>
+            <p>服务器已恢复以下房间，可逐房放弃不需要的房间。</p>
+            {recoveryRooms.map((room) => (
+              <div key={room.code}>
+                <p>房间 {room.code}：{room.status === "failed" ? `恢复失败（${room.reason ?? "未知原因"}）` : "已恢复"}</p>
+                <button type="button" disabled={busy} onClick={() => onAbandonRecovery?.(room.code)}>
+                  放弃房间 {room.code}
+                </button>
+              </div>
+            ))}
           </>
         ) : (
           <>

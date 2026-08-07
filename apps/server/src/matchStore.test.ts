@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { createMatch } from "@coup/domain";
 import { openMatchStore, type MatchStore } from "./matchStore.js";
 import { persistenceForStore } from "./createApp.js";
@@ -188,6 +189,56 @@ describe("MatchStore", () => {
       assert.equal(store.findResumableRun("4242")?.matchId, "match-room-a");
       assert.equal(store.findResumableRun("5151")?.matchId, "match-room-b");
       assert.equal(store.getRun("match-room-a")?.runStatus, "in_progress");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("migrates nullable room codes and marks runs that cannot be associated", async () => {
+    const dbPath = await tempDbPath();
+    const created = sampleMatch("legacy-match");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE match_runs (
+        match_id TEXT PRIMARY KEY NOT NULL,
+        room_code TEXT,
+        run_status TEXT NOT NULL,
+        winner_seat_id TEXT,
+        abort_reason TEXT,
+        resumed_from_match_id TEXT,
+        human_seat_id TEXT NOT NULL,
+        display_names_json TEXT NOT NULL,
+        seat_agents_json TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE match_events (
+        match_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        PRIMARY KEY (match_id, seq)
+      );
+    `);
+    db.prepare(`INSERT INTO match_runs VALUES (?, NULL, 'in_progress', NULL, NULL, NULL, ?, ?, ?, ?, ?)`)
+      .run("legacy-match", "seat-1", JSON.stringify({ "seat-1": "你" }), "{}", JSON.stringify(created.state), new Date().toISOString());
+    db.close();
+
+    const store = openMatchStore(dbPath);
+    try {
+      store.migrateLegacyRuns([{ code: "4242", matchId: null }]);
+      const run = store.getRun("legacy-match");
+      assert.ok(run);
+      assert.equal(run.runStatus, "migration_error");
+      assert.equal(run.roomCode, "__migration_error__");
+      assert.throws(() => store.createRun({
+        matchId: "new-match",
+        roomCode: "" as string,
+        humanSeatId: "seat-1",
+        displayNames: { "seat-1": "你" },
+        seatAgents: {},
+        state: created.state,
+        events: created.events,
+      }), /room_code_required/);
     } finally {
       store.close();
     }

@@ -119,6 +119,7 @@ function humanFacingPayload(
 export function persistenceForStore(store: MatchStore): MatchPersistence {
   return {
     onCreated(match, roomCode) {
+      if (!roomCode) throw new Error("room_code_required");
       store.createRun({
         matchId: match.state.matchId,
         roomCode,
@@ -190,6 +191,8 @@ export async function createApp(options: CreateAppOptions) {
   const dbPath = options.dbPath ?? defaultDbPath();
   const store = options.store ?? openMatchStore(dbPath);
   const roomStore = options.roomStore ?? openRoomStore(dbPath);
+  const initialRooms = roomStore.loadRooms();
+  store.migrateLegacyRuns(initialRooms.rooms);
   const persistence = persistenceForStore(store);
   const rooms = options.rooms ?? createRoomRegistry();
   const sessions = options.sessions ?? createSessionStore();
@@ -439,16 +442,15 @@ export async function createApp(options: CreateAppOptions) {
   }
 
   {
-    const loaded = roomStore.loadRooms();
+    const loaded = initialRooms;
     for (const failure of loaded.failures) {
-      if (failure.roomCode) {
-        recovery.set(failure.roomCode, {
-          code: failure.roomCode,
-          status: "failed",
-          reason: failure.reason,
-          room: null,
-        });
-      }
+      const recoveryCode = failure.roomCode ?? `migration:${failure.reason}`;
+      recovery.set(recoveryCode, {
+        code: recoveryCode,
+        status: "failed",
+        reason: failure.reason,
+        room: null,
+      });
     }
     for (const room of loaded.rooms) {
       if (room.phase === "match") {

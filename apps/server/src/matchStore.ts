@@ -37,7 +37,7 @@ export type MatchRunRecord = {
 
 export type CreateRunInput = {
   matchId: string;
-  roomCode?: string | null;
+  roomCode: string;
   humanSeatId: string;
   displayNames: Record<string, string>;
   seatAgents: Record<string, LegacySeatAgent>;
@@ -63,6 +63,7 @@ export type MatchStore = {
     stateVersion: number;
   }>;
   findResumableRun(roomCode?: string): MatchRunRecord | null;
+  migrateLegacyRuns(rooms: Array<{ code: string; matchId: string | null }>): void;
   technicalAbort(matchId: string, reason: string): MatchRunRecord;
   userAbort(matchId: string): MatchRunRecord;
   createResumeRun(fromMatchId: string, newMatchId: string, roomCode?: string): MatchRunRecord;
@@ -87,7 +88,7 @@ export function openMatchStore(dbPath: string): MatchStore {
   db.exec(`
     CREATE TABLE IF NOT EXISTS match_runs (
       match_id TEXT PRIMARY KEY NOT NULL,
-      room_code TEXT,
+      room_code TEXT NOT NULL,
       run_status TEXT NOT NULL,
       winner_seat_id TEXT,
       abort_reason TEXT,
@@ -107,8 +108,47 @@ export function openMatchStore(dbPath: string): MatchStore {
       FOREIGN KEY (match_id) REFERENCES match_runs(match_id)
     );
   `);
-  const columns = db.prepare(`PRAGMA table_info(match_runs)`).all() as Array<{ name: string }>;
-  if (!columns.some((column) => column.name === "room_code")) db.exec(`ALTER TABLE match_runs ADD COLUMN room_code TEXT`);
+  const columns = db.prepare(`PRAGMA table_info(match_runs)`).all() as Array<{ name: string; notnull: number }>;
+  if (!columns.some((column) => column.name === "room_code")) {
+    db.exec(`ALTER TABLE match_runs ADD COLUMN room_code TEXT`);
+  }
+  const roomCodeColumn = columns.find((column) => column.name === "room_code");
+  if (!roomCodeColumn || roomCodeColumn.notnull === 0) {
+    db.exec("BEGIN");
+    try {
+      db.exec(`UPDATE match_runs SET room_code = '__migration_error__' WHERE room_code IS NULL`);
+      db.exec(`ALTER TABLE match_runs RENAME TO match_runs_before_room_code_constraint`);
+      db.exec(`
+        CREATE TABLE match_runs (
+          match_id TEXT PRIMARY KEY NOT NULL,
+          room_code TEXT NOT NULL,
+          run_status TEXT NOT NULL,
+          winner_seat_id TEXT,
+          abort_reason TEXT,
+          resumed_from_match_id TEXT,
+          human_seat_id TEXT NOT NULL,
+          display_names_json TEXT NOT NULL,
+          seat_agents_json TEXT NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `);
+      db.exec(`INSERT INTO match_runs (
+        match_id, room_code, run_status, winner_seat_id, abort_reason,
+        resumed_from_match_id, human_seat_id, display_names_json,
+        seat_agents_json, snapshot_json, updated_at
+      ) SELECT
+        match_id, room_code, run_status, winner_seat_id, abort_reason,
+        resumed_from_match_id, human_seat_id, display_names_json,
+        seat_agents_json, snapshot_json, updated_at
+        FROM match_runs_before_room_code_constraint`);
+      db.exec(`DROP TABLE match_runs_before_room_code_constraint`);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   db.exec(`CREATE INDEX IF NOT EXISTS match_runs_room_status_updated ON match_runs (room_code, run_status, updated_at)`);
 
   function readEvents(matchId: string): DomainEvent[] {
@@ -239,6 +279,7 @@ export function openMatchStore(dbPath: string): MatchStore {
 
   const store: MatchStore = {
     createRun(input) {
+      if (!input.roomCode) throw new Error("room_code_required");
       const existing = readRun(input.matchId);
       if (existing) {
         throw new Error(`match_already_exists:${input.matchId}`);
@@ -362,6 +403,18 @@ export function openMatchStore(dbPath: string): MatchStore {
       return readRun(row.matchId);
     },
 
+    migrateLegacyRuns(rooms) {
+      const associate = db.prepare(
+        `UPDATE match_runs SET room_code = ? WHERE match_id = ? AND room_code = '__migration_error__'`,
+      );
+      for (const room of rooms) {
+        if (room.matchId) associate.run(room.code, room.matchId);
+      }
+      db.prepare(
+        `UPDATE match_runs SET run_status = 'migration_error' WHERE room_code = '__migration_error__'`,
+      ).run();
+    },
+
     technicalAbort(matchId, reason) {
       const current = readRun(matchId);
       if (!current) throw new Error(`match_not_found:${matchId}`);
@@ -446,9 +499,11 @@ export function openMatchStore(dbPath: string): MatchStore {
         return event;
       });
 
+      const resumedRoomCode = roomCode ?? source.roomCode;
+      if (!resumedRoomCode) throw new Error("room_code_required");
       return store.createRun({
         matchId: newMatchId,
-        roomCode: roomCode ?? source.roomCode,
+        roomCode: resumedRoomCode,
         humanSeatId: source.humanSeatId,
         displayNames: source.displayNames,
         seatAgents: source.seatAgents,

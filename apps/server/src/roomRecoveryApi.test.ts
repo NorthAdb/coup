@@ -628,6 +628,50 @@ describe("host restart room recovery", () => {
     }
   });
 
+  it("exposes a corrupt legacy migration and allows abandoning it", async () => {
+    const webRoot = await tempWebRoot();
+    const dbPath = await tempDbPath();
+    const legacy = openRoomStore(dbPath);
+    legacy.debugOverwriteLegacyPayload("{broken");
+    legacy.close();
+
+    const app = await createApp({
+      webRoot,
+      dbPath,
+      ...hostAppOptions(),
+    });
+    try {
+      const recovery = await app.inject({ method: "GET", url: "/api/room-recovery" });
+      assert.equal(recovery.statusCode, 200);
+      const body = recovery.json() as { rooms: Array<{ code: string; status: string; reason: string }> };
+      assert.deepEqual(body.rooms, [{
+        code: "migration:corrupt",
+        status: "failed",
+        reason: "corrupt",
+        phase: null,
+        matchId: null,
+        seats: [],
+      }]);
+
+      const host = await openSession(app, "http://192.168.1.42:8787");
+      const abandoned = await app.inject({
+        method: "POST",
+        url: "/api/room-recovery/abandon",
+        headers: {
+          origin: host.origin,
+          cookie: host.cookie,
+          "x-csrf-token": host.csrfToken,
+          "content-type": "application/json",
+        },
+        payload: { roomCode: "migration:corrupt" },
+      });
+      assert.equal(abandoned.statusCode, 200);
+      assert.deepEqual((await app.inject({ method: "GET", url: "/api/room-recovery" })).json(), { rooms: [] });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("reports every recovered room and abandons only the requested room", async () => {
     const webRoot = await tempWebRoot();
     const dbPath = await tempDbPath();

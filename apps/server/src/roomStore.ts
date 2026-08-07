@@ -112,13 +112,6 @@ export function openRoomStore(dbPath: string): RoomStore {
           parsed.room.code, JSON.stringify(parsed.room), parsed.room.createdAt, new Date().toISOString(),
         );
         db.prepare(`DELETE FROM lan_active_room WHERE id = 1`).run();
-        // Old runs can be associated only through the former room's matchId.
-        try {
-          db.prepare(`UPDATE match_runs SET room_code = ? WHERE match_id = ? AND room_code IS NULL`).run(parsed.room.code, parsed.room.matchId);
-          db.prepare(`UPDATE match_runs SET run_status = 'migration_error' WHERE room_code IS NULL`).run();
-        } catch {
-          // matchStore may not have initialized its table yet.
-        }
       }
     } else {
       migrationFailures.push(parsed);

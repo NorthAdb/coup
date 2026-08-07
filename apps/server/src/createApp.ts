@@ -307,8 +307,10 @@ export async function createApp(options: CreateAppOptions) {
       roomStore.clearActiveRoom();
       return;
     }
-    const room = rooms.getByCode(codes[0]!);
-    if (room) roomStore.saveActiveRoom(room);
+    for (const code of codes) {
+      const room = rooms.getByCode(code);
+      if (room) roomStore.saveRoom(room);
+    }
   }
 
   function trackRemoteSeatsForMatch() {
@@ -338,35 +340,37 @@ export async function createApp(options: CreateAppOptions) {
   }
 
   {
-    const loaded = roomStore.loadActiveRoom();
-    if (!loaded.ok) {
+    const loaded = roomStore.loadRooms();
+    if (!loaded.ok && loaded.rooms.length === 0) {
       recoveryStatus = "failed";
-      recoveryReason = loaded.reason;
+      recoveryReason = loaded.failures[0]?.reason ?? "invalid";
       failedRecoveryRoom = null;
-    } else if (loaded.room) {
-      const room = loaded.room;
+    }
+    for (const room of loaded.rooms) {
       if (room.phase === "match") {
         if (!room.matchId) {
           recoveryStatus = "failed";
           recoveryReason = "match_missing";
           failedRecoveryRoom = room;
-        } else {
-          const run = store.getRun(room.matchId);
-          if (!run || run.runStatus !== "in_progress") {
-            recoveryStatus = "failed";
-            recoveryReason = "match_not_active";
-            failedRecoveryRoom = room;
-          } else {
-            rooms.restore(room);
-            activeRoomCode = room.code;
-            activeMatch = activeMatchFromRun(run);
-            recoveryStatus = "restored";
-            trackRemoteSeatsAfterAuthorityRestore();
-          }
+          continue;
         }
-      } else {
+        const run = store.getRun(room.matchId);
+        if (!run || run.runStatus !== "in_progress") {
+          recoveryStatus = "failed";
+          recoveryReason = "match_not_active";
+          failedRecoveryRoom = room;
+          continue;
+        }
+        // Match runtime remains single-room until the room-scoped runtime ticket.
+        if (activeMatch) continue;
         rooms.restore(room);
         activeRoomCode = room.code;
+        activeMatch = activeMatchFromRun(run);
+        recoveryStatus = "restored";
+        trackRemoteSeatsAfterAuthorityRestore();
+      } else {
+        rooms.restore(room);
+        if (!activeRoomCode) activeRoomCode = room.code;
         recoveryStatus = "restored";
       }
     }
@@ -642,10 +646,6 @@ export async function createApp(options: CreateAppOptions) {
       selectedLanHost = lanHost;
     }
 
-    // One active room for now (spec: single room).
-    for (const code of rooms.listCodes()) {
-      rooms.dissolve(code);
-    }
     const room = rooms.create();
     const hostSeat = room.seats[0];
     const issued = issueSeatToken();

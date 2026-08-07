@@ -65,6 +65,80 @@ async function authedHeaders(
 }
 
 describe("room invite API", () => {
+  it("keeps multiple lobby rooms isolated and restores every room", async () => {
+    const dbPath = await tempDbPath();
+    const options = {
+      webRoot: await tempWebRoot(),
+      dbPath,
+      hosting: {
+        getState: () => ({ bindMode: "host" as const, listenHost: "0.0.0.0", port: 8787 }),
+        ensureHostMode: async () => ({ bindMode: "host" as const, listenHost: "0.0.0.0", port: 8787 }),
+      },
+      listNetworkInterfaces: () => ({
+        Ethernet: [{ address: "192.168.1.42", family: "IPv4" as const, internal: false }],
+      }),
+    };
+
+    const app = await createApp(options);
+    const host = await authedHeaders(app, "http://192.168.1.42:8787");
+    const first = await app.inject({ method: "POST", url: "/api/rooms", headers: host });
+    assert.equal(first.statusCode, 200);
+    const firstCode = (first.json() as { code: string }).code;
+    const firstSeat = cookieFrom(first.headers["set-cookie"], "coup_seat");
+    assert.ok(firstSeat);
+
+    const second = await app.inject({ method: "POST", url: "/api/rooms", headers: host });
+    assert.equal(second.statusCode, 200);
+    const secondCode = (second.json() as { code: string }).code;
+    assert.notEqual(secondCode, firstCode);
+    const secondSeat = cookieFrom(second.headers["set-cookie"], "coup_seat");
+    assert.ok(secondSeat);
+
+    const firstGuest = await app.inject({
+      method: "POST",
+      url: `/api/rooms/${firstCode}/seats/2/claim`,
+      headers: { ...host, cookie: `${host.cookie}; ${firstSeat}` },
+      payload: { displayName: "A 客人" },
+    });
+    assert.equal(firstGuest.statusCode, 200);
+
+    const wrongRoomRename = await app.inject({
+      method: "PATCH",
+      url: `/api/rooms/${secondCode}/seats/1`,
+      headers: {
+        ...host,
+        cookie: `${host.cookie}; ${firstSeat}`,
+        "content-type": "application/json",
+      },
+      payload: { displayName: "错误房间" },
+    });
+    assert.equal(wrongRoomRename.statusCode, 403);
+
+    const firstLookup = await app.inject({ method: "GET", url: `/api/rooms/${firstCode}` });
+    const secondLookup = await app.inject({ method: "GET", url: `/api/rooms/${secondCode}` });
+    assert.equal(firstLookup.statusCode, 200);
+    assert.equal(secondLookup.statusCode, 200);
+    assert.equal(
+      (firstLookup.json() as { seats: Array<{ seatId: string; kind: string }> }).seats.find((seat) => seat.seatId === "2")?.kind,
+      "remote_human",
+    );
+    assert.equal(
+      (secondLookup.json() as { seats: Array<{ seatId: string; kind: string }> }).seats.find((seat) => seat.seatId === "2")?.kind,
+      "open",
+    );
+    await app.close();
+
+    const reopened = await createApp(options);
+    try {
+      for (const code of [firstCode, secondCode]) {
+        const lookup = await reopened.inject({ method: "GET", url: `/api/rooms/${code}` });
+        assert.equal(lookup.statusCode, 200);
+      }
+    } finally {
+      await reopened.close();
+    }
+  });
+
   it("creates a room in host mode and returns join url", async () => {
     const app = await createApp({
       webRoot: await tempWebRoot(),

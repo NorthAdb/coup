@@ -44,7 +44,7 @@ export type ConfigureSeatInput = { kind: "open" } | { kind: "closed" };
 
 export type RoomRegistry = {
   create(): RoomRecord;
-  /** Replace in-memory map with a persisted room (boot recovery). */
+  /** Add a persisted room to the in-memory map (boot recovery). */
   restore(room: RoomRecord): void;
   getByCode(code: string): RoomRecord | null;
   listCodes(): string[];
@@ -182,7 +182,6 @@ export function createRoomRegistry(): RoomRegistry {
       return room;
     },
     restore(room) {
-      rooms.clear();
       rooms.set(room.code, structuredClone(room));
     },
     getByCode(code) {

@@ -391,7 +391,7 @@ describe("pause when absent seat owes a decision", () => {
       now += HEARTBEAT_LEASE_MS + 1 + GRACE_MS;
       const hostView = await app.inject({
         method: "GET",
-        url: "/api/matches/current",
+        url: `/api/rooms/${ctx.code}/matches/current`,
         headers: { origin: ctx.host.origin, cookie: ctx.hostCookie },
       });
       assert.equal(hostView.statusCode, 200);
@@ -418,7 +418,7 @@ describe("pause when absent seat owes a decision", () => {
       assert.ok(income);
       const decided = await app.inject({
         method: "POST",
-        url: "/api/matches/current/decision",
+        url: `/api/rooms/${ctx.code}/matches/current/decision`,
         headers: {
           origin: ctx.host.origin,
           cookie: ctx.hostCookie,
@@ -435,7 +435,7 @@ describe("pause when absent seat owes a decision", () => {
 
       const paused = await app.inject({
         method: "GET",
-        url: "/api/matches/current",
+        url: `/api/rooms/${ctx.code}/matches/current`,
         headers: { origin: ctx.host.origin, cookie: ctx.hostCookie },
       });
       const pausedBody = paused.json() as {
@@ -655,7 +655,7 @@ describe("host dispositions", () => {
       // from the active view.
       const current = await app.inject({
         method: "GET",
-        url: "/api/matches/current",
+        url: `/api/rooms/${ctx.code}/matches/current`,
         headers: { origin: ctx.guest.origin, cookie: ctx.guestCookie },
       });
       assert.equal(current.statusCode, 404);

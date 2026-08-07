@@ -1,32 +1,27 @@
-/**
- * SQLite persistence for the single active LAN room (ticket 14).
- * Same DB file as MatchStore; separate table.
- */
-
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type {
-  LobbySeat,
-  LobbySeatKind,
-  RoomPhase,
-  RoomRecord,
-} from "./roomRegistry.js";
+import type { LobbySeat, LobbySeatKind, RoomPhase, RoomRecord } from "./roomRegistry.js";
 
-export type LoadActiveRoomResult =
-  | { ok: true; room: RoomRecord | null }
-  | { ok: false; reason: "corrupt" | "invalid" };
-
-export type RoomStore = {
-  saveActiveRoom(room: RoomRecord): void;
-  loadActiveRoom(): LoadActiveRoomResult;
-  clearActiveRoom(): void;
-  /** Test helper: overwrite raw JSON to simulate corruption. */
-  debugOverwritePayload(payload: string): void;
-  close(): void;
+export type RoomLoadFailure = {
+  roomCode: string | null;
+  reason: "corrupt" | "invalid" | "migration_error";
 };
 
-const ACTIVE_ROW_ID = 1;
+export type LoadRoomsResult =
+  | { ok: true; rooms: RoomRecord[]; failures: [] }
+  | { ok: false; rooms: RoomRecord[]; failures: RoomLoadFailure[] };
+
+export type RoomStore = {
+  saveRoom(room: RoomRecord): void;
+  loadRooms(): LoadRoomsResult;
+  clearRoom(roomCode: string): void;
+  clearAllRooms(): void;
+  // Test-only payload injection for migration and corruption recovery cases.
+  debugOverwritePayload(payload: string): void;
+  debugOverwriteLegacyPayload(payload: string): void;
+  close(): void;
+};
 
 function isRoomPhase(value: unknown): value is RoomPhase {
   return value === "lobby" || value === "match" || value === "rematch";
@@ -35,77 +30,62 @@ function isRoomPhase(value: unknown): value is RoomPhase {
 function parseSeat(raw: unknown): LobbySeat | null {
   if (!raw || typeof raw !== "object") return null;
   const seat = raw as Record<string, unknown>;
-  if (typeof seat.seatId !== "string") return null;
-  const kindValue: unknown = seat.kind;
-  if (
-    kindValue !== "local_human" &&
-    kindValue !== "open" &&
-    kindValue !== "remote_human" &&
-    // 旧库可能残留 local_agent 座位；解析时容忍但降级为关闭。
-    kindValue !== "local_agent" &&
-    kindValue !== "closed"
-  ) {
-    return null;
-  }
-  if (seat.displayName !== null && typeof seat.displayName !== "string") {
-    return null;
-  }
-  if (
-    seat.credentialHash !== null &&
-    typeof seat.credentialHash !== "string"
-  ) {
-    return null;
-  }
-  const rematchValue: unknown = seat.rematchStatus;
-  if (
-    rematchValue !== null &&
-    rematchValue !== undefined &&
-    rematchValue !== "awaiting" &&
-    rematchValue !== "confirmed" &&
-    rematchValue !== "left"
-  ) {
-    return null;
-  }
+  const kind = seat.kind;
+  if (typeof seat.seatId !== "string" ||
+      !["local_human", "open", "remote_human", "local_agent", "closed"].includes(String(kind))) return null;
+  if (seat.displayName !== null && typeof seat.displayName !== "string") return null;
+  if (seat.credentialHash !== null && typeof seat.credentialHash !== "string") return null;
+  const rematchStatus = seat.rematchStatus;
+  if (rematchStatus !== null && rematchStatus !== undefined &&
+      !["awaiting", "confirmed", "left"].includes(String(rematchStatus))) return null;
   return {
     seatId: seat.seatId,
-    kind: kindValue === "local_agent" ? "closed" : (kindValue as LobbySeatKind),
+    kind: kind === "local_agent" ? "closed" : kind as LobbySeatKind,
     displayName: seat.displayName,
     credentialHash: seat.credentialHash,
-    rematchStatus:
-      rematchValue === undefined || rematchValue === null
-        ? null
-        : rematchValue,
+    rematchStatus: rematchStatus == null ? null : rematchStatus as "awaiting" | "confirmed" | "left",
   };
 }
 
 function parseRoom(raw: unknown): RoomRecord | null {
   if (!raw || typeof raw !== "object") return null;
   const room = raw as Record<string, unknown>;
-  if (typeof room.code !== "string") return null;
-  if (!isRoomPhase(room.phase)) return null;
-  if (typeof room.createdAt !== "number") return null;
-  if (room.matchId !== null && typeof room.matchId !== "string") return null;
-  if (!Array.isArray(room.seats)) return null;
-  const seats: LobbySeat[] = [];
-  for (const item of room.seats) {
-    const seat = parseSeat(item);
-    if (!seat) return null;
-    seats.push(seat);
-  }
-  if (room.phase === "match" && room.matchId === null) return null;
+  if (typeof room.code !== "string" || !isRoomPhase(room.phase) ||
+      typeof room.createdAt !== "number" ||
+      (room.matchId !== null && typeof room.matchId !== "string") ||
+      !Array.isArray(room.seats)) return null;
+  const seats = room.seats.map(parseSeat);
+  if (seats.some((seat) => seat === null) || (room.phase === "match" && room.matchId === null)) return null;
   return {
     code: room.code,
     phase: room.phase,
     createdAt: room.createdAt,
-    seats,
+    seats: seats as LobbySeat[],
     matchId: room.matchId,
   };
+}
+
+function parsePayload(payload: string): { room: RoomRecord } | RoomLoadFailure {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return { roomCode: null, reason: "corrupt" };
+  }
+  const room = parseRoom(parsed);
+  return room ? { room } : { roomCode: null, reason: "invalid" };
 }
 
 export function openRoomStore(dbPath: string): RoomStore {
   mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec(`
+    CREATE TABLE IF NOT EXISTS rooms (
+      room_code TEXT PRIMARY KEY NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS lan_active_room (
       id INTEGER PRIMARY KEY NOT NULL,
       payload_json TEXT NOT NULL,
@@ -113,53 +93,56 @@ export function openRoomStore(dbPath: string): RoomStore {
     );
   `);
 
-  return {
-    saveActiveRoom(room) {
-      db.prepare(
-        `INSERT INTO lan_active_room (id, payload_json, updated_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           payload_json = excluded.payload_json,
-           updated_at = excluded.updated_at`,
-      ).run(ACTIVE_ROW_ID, JSON.stringify(room), new Date().toISOString());
-    },
+  const migrationFailures: RoomLoadFailure[] = [];
 
-    loadActiveRoom() {
-      const row = db
-        .prepare(
-          `SELECT payload_json AS payloadJson
-           FROM lan_active_room
-           WHERE id = ?`,
-        )
-        .get(ACTIVE_ROW_ID) as { payloadJson: string } | undefined;
-      if (!row) return { ok: true, room: null };
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(row.payloadJson);
-      } catch {
-        return { ok: false, reason: "corrupt" };
+  const legacy = db.prepare(`SELECT payload_json AS payloadJson FROM lan_active_room WHERE id = 1`).get() as { payloadJson: string } | undefined;
+  if (legacy) {
+    const parsed = parsePayload(legacy.payloadJson);
+    if ("room" in parsed) {
+      const exists = db.prepare(`SELECT 1 AS present FROM rooms WHERE room_code = ?`).get(parsed.room.code);
+      if (!exists) {
+        db.prepare(`INSERT INTO rooms (room_code, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?)`).run(
+          parsed.room.code, JSON.stringify(parsed.room), parsed.room.createdAt, new Date().toISOString(),
+        );
+        db.prepare(`DELETE FROM lan_active_room WHERE id = 1`).run();
       }
-      const room = parseRoom(parsed);
-      if (!room) return { ok: false, reason: "invalid" };
-      return { ok: true, room };
-    },
+    } else {
+      migrationFailures.push(parsed);
+    }
+  }
 
-    clearActiveRoom() {
-      db.prepare(`DELETE FROM lan_active_room WHERE id = ?`).run(ACTIVE_ROW_ID);
-    },
+  function loadRooms(): LoadRoomsResult {
+    const rows = db.prepare(`SELECT room_code AS roomCode, payload_json AS payloadJson FROM rooms ORDER BY room_code`).all() as Array<{ roomCode: string; payloadJson: string }>;
+    const rooms: RoomRecord[] = [];
+    const failures: RoomLoadFailure[] = [...migrationFailures];
+    for (const row of rows) {
+      const parsed = parsePayload(row.payloadJson);
+      if ("room" in parsed) {
+        if (parsed.room.code !== row.roomCode) failures.push({ roomCode: row.roomCode, reason: "invalid" });
+        else rooms.push(parsed.room);
+      } else failures.push({ ...parsed, roomCode: row.roomCode });
+    }
+    return failures.length > 0 ? { ok: false, rooms, failures } : { ok: true, rooms, failures: [] };
+  }
 
+  return {
+    saveRoom(room) {
+      db.prepare(`INSERT INTO rooms (room_code, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(room_code) DO UPDATE SET payload_json = excluded.payload_json, created_at = excluded.created_at, updated_at = excluded.updated_at`).run(room.code, JSON.stringify(room), room.createdAt, new Date().toISOString());
+    },
+    loadRooms,
+    clearRoom(roomCode) { db.prepare(`DELETE FROM rooms WHERE room_code = ?`).run(roomCode); },
+    clearAllRooms() { db.prepare(`DELETE FROM rooms`).run(); },
     debugOverwritePayload(payload) {
-      db.prepare(
-        `INSERT INTO lan_active_room (id, payload_json, updated_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           payload_json = excluded.payload_json,
-           updated_at = excluded.updated_at`,
-      ).run(ACTIVE_ROW_ID, payload, new Date().toISOString());
+      const row = db.prepare(`SELECT room_code AS roomCode FROM rooms ORDER BY room_code LIMIT 1`).get() as { roomCode: string } | undefined;
+      if (row) {
+        db.prepare(`UPDATE rooms SET payload_json = ? WHERE room_code = ?`).run(payload, row.roomCode);
+        return;
+      }
+      db.prepare(`INSERT INTO lan_active_room (id, payload_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at`).run(payload, new Date().toISOString());
     },
-
-    close() {
-      db.close();
+    debugOverwriteLegacyPayload(payload) {
+      db.prepare(`INSERT INTO lan_active_room (id, payload_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, updated_at = excluded.updated_at`).run(payload, new Date().toISOString());
     },
+    close() { db.close(); },
   };
 }

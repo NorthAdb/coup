@@ -23,22 +23,24 @@ type TrackedSeat = {
 };
 
 export type SeatPresenceTracker = {
-  trackSeat(seatId: string): void;
-  untrackSeat(seatId: string): void;
-  clear(): void;
-  noteHeartbeat(seatId: string, now: number): void;
-  tick(now: number): void;
-  resume(seatId: string): { resumed: boolean; absence: SeatAbsence } | null;
-  extendWait(seatId: string, now: number): SeatAbsence | null;
+  trackSeat(roomCode: string, seatId: string): void;
+  untrackSeat(roomCode: string, seatId: string): void;
+  clearRoom(roomCode: string): void;
+  clearAll(): void;
+  noteHeartbeat(roomCode: string, seatId: string, now: number): void;
+  tick(roomCode: string, now: number): void;
+  resume(roomCode: string, seatId: string): { resumed: boolean; absence: SeatAbsence } | null;
+  extendWait(roomCode: string, seatId: string, now: number): SeatAbsence | null;
   /**
    * After authority restart: put seats into a fresh reconnecting grace.
    * Downtime is not counted — soft-timeout clocks restart from this grace.
    */
-  grantRecoveryGrace(seatIds: string[], now: number): void;
-  clearSeat(seatId: string): void;
-  get(seatId: string): SeatAbsence | null;
-  projectAll(now: number): PublicSeatAbsence[];
+  grantRecoveryGrace(seatIds: string[], roomCode: string, now: number): void;
+  clearSeat(roomCode: string, seatId: string): void;
+  get(roomCode: string, seatId: string): SeatAbsence | null;
+  projectAll(roomCode: string, now: number): PublicSeatAbsence[];
   blocksAdvancement(
+    roomCode: string,
     seatId: string,
     seatOwesDecision: boolean,
   ): boolean;
@@ -47,30 +49,41 @@ export type SeatPresenceTracker = {
 export function createSeatPresenceTracker(): SeatPresenceTracker {
   const seats = new Map<string, TrackedSeat>();
 
-  function ensure(seatId: string): TrackedSeat {
-    let tracked = seats.get(seatId);
+  function key(roomCode: string, seatId: string) {
+    return `${roomCode}:${seatId}`;
+  }
+
+  function ensure(roomCode: string, seatId: string): TrackedSeat {
+    const scopedKey = key(roomCode, seatId);
+    let tracked = seats.get(scopedKey);
     if (!tracked) {
       tracked = {
         absence: createSeatAbsence(seatId),
         lastHeartbeatAt: null,
       };
-      seats.set(seatId, tracked);
+      seats.set(scopedKey, tracked);
     }
     return tracked;
   }
 
   return {
-    trackSeat(seatId) {
-      ensure(seatId);
+    trackSeat(roomCode, seatId) {
+      ensure(roomCode, seatId);
     },
-    untrackSeat(seatId) {
-      seats.delete(seatId);
+    untrackSeat(roomCode, seatId) {
+      seats.delete(key(roomCode, seatId));
     },
-    clear() {
+    clearRoom(roomCode) {
+      const prefix = `${roomCode}:`;
+      for (const scopedKey of seats.keys()) {
+        if (scopedKey.startsWith(prefix)) seats.delete(scopedKey);
+      }
+    },
+    clearAll() {
       seats.clear();
     },
-    noteHeartbeat(seatId, now) {
-      const tracked = ensure(seatId);
+    noteHeartbeat(roomCode, seatId, now) {
+      const tracked = ensure(roomCode, seatId);
       tracked.lastHeartbeatAt = now;
       // Within grace, a heartbeat restores presence without credential rotation.
       // After 离席, resume-seat is required (and rotates the credential).
@@ -78,8 +91,10 @@ export function createSeatPresenceTracker(): SeatPresenceTracker {
         tracked.absence = markSeatResumed(tracked.absence);
       }
     },
-    tick(now) {
-      for (const tracked of seats.values()) {
+    tick(roomCode, now) {
+      const prefix = `${roomCode}:`;
+      for (const [scopedKey, tracked] of seats) {
+        if (!scopedKey.startsWith(prefix)) continue;
         if (
           tracked.absence.phase === "present" &&
           tracked.lastHeartbeatAt !== null &&
@@ -92,8 +107,8 @@ export function createSeatPresenceTracker(): SeatPresenceTracker {
         tracked.absence = tickSeatAbsence(tracked.absence, now);
       }
     },
-    resume(seatId) {
-      const tracked = seats.get(seatId);
+    resume(roomCode, seatId) {
+      const tracked = seats.get(key(roomCode, seatId));
       if (!tracked) return null;
       if (tracked.absence.phase === "present") {
         return { resumed: false, absence: tracked.absence };
@@ -102,32 +117,34 @@ export function createSeatPresenceTracker(): SeatPresenceTracker {
       tracked.lastHeartbeatAt = null;
       return { resumed: true, absence: tracked.absence };
     },
-    extendWait(seatId, now) {
-      const tracked = seats.get(seatId);
+    extendWait(roomCode, seatId, now) {
+      const tracked = seats.get(key(roomCode, seatId));
       if (!tracked) return null;
       tracked.absence = extendAbsenceWait(tracked.absence, now);
       return tracked.absence;
     },
-    grantRecoveryGrace(seatIds, now) {
+    grantRecoveryGrace(seatIds, roomCode, now) {
       for (const seatId of seatIds) {
-        const tracked = ensure(seatId);
+        const tracked = ensure(roomCode, seatId);
         tracked.lastHeartbeatAt = null;
         tracked.absence = markChannelDrop(createSeatAbsence(seatId), now);
       }
     },
-    clearSeat(seatId) {
-      seats.delete(seatId);
+    clearSeat(roomCode, seatId) {
+      seats.delete(key(roomCode, seatId));
     },
-    get(seatId) {
-      return seats.get(seatId)?.absence ?? null;
+    get(roomCode, seatId) {
+      return seats.get(key(roomCode, seatId))?.absence ?? null;
     },
-    projectAll(now) {
-      return [...seats.values()]
-        .map((tracked) => projectSeatAbsence(tracked.absence, now))
+    projectAll(roomCode, now) {
+      const prefix = `${roomCode}:`;
+      return [...seats.entries()]
+        .filter(([scopedKey]) => scopedKey.startsWith(prefix))
+        .map(([, tracked]) => projectSeatAbsence(tracked.absence, now))
         .filter((p) => p.phase !== "present");
     },
-    blocksAdvancement(seatId, seatOwesDecision) {
-      const tracked = seats.get(seatId);
+    blocksAdvancement(roomCode, seatId, seatOwesDecision) {
+      const tracked = seats.get(key(roomCode, seatId));
       if (!tracked) return false;
       return seatBlocksAdvancement(tracked.absence, seatOwesDecision);
     },

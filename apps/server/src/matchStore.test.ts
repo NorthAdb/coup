@@ -3,8 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { createMatch } from "@coup/domain";
 import { openMatchStore, type MatchStore } from "./matchStore.js";
+import { persistenceForStore } from "./createApp.js";
 
 const tempDirs: string[] = [];
 
@@ -36,6 +38,7 @@ function openSample(store: MatchStore, matchId = "match-1") {
   const created = sampleMatch(matchId);
   store.createRun({
     matchId,
+    roomCode: "4242",
     humanSeatId: "seat-1",
     displayNames: { "seat-1": "你", "seat-2": "灰狐" },
     seatAgents: {
@@ -134,6 +137,155 @@ describe("MatchStore", () => {
       assert.equal(resumable.events.at(-1)?.type, "turn_advanced");
     } finally {
       second.close();
+    }
+  });
+
+  it("finds in-progress runs by room and allows different rooms to coexist", async () => {
+    const dbPath = await tempDbPath();
+    const store = openMatchStore(dbPath);
+    try {
+      openSample(store, "match-a");
+      const created = sampleMatch("match-b");
+      store.createRun({
+        matchId: "match-b", roomCode: "5151", humanSeatId: "seat-1",
+        displayNames: { "seat-1": "你", "seat-2": "灰狐" },
+        seatAgents: { "seat-2": { cli: "stub", modelId: null } },
+        state: created.state, events: created.events,
+      });
+      assert.equal(store.findResumableRun("4242")?.matchId, "match-a");
+      assert.equal(store.findResumableRun("5151")?.matchId, "match-b");
+      assert.deepEqual(store.listRuns("5151").map((run) => run.matchId), ["match-b"]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("creates runs in their room without aborting another room's run", async () => {
+    const dbPath = await tempDbPath();
+    const store = openMatchStore(dbPath);
+    try {
+      const persistence = persistenceForStore(store);
+      const first = sampleMatch("match-room-a");
+      persistence.onCreated(
+        {
+          state: first.state,
+          events: first.events,
+          humanSeatId: "seat-1",
+          displayNames: { "seat-1": "你", "seat-2": "灰狐" },
+        },
+        "4242",
+      );
+      const second = sampleMatch("match-room-b");
+      persistence.onCreated(
+        {
+          state: second.state,
+          events: second.events,
+          humanSeatId: "seat-1",
+          displayNames: { "seat-1": "你", "seat-2": "灰狐" },
+        },
+        "5151",
+      );
+
+      assert.equal(store.findResumableRun("4242")?.matchId, "match-room-a");
+      assert.equal(store.findResumableRun("5151")?.matchId, "match-room-b");
+      assert.equal(store.getRun("match-room-a")?.runStatus, "in_progress");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("migrates nullable room codes and marks runs that cannot be associated", async () => {
+    const dbPath = await tempDbPath();
+    const created = sampleMatch("legacy-match");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE match_runs (
+        match_id TEXT PRIMARY KEY NOT NULL,
+        room_code TEXT,
+        run_status TEXT NOT NULL,
+        winner_seat_id TEXT,
+        abort_reason TEXT,
+        resumed_from_match_id TEXT,
+        human_seat_id TEXT NOT NULL,
+        display_names_json TEXT NOT NULL,
+        seat_agents_json TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE match_events (
+        match_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        PRIMARY KEY (match_id, seq)
+      );
+    `);
+    db.prepare(`INSERT INTO match_runs VALUES (?, NULL, 'in_progress', NULL, NULL, NULL, ?, ?, ?, ?, ?)`)
+      .run("legacy-match", "seat-1", JSON.stringify({ "seat-1": "你" }), "{}", JSON.stringify(created.state), new Date().toISOString());
+    db.close();
+
+    const store = openMatchStore(dbPath);
+    try {
+      store.migrateLegacyRuns([{ code: "4242", matchId: null }]);
+      const run = store.getRun("legacy-match");
+      assert.ok(run);
+      assert.equal(run.runStatus, "migration_error");
+      assert.equal(run.roomCode, "__migration_error__");
+      assert.throws(() => store.createRun({
+        matchId: "new-match",
+        roomCode: "" as string,
+        humanSeatId: "seat-1",
+        displayNames: { "seat-1": "你" },
+        seatAgents: {},
+        state: created.state,
+        events: created.events,
+      }), /room_code_required/);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("migrates nullable room codes when legacy events reference match_runs by foreign key", async () => {
+    const dbPath = await tempDbPath();
+    const created = sampleMatch("legacy-match-fk");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE match_runs (
+        match_id TEXT PRIMARY KEY NOT NULL,
+        room_code TEXT,
+        run_status TEXT NOT NULL,
+        winner_seat_id TEXT,
+        abort_reason TEXT,
+        resumed_from_match_id TEXT,
+        human_seat_id TEXT NOT NULL,
+        display_names_json TEXT NOT NULL,
+        seat_agents_json TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE match_events (
+        match_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        PRIMARY KEY (match_id, seq),
+        FOREIGN KEY (match_id) REFERENCES match_runs(match_id)
+      );
+    `);
+    db.prepare(`INSERT INTO match_runs VALUES (?, NULL, 'in_progress', NULL, NULL, NULL, ?, ?, ?, ?, ?)`)
+      .run("legacy-match-fk", "seat-1", JSON.stringify({ "seat-1": "你" }), "{}", JSON.stringify(created.state), new Date().toISOString());
+    const event = created.events[0] ?? { type: "match_started", matchId: "legacy-match-fk" };
+    db.prepare(`INSERT INTO match_events VALUES (?, 1, ?)`).run("legacy-match-fk", JSON.stringify(event));
+    db.close();
+
+    const store = openMatchStore(dbPath);
+    try {
+      store.migrateLegacyRuns([{ code: "4242", matchId: null }]);
+      const run = store.getRun("legacy-match-fk");
+      assert.ok(run);
+      assert.equal(run.runStatus, "migration_error");
+      assert.equal(run.roomCode, "__migration_error__");
+      assert.equal(store.listEvents("legacy-match-fk").length, 1);
+    } finally {
+      store.close();
     }
   });
 

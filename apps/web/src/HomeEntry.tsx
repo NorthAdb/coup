@@ -2,15 +2,29 @@ type HomeEntryProps = {
   onCreateRoom: () => void;
   onJoinRoom: () => void;
   busy: boolean;
-  recoveryFailed?: boolean;
-  onAbandonRecovery?: () => void;
+  recoveryRooms?: Array<{ code: string; status: "restored" | "failed"; reason: string | null }>;
+  onAbandonRecovery?: (roomCode: string) => void;
 };
+
+export function recoveryReasonMessage(reason: string | null): string {
+  const messages: Record<string, string> = {
+    corrupt: "房间数据损坏",
+    invalid: "房间数据无效",
+    migration_error: "房间数据迁移失败",
+    match_missing: "缺少进行中的对局",
+    match_not_active: "进行中的对局不存在",
+    match_room_mismatch: "对局与房间不匹配",
+    rematch_match_not_found: "续局记录不存在",
+    rematch_match_active: "续局记录仍在进行中",
+  };
+  return (reason && messages[reason]) || "无法恢复该房间";
+}
 
 export function HomeEntry({
   onCreateRoom,
   onJoinRoom,
   busy,
-  recoveryFailed = false,
+  recoveryRooms = [],
   onAbandonRecovery,
 }: HomeEntryProps) {
   return (
@@ -18,17 +32,17 @@ export function HomeEntry({
       <div className="b-hero">
         <p className="eyebrow">互联网房间</p>
         <h1>创建房间</h1>
-        {recoveryFailed ? (
+        {recoveryRooms.length > 0 ? (
           <>
-            <p>无法恢复上一房间。须先放弃并作废旧房间号与座位凭证，才能创建新房。</p>
-            <button
-              type="button"
-              className="primary xl"
-              disabled={busy}
-              onClick={() => onAbandonRecovery?.()}
-            >
-              放弃并开新房间
-            </button>
+            <p>服务器已恢复以下房间，可逐房放弃不需要的房间。</p>
+            {recoveryRooms.map((room) => (
+              <div key={room.code}>
+                <p>房间 {room.code}：{room.status === "failed" ? `恢复失败（${recoveryReasonMessage(room.reason)}）` : "已恢复"}</p>
+                <button type="button" disabled={busy} onClick={() => onAbandonRecovery?.(room.code)}>
+                  放弃房间 {room.code}
+                </button>
+              </div>
+            ))}
           </>
         ) : (
           <>

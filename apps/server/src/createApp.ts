@@ -30,6 +30,11 @@ import {
 } from "./roomRegistry.js";
 import { openRoomStore, type RoomStore } from "./roomStore.js";
 import {
+  IDLE_ROOM_RECLAIM_MS,
+  isRoomEmpty,
+  MAX_ROOMS,
+} from "./roomLifecycle.js";
+import {
   CSRF_HEADER,
   SEAT_COOKIE,
   SESSION_COOKIE,
@@ -50,6 +55,13 @@ import {
 export type BindMode = "local" | "host";
 
 export type RoomRecoveryStatus = "none" | "restored" | "failed";
+
+type RoomRecoveryRecord = {
+  code: string;
+  status: RoomRecoveryStatus;
+  reason: string | null;
+  room: RoomRecord | null;
+};
 
 export type HostingState = {
   bindMode: BindMode;
@@ -106,13 +118,11 @@ function humanFacingPayload(
 
 export function persistenceForStore(store: MatchStore): MatchPersistence {
   return {
-    onCreated(match) {
-      const existing = store.findResumableRun();
-      if (existing && existing.matchId !== match.state.matchId) {
-        store.userAbort(existing.matchId);
-      }
+    onCreated(match, roomCode) {
+      if (!roomCode) throw new Error("room_code_required");
       store.createRun({
         matchId: match.state.matchId,
+        roomCode,
         humanSeatId: match.humanSeatId,
         displayNames: match.displayNames,
         seatAgents: {},
@@ -181,6 +191,8 @@ export async function createApp(options: CreateAppOptions) {
   const dbPath = options.dbPath ?? defaultDbPath();
   const store = options.store ?? openMatchStore(dbPath);
   const roomStore = options.roomStore ?? openRoomStore(dbPath);
+  const initialRooms = roomStore.loadRooms();
+  store.migrateLegacyRuns(initialRooms.rooms);
   const persistence = persistenceForStore(store);
   const rooms = options.rooms ?? createRoomRegistry();
   const sessions = options.sessions ?? createSessionStore();
@@ -192,9 +204,7 @@ export async function createApp(options: CreateAppOptions) {
   const publicHost = process.env.COUP_PUBLIC_HOST?.trim() || null;
   const roomCodeThrottle = createRoomCodeThrottle();
   let selectedLanHost: string | null = null;
-  let recoveryStatus: RoomRecoveryStatus = "none";
-  let recoveryReason: string | null = null;
-  let failedRecoveryRoom: RoomRecord | null = null;
+  const recovery = new Map<string, RoomRecoveryRecord>();
 
   function currentAllowedOrigins(): string[] {
     const state = options.hosting?.getState();
@@ -286,91 +296,227 @@ export async function createApp(options: CreateAppOptions) {
     return session;
   }
 
-  let activeMatch: ActiveMatch | null = null;
-  let activeRoomCode: string | null = null;
+  const matchesByRoom = new Map<string, ActiveMatch>();
+  const roomActivity = new Map<
+    string,
+    { lastActivityAt: number; emptySince: number | null }
+  >();
   const presence = options.presence ?? createSeatPresenceTracker();
   const now = () => (options.now ? options.now() : Date.now());
 
-  function tickPresence() {
-    if (activeMatch) {
-      for (const seat of activeMatch.state.seats) {
-        if (seat.controller !== "remote_human") {
-          // Presence is a remote-human lease; clean up stale entries from
-          // older clients or a previous controller assignment.
-          presence.clearSeat(seat.seatId);
+  function tickPresence(code?: string) {
+    const codes = code ? [code] : rooms.listCodes();
+    for (const roomCode of codes) {
+      const match = matchesByRoom.get(roomCode);
+      if (match) {
+        for (const seat of match.state.seats) {
+          if (seat.controller !== "remote_human") {
+            presence.clearSeat(roomCode, seat.seatId);
+          }
         }
       }
+      presence.tick(roomCode, now());
     }
-    presence.tick(now());
   }
 
-  function persistActiveRoom() {
-    const codes = rooms.listCodes();
-    if (codes.length === 0) {
-      roomStore.clearActiveRoom();
-      return;
-    }
-    const room = rooms.getByCode(codes[0]!);
-    if (room) roomStore.saveActiveRoom(room);
+  function markRoomActive(code: string) {
+    const room = rooms.getByCode(code);
+    const current = now();
+    roomActivity.set(code, {
+      lastActivityAt: current,
+      emptySince:
+        room &&
+        isRoomEmpty(room, matchesByRoom.get(code) ?? null, (seatId) =>
+          presence.get(code, seatId),
+        )
+          ? current
+          : null,
+    });
   }
 
-  function trackRemoteSeatsForMatch() {
-    presence.clear();
-    if (!activeMatch || !activeRoomCode) return;
+  function dissolveRoom(
+    code: string,
+    matchId?: string | null,
+    abortReason = "room_idle_reclaimed",
+  ) {
+    const activeMatchId = matchId ?? matchesByRoom.get(code)?.state.matchId;
+    if (activeMatchId && store.getRun(activeMatchId)?.runStatus === "in_progress") {
+      store.technicalAbort(activeMatchId, abortReason);
+    }
+    rooms.dissolve(code);
+    roomStore.clearRoom(code);
+    matchesByRoom.delete(code);
+    presence.clearRoom(code);
+    roomActivity.delete(code);
+  }
+
+  function reclaimIdleRooms() {
+    const current = now();
+    for (const code of rooms.listCodes()) {
+      const room = rooms.getByCode(code);
+      if (!room) continue;
+      tickPresence(code);
+      const activity = roomActivity.get(code) ?? {
+        lastActivityAt: current,
+        emptySince: null,
+      };
+      const empty = isRoomEmpty(
+        room,
+        matchesByRoom.get(code) ?? null,
+        (seatId) => presence.get(code, seatId),
+      );
+      if (!empty) {
+        activity.emptySince = null;
+      } else if (activity.emptySince === null) {
+        activity.emptySince = activity.lastActivityAt;
+      }
+      if (
+        empty &&
+        activity.emptySince !== null &&
+        current - activity.emptySince >= IDLE_ROOM_RECLAIM_MS
+      ) {
+        dissolveRoom(code);
+        continue;
+      }
+      roomActivity.set(code, activity);
+    }
+  }
+
+  function trackRemoteSeatsForMatch(code: string, match: ActiveMatch) {
+    presence.clearRoom(code);
     const t = now();
-    for (const seat of activeMatch.state.seats) {
+    for (const seat of match.state.seats) {
       if (seat.controller === "remote_human" && !seat.eliminated) {
-        presence.trackSeat(seat.seatId);
-        // Treat match start as an initial heartbeat so silence starts the lease.
-        presence.noteHeartbeat(seat.seatId, t);
+        presence.trackSeat(code, seat.seatId);
+        presence.noteHeartbeat(code, seat.seatId, t);
       }
     }
   }
 
-  function trackRemoteSeatsAfterAuthorityRestore() {
-    presence.clear();
-    if (!activeMatch || !activeRoomCode) return;
+  function trackRemoteSeatsAfterAuthorityRestore(code: string, match: ActiveMatch) {
+    presence.clearRoom(code);
     const seatIds: string[] = [];
-    for (const seat of activeMatch.state.seats) {
+    for (const seat of match.state.seats) {
       if (seat.controller === "remote_human" && !seat.eliminated) {
         seatIds.push(seat.seatId);
       }
     }
-    // Fresh 15s grace — authority downtime is not counted against soft timeout.
-    presence.grantRecoveryGrace(seatIds, now());
+    presence.grantRecoveryGrace(seatIds, code, now());
+  }
+
+  /*
+   * Keep the runtime lookup explicit at every HTTP seam. A seat credential
+   * must never be used to infer a different room.
+   */
+  function matchForRoom(code: string) {
+    return matchesByRoom.get(code) ?? null;
+  }
+
+  function resolveMatchSeatId(
+    request: { headers: Record<string, unknown> },
+    code: string,
+    match: ActiveMatch,
+  ): string | null {
+    const room = rooms.getByCode(code);
+    if (!room) return null;
+    const cookies = parseCookies(
+      typeof request.headers.cookie === "string"
+        ? request.headers.cookie
+        : undefined,
+    );
+    const seatToken = cookies[SEAT_COOKIE];
+    if (!seatToken) return null;
+    const holder = rooms.findSeatByCredential(room.code, hashToken(seatToken));
+    if (!holder) return null;
+    const matchSeat = match.state.seats.find(
+      (seat) => seat.seatId === holder.seatId,
+    );
+    if (
+      !matchSeat ||
+      (matchSeat.controller !== "local_human" &&
+        matchSeat.controller !== "remote_human")
+    ) {
+      return null;
+    }
+    return holder.seatId;
+  }
+
+  function persistActiveRoom() {
+    const codes = rooms.listCodes();
+    for (const code of codes) {
+      const room = rooms.getByCode(code);
+      if (room) roomStore.saveRoom(room);
+    }
   }
 
   {
-    const loaded = roomStore.loadActiveRoom();
-    if (!loaded.ok) {
-      recoveryStatus = "failed";
-      recoveryReason = loaded.reason;
-      failedRecoveryRoom = null;
-    } else if (loaded.room) {
-      const room = loaded.room;
+    const loaded = initialRooms;
+    for (const failure of loaded.failures) {
+      const recoveryCode = failure.roomCode ?? `migration:${failure.reason}`;
+      recovery.set(recoveryCode, {
+        code: recoveryCode,
+        status: "failed",
+        reason: failure.reason,
+        room: null,
+      });
+    }
+    for (const room of loaded.rooms) {
       if (room.phase === "match") {
         if (!room.matchId) {
-          recoveryStatus = "failed";
-          recoveryReason = "match_missing";
-          failedRecoveryRoom = room;
-        } else {
+          recovery.set(room.code, {
+            code: room.code,
+            status: "failed",
+            reason: "match_missing",
+            room,
+          });
+          continue;
+        }
+        const run = store.getRun(room.matchId);
+        if (
+          !run ||
+          run.roomCode !== room.code ||
+          run.runStatus !== "in_progress"
+        ) {
+          recovery.set(room.code, {
+            code: room.code,
+            status: "failed",
+            reason: !run ? "match_not_active" : "match_room_mismatch",
+            room,
+          });
+          continue;
+        }
+        rooms.restore(room);
+        const match = activeMatchFromRun(run);
+        matchesByRoom.set(room.code, match);
+        markRoomActive(room.code);
+        recovery.set(room.code, {
+          code: room.code,
+          status: "restored",
+          reason: null,
+          room,
+        });
+        trackRemoteSeatsAfterAuthorityRestore(room.code, match);
+      } else {
+        if (room.phase === "rematch" && room.matchId) {
           const run = store.getRun(room.matchId);
-          if (!run || run.runStatus !== "in_progress") {
-            recoveryStatus = "failed";
-            recoveryReason = "match_not_active";
-            failedRecoveryRoom = room;
-          } else {
-            rooms.restore(room);
-            activeRoomCode = room.code;
-            activeMatch = activeMatchFromRun(run);
-            recoveryStatus = "restored";
-            trackRemoteSeatsAfterAuthorityRestore();
+          if (!run || run.roomCode !== room.code || run.runStatus === "in_progress") {
+            recovery.set(room.code, {
+              code: room.code,
+              status: "failed",
+              reason: !run ? "rematch_match_not_found" : "rematch_match_active",
+              room,
+            });
+            continue;
           }
         }
-      } else {
         rooms.restore(room);
-        activeRoomCode = room.code;
-        recoveryStatus = "restored";
+        markRoomActive(room.code);
+        recovery.set(room.code, {
+          code: room.code,
+          status: "restored",
+          reason: null,
+          room,
+        });
       }
     }
   }
@@ -415,38 +561,6 @@ export async function createApp(options: CreateAppOptions) {
     persistActiveRoom();
   }
 
-  function resolveMatchSeatId(
-    request: { headers: Record<string, unknown> },
-  ): string | null {
-    if (!activeMatch) return null;
-    if (!activeRoomCode) return activeMatch.humanSeatId;
-    const room = rooms.getByCode(activeRoomCode);
-    if (!room) return null;
-    const cookies = parseCookies(
-      typeof request.headers.cookie === "string"
-        ? request.headers.cookie
-        : undefined,
-    );
-    const seatToken = cookies[SEAT_COOKIE];
-    if (!seatToken) return null;
-    const holder = rooms.findSeatByCredential(
-      room.code,
-      hashToken(seatToken),
-    );
-    if (!holder) return null;
-    const matchSeat = activeMatch.state.seats.find(
-      (seat) => seat.seatId === holder.seatId,
-    );
-    if (
-      !matchSeat ||
-      (matchSeat.controller !== "local_human" &&
-        matchSeat.controller !== "remote_human")
-    ) {
-      return null;
-    }
-    return holder.seatId;
-  }
-
   function lanSnapshot(port: number, code: string) {
     const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
     const addresses = candidates.map((c) => c.address);
@@ -474,6 +588,13 @@ export async function createApp(options: CreateAppOptions) {
   app.addHook("onClose", async () => {
     store.close();
     roomStore.close();
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    if (reply.statusCode < 200 || reply.statusCode >= 300) return;
+    if (request.method !== "POST" && request.method !== "PATCH") return;
+    const match = request.url.match(/^\/api\/rooms\/([0-9]{4})(?:\/|$)/);
+    if (match && rooms.getByCode(match[1]!)) markRoomActive(match[1]!);
   });
 
   app.get("/api/session", async (request, reply) => {
@@ -546,73 +667,28 @@ export async function createApp(options: CreateAppOptions) {
   });
 
   app.get("/api/room-recovery", async (_request, reply) => {
-    if (recoveryStatus === "failed") {
-      return reply.send({
-        status: "failed",
-        reason: recoveryReason,
-        message: "无法恢复上一房间",
-        room: failedRecoveryRoom
-          ? {
-              code: failedRecoveryRoom.code,
-              phase: failedRecoveryRoom.phase,
-              matchId: failedRecoveryRoom.matchId,
-              seats: publicSeats(failedRecoveryRoom),
-            }
-          : null,
-      });
-    }
-    if (recoveryStatus === "restored" && activeRoomCode) {
-      const room = rooms.getByCode(activeRoomCode);
-      if (room) {
-        return reply.send({
-          status: "restored",
-          reason: null,
-          message: null,
-          room: {
-            code: room.code,
-            phase: room.phase,
-            matchId: room.matchId,
-            seats: publicSeats(room),
-          },
-        });
-      }
-    }
-    return reply.send({
-      status: "none",
-      reason: null,
-      message: null,
-      room: null,
-    });
+    const roomsResult = [...recovery.values()].map((item) => ({
+      code: item.code,
+      status: item.status,
+      reason: item.reason,
+      phase: item.room?.phase ?? null,
+      matchId: item.room?.matchId ?? null,
+      seats: item.room ? publicSeats(item.room) : [],
+    }));
+    return reply.send({ rooms: roomsResult });
   });
 
-  app.post("/api/room-recovery/abandon", async (request, reply) => {
+  app.post<{ Body: { roomCode?: string } }>("/api/room-recovery/abandon", async (request, reply) => {
     if (!requireSession(request, reply)) return;
-    if (recoveryStatus !== "failed" && recoveryStatus !== "restored") {
-      return reply.code(409).send({ error: "no_recovery_to_abandon" });
+    const roomCode = request.body?.roomCode;
+    if (typeof roomCode !== "string" || !roomCode) {
+      return reply.code(400).send({ error: "room_code_required" });
     }
-
-    const matchId =
-      failedRecoveryRoom?.matchId ??
-      (activeRoomCode ? rooms.getByCode(activeRoomCode)?.matchId : null);
-    if (matchId) {
-      const run = store.getRun(matchId);
-      if (run && run.runStatus === "in_progress") {
-        store.technicalAbort(matchId, "host_restart_abandoned");
-      }
-    }
-
-    for (const code of rooms.listCodes()) {
-      rooms.dissolve(code);
-    }
-    roomStore.clearActiveRoom();
-    failedRecoveryRoom = null;
-    recoveryStatus = "none";
-    recoveryReason = null;
-    activeRoomCode = null;
-    activeMatch = null;
-    presence.clear();
-
-    return reply.send({ status: "none", abandoned: true });
+    const item = recovery.get(roomCode);
+    if (!item) return reply.code(404).send({ error: "recovery_room_not_found" });
+    dissolveRoom(roomCode, item.room?.matchId, "host_restart_abandoned");
+    recovery.delete(roomCode);
+    return reply.send({ status: "none", abandoned: true, roomCode });
   });
 
   app.post("/api/rooms", async (request, reply) => {
@@ -620,13 +696,11 @@ export async function createApp(options: CreateAppOptions) {
     if (!options.hosting) {
       return reply.code(500).send({ error: "hosting_unavailable" });
     }
-    if (recoveryStatus === "failed" || recoveryStatus === "restored") {
-      return reply.code(409).send({
-        error: "recovery_pending_abandon",
-        message:
-          recoveryStatus === "failed"
-            ? "无法恢复上一房间：须先放弃并作废旧房后才能创建新房"
-            : "已恢复上一房间：须先放弃旧房才能创建新房",
+    reclaimIdleRooms();
+    if (rooms.listCodes().length >= MAX_ROOMS) {
+      return reply.code(503).send({
+        error: "room_capacity_reached",
+        message: "房间已满，稍后再试",
       });
     }
 
@@ -645,20 +719,13 @@ export async function createApp(options: CreateAppOptions) {
       selectedLanHost = lanHost;
     }
 
-    // One active room for now (spec: single room).
-    for (const code of rooms.listCodes()) {
-      rooms.dissolve(code);
-    }
     const room = rooms.create();
+    markRoomActive(room.code);
     const hostSeat = room.seats[0];
     const issued = issueSeatToken();
     if (hostSeat) {
       hostSeat.credentialHash = issued.hash;
     }
-    activeRoomCode = room.code;
-    recoveryStatus = "none";
-    recoveryReason = null;
-    failedRecoveryRoom = null;
     persistActiveRoom();
     appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
 
@@ -974,50 +1041,41 @@ export async function createApp(options: CreateAppOptions) {
 
       const setupSeats = lobbySeatsToMatchSetup(room);
 
-      if (activeMatch) {
-        const existing = store.findResumableRun();
-        if (existing && existing.runStatus === "in_progress") {
-          store.userAbort(existing.matchId);
-        }
-        activeMatch = null;
-        activeRoomCode = null;
-      }
-
+      const matchId = `match-${Date.now()}`;
+      let activeMatch: ActiveMatch;
       try {
         activeMatch = await startMatch({
+          matchId,
           seats: setupSeats,
           persistence,
+          roomCode: room.code,
         });
       } catch (error) {
-        const startedId = store.findResumableRun()?.matchId;
-        if (startedId) {
-          store.technicalAbort(startedId, abortReasonFrom(error));
+        const started = store.getRun(matchId);
+        if (started?.runStatus === "in_progress") {
+          store.technicalAbort(matchId, abortReasonFrom(error));
         }
-        activeMatch = null;
-        activeRoomCode = null;
         return reply.code(502).send({
           error: abortReasonFrom(error),
-          aborted: Boolean(startedId),
-          matchId: startedId ?? null,
+          aborted: Boolean(started),
+          matchId: started ? matchId : null,
         });
       }
 
       const begun = rooms.beginMatch(room.code, activeMatch.state.matchId);
       if (!begun.ok) {
         store.userAbort(activeMatch.state.matchId);
-        activeMatch = null;
-        activeRoomCode = null;
         return reply.code(409).send({ error: begun.reason });
       }
-      activeRoomCode = room.code;
+      matchesByRoom.set(room.code, activeMatch);
       persistActiveRoom();
-      trackRemoteSeatsForMatch();
+      trackRemoteSeatsForMatch(room.code, activeMatch);
 
       return reply.send({
         ...humanFacingPayload(activeMatch, undefined, "1"),
         phase: begun.room.phase,
         matchId: activeMatch.state.matchId,
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     },
   );
@@ -1043,12 +1101,12 @@ export async function createApp(options: CreateAppOptions) {
         return reply.code(403).send({ error: "remote_seat_required" });
       }
       const t = now();
-      presence.trackSeat(holder.seatId);
-      presence.noteHeartbeat(holder.seatId, t);
-      tickPresence();
+      presence.trackSeat(room.code, holder.seatId);
+      presence.noteHeartbeat(room.code, holder.seatId, t);
+      tickPresence(room.code);
       return reply.send({
         ok: true,
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     },
   );
@@ -1060,9 +1118,9 @@ export async function createApp(options: CreateAppOptions) {
       if (!room) {
         return reply.code(404).send({ error: "room_not_found" });
       }
-      tickPresence();
+      tickPresence(room.code);
       return reply.send({
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     },
   );
@@ -1093,8 +1151,8 @@ export async function createApp(options: CreateAppOptions) {
       if (holder.kind === "local_human") {
         // Local human seats have no remote heartbeat lease. Older clients may
         // still call this endpoint on match entry; keep that call harmless.
-        presence.clearSeat(holder.seatId);
-        tickPresence();
+        presence.clearSeat(room.code, holder.seatId);
+        tickPresence(room.code);
         return reply.send({
           resumed: false,
           seat: {
@@ -1103,14 +1161,14 @@ export async function createApp(options: CreateAppOptions) {
             displayName: holder.displayName,
             rematchStatus: holder.rematchStatus,
           },
-          absences: presence.projectAll(now()),
+          absences: presence.projectAll(room.code, now()),
         });
       }
-      tickPresence();
-      presence.trackSeat(holder.seatId);
-      const before = presence.get(holder.seatId);
+      tickPresence(room.code);
+      presence.trackSeat(room.code, holder.seatId);
+      const before = presence.get(room.code, holder.seatId);
       if (!before || before.phase === "present") {
-        presence.noteHeartbeat(holder.seatId, now());
+        presence.noteHeartbeat(room.code, holder.seatId, now());
         return reply.send({
           resumed: false,
           seat: {
@@ -1119,7 +1177,7 @@ export async function createApp(options: CreateAppOptions) {
             displayName: holder.displayName,
             rematchStatus: holder.rematchStatus,
           },
-          absences: presence.projectAll(now()),
+          absences: presence.projectAll(room.code, now()),
         });
       }
       const issued = issueSeatToken();
@@ -1133,8 +1191,8 @@ export async function createApp(options: CreateAppOptions) {
       }
       persistActiveRoom();
       appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
-      presence.resume(holder.seatId);
-      presence.noteHeartbeat(holder.seatId, now());
+      presence.resume(room.code, holder.seatId);
+      presence.noteHeartbeat(room.code, holder.seatId, now());
       return reply.send({
         resumed: true,
         seat: {
@@ -1142,7 +1200,7 @@ export async function createApp(options: CreateAppOptions) {
           kind: holder.kind,
           displayName: holder.displayName,
         },
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     },
   );
@@ -1154,13 +1212,14 @@ export async function createApp(options: CreateAppOptions) {
     const host = requireHostSeat(request, reply, request.params.code);
     if (!host) return;
     const { room } = host;
-    if (room.phase !== "match" || !activeMatch || activeRoomCode !== room.code) {
+    let activeMatch = matchForRoom(room.code);
+    if (room.phase !== "match" || !activeMatch) {
       return reply.code(409).send({ error: "room_not_match" });
     }
     const seatId = request.params.seatId;
     const action = request.body?.action;
-    tickPresence();
-    const absence = presence.get(seatId);
+    tickPresence(room.code);
+    const absence = presence.get(room.code, seatId);
     if (
       !absence ||
       (absence.phase !== "absent" && absence.phase !== "timed_out")
@@ -1169,10 +1228,10 @@ export async function createApp(options: CreateAppOptions) {
     }
 
     if (action === "extend_wait") {
-      presence.extendWait(seatId, now());
+      presence.extendWait(room.code, seatId, now());
       return reply.send({
         action: "extend_wait",
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     }
 
@@ -1182,8 +1241,8 @@ export async function createApp(options: CreateAppOptions) {
       revokeAllRemoteCredentials(room.code);
       rooms.revokeSeatCredential(room.code, seatId);
       persistActiveRoom();
-      presence.clear();
-      activeMatch = null;
+      presence.clearRoom(room.code);
+      matchesByRoom.delete(room.code);
       return reply.send({
         action: "technical_abort",
         aborted: true,
@@ -1201,6 +1260,7 @@ export async function createApp(options: CreateAppOptions) {
         state: result.state,
         events: [...activeMatch.events, ...result.events],
       };
+      matchesByRoom.set(room.code, activeMatch);
       store.commitCommand(
         activeMatch.state.matchId,
         activeMatch.state,
@@ -1208,11 +1268,11 @@ export async function createApp(options: CreateAppOptions) {
       );
       rooms.revokeSeatCredential(room.code, seatId);
       persistActiveRoom();
-      presence.clearSeat(seatId);
+      presence.clearSeat(room.code, seatId);
       return reply.send({
         action: "force_eliminate",
         ...humanFacingPayload(activeMatch, undefined, "1"),
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     }
 
@@ -1263,57 +1323,69 @@ export async function createApp(options: CreateAppOptions) {
       const state = options.hosting?.getState();
       const port = state?.port ?? 0;
       const snap = lanSnapshot(port, room.code);
+      markRoomActive(room.code);
       return reply.send(snap);
     },
   );
 
-  app.get("/api/matches/current", async (request, reply) => {
+  app.get<{ Params: { code: string } }>(
+    "/api/rooms/:code/matches/current",
+    async (request, reply) => {
+    const room = rooms.getByCode(request.params.code);
+    if (!room) return reply.code(404).send({ error: "room_not_found" });
+    const activeMatch = matchForRoom(room.code);
     if (!activeMatch) {
       return reply.code(404).send({ error: "no_active_match" });
     }
 
-    const seatId = resolveMatchSeatId(request);
+    const seatId = resolveMatchSeatId(request, room.code, activeMatch);
     if (!seatId) {
       return reply.code(403).send({ error: "seat_credential_required" });
     }
 
-    tickPresence();
+    tickPresence(room.code);
     const deciding = activeDecidingSeatId(activeMatch.state);
     const blockedByAbsence =
       deciding !== null &&
-      presence.blocksAdvancement(deciding, true);
+      presence.blocksAdvancement(room.code, deciding, true);
 
     return reply.send({
       ...humanFacingPayload(activeMatch, undefined, seatId),
       matchId: activeMatch.state.matchId,
-      absences: presence.projectAll(now()),
+      absences: presence.projectAll(room.code, now()),
       pausedForAbsenceSeatId: blockedByAbsence ? deciding : null,
     });
-  });
+    },
+  );
 
-  app.post("/api/matches/current/decision", async (request, reply) => {
+  app.post<{
+    Params: { code: string };
+  }>("/api/rooms/:code/matches/current/decision", async (request, reply) => {
+    const room = rooms.getByCode(request.params.code);
+    if (!room) return reply.code(404).send({ error: "room_not_found" });
+    let activeMatch = matchForRoom(room.code);
     if (!activeMatch) {
       return reply.code(404).send({ error: "no_active_match" });
     }
-    const seatId = resolveMatchSeatId(request);
+    const seatId = resolveMatchSeatId(request, room.code, activeMatch);
     if (!seatId) {
       return reply.code(403).send({ error: "seat_credential_required" });
     }
-    tickPresence();
-    const absence = presence.get(seatId);
+    tickPresence(room.code);
+    const absence = presence.get(room.code, seatId);
     if (
       absence &&
       (absence.phase === "absent" || absence.phase === "timed_out")
     ) {
       return reply.code(409).send({
         error: "seat_absent",
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     }
     // Decision during grace counts as channel recovery (no credential rotate).
     if (absence?.phase === "reconnecting") {
-      presence.noteHeartbeat(seatId, now());
-      presence.resume(seatId);
+      presence.noteHeartbeat(room.code, seatId, now());
+      presence.resume(room.code, seatId);
     }
     const body = request.body as SeatDecision;
     const matchId = activeMatch.state.matchId;
@@ -1328,8 +1400,7 @@ export async function createApp(options: CreateAppOptions) {
       if (run && run.runStatus === "in_progress") {
         store.technicalAbort(matchId, abortReasonFrom(error));
       }
-      activeMatch = null;
-      activeRoomCode = null;
+      matchesByRoom.delete(room.code);
       return reply.code(502).send({
         error: abortReasonFrom(error),
         aborted: true,
@@ -1340,17 +1411,18 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(409).send({ error: result.reason });
     }
     activeMatch = result.match;
+    matchesByRoom.set(room.code, activeMatch);
     if (
       activeMatch.state.status === "finished" &&
-      activeRoomCode
+      room.code
     ) {
       // 终局凭证保留到续局等待结束（加入→轮换；离开/处置→作废），
       // 让客人刷新后仍能认回原座位。
-      presence.clear();
+      presence.clearRoom(room.code);
     }
     return reply.send({
       ...humanFacingPayload(activeMatch, body.requestId, seatId),
-      absences: presence.projectAll(now()),
+      absences: presence.projectAll(room.code, now()),
     });
   });
 

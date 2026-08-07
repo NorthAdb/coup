@@ -373,7 +373,7 @@ describe("multi-human match from lobby", () => {
 
       const guestViewRes = await app.inject({
         method: "GET",
-        url: "/api/matches/current",
+        url: `/api/rooms/${code}/matches/current`,
         headers: {
           origin: guest.origin,
           cookie: guestCookie,
@@ -405,7 +405,7 @@ describe("multi-human match from lobby", () => {
 
       const guestForbidden = await app.inject({
         method: "POST",
-        url: "/api/matches/current/decision",
+        url: `/api/rooms/${code}/matches/current/decision`,
         headers: {
           origin: guest.origin,
           cookie: guestCookie,
@@ -422,7 +422,7 @@ describe("multi-human match from lobby", () => {
 
       const hostMove = await app.inject({
         method: "POST",
-        url: "/api/matches/current/decision",
+        url: `/api/rooms/${code}/matches/current/decision`,
         headers: {
           origin: host.origin,
           cookie: hostCookie,
@@ -441,6 +441,120 @@ describe("multi-human match from lobby", () => {
       };
       assert.equal(afterHost.view.seatId, "1");
       assert.ok(afterHost.view.stateVersion > hostStart.view.stateVersion);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("room-scoped match runtime", () => {
+  it("keeps two started rooms independent and rejects cross-room credentials", async () => {
+    const app = await createApp({
+      webRoot: await tempWebRoot(),
+      dbPath: await tempDbPath(),
+      ...hostAppOptions(),
+    });
+
+    try {
+      const host = await openSession(app, "http://192.168.1.42:8787");
+      const first = await createHostRoom(app, host);
+      const second = await createHostRoom(app, host);
+      const firstCookie = `${host.cookie}; ${first.seatCookie}`;
+      const secondCookie = `${host.cookie}; ${second.seatCookie}`;
+      const guestA = await openSession(app, "http://192.168.1.42:8787");
+      const guestB = await openSession(app, "http://192.168.1.42:8787");
+      const claimA = await app.inject({
+        method: "POST",
+        url: `/api/rooms/${first.body.code}/seats/2/claim`,
+        headers: {
+          origin: guestA.origin,
+          cookie: guestA.cookie,
+          "x-csrf-token": guestA.csrfToken,
+          "content-type": "application/json",
+        },
+        payload: { displayName: "A" },
+      });
+      const claimB = await app.inject({
+        method: "POST",
+        url: `/api/rooms/${second.body.code}/seats/2/claim`,
+        headers: {
+          origin: guestB.origin,
+          cookie: guestB.cookie,
+          "x-csrf-token": guestB.csrfToken,
+          "content-type": "application/json",
+        },
+        payload: { displayName: "B" },
+      });
+      assert.equal(claimA.statusCode, 200);
+      assert.equal(claimB.statusCode, 200);
+
+      for (const [room, cookie] of [
+        [first.body, firstCookie],
+        [second.body, secondCookie],
+      ] as const) {
+        for (const seatId of ["3", "4", "5", "6"]) {
+          await configureSeat(app, host, cookie, room.code, seatId, {
+            kind: "closed",
+          });
+        }
+      }
+
+      const startFirst = await app.inject({
+        method: "POST",
+        url: `/api/rooms/${first.body.code}/start`,
+        headers: {
+          origin: host.origin,
+          cookie: firstCookie,
+          "x-csrf-token": host.csrfToken,
+        },
+      });
+      assert.equal(startFirst.statusCode, 200);
+      const firstMatchId = (startFirst.json() as { matchId: string }).matchId;
+
+      const startSecond = await app.inject({
+        method: "POST",
+        url: `/api/rooms/${second.body.code}/start`,
+        headers: {
+          origin: host.origin,
+          cookie: secondCookie,
+          "x-csrf-token": host.csrfToken,
+        },
+      });
+      assert.equal(startSecond.statusCode, 200);
+      const secondMatchId = (startSecond.json() as { matchId: string }).matchId;
+      assert.notEqual(firstMatchId, secondMatchId);
+
+      const firstView = await app.inject({
+        method: "GET",
+        url: `/api/rooms/${first.body.code}/matches/current`,
+        headers: { origin: host.origin, cookie: firstCookie },
+      });
+      const secondView = await app.inject({
+        method: "GET",
+        url: `/api/rooms/${second.body.code}/matches/current`,
+        headers: { origin: host.origin, cookie: secondCookie },
+      });
+      assert.equal(firstView.statusCode, 200);
+      assert.equal(secondView.statusCode, 200);
+      assert.equal(
+        (firstView.json() as { matchId: string }).matchId,
+        firstMatchId,
+      );
+      assert.equal(
+        (secondView.json() as { matchId: string }).matchId,
+        secondMatchId,
+      );
+
+      const crossRoom = await app.inject({
+        method: "GET",
+        url: `/api/rooms/${second.body.code}/matches/current`,
+        headers: { origin: host.origin, cookie: firstCookie },
+      });
+      assert.equal(crossRoom.statusCode, 403);
+      assert.equal(
+        (crossRoom.json() as { error: string }).error,
+        "seat_credential_required",
+      );
     } finally {
       await app.close();
     }

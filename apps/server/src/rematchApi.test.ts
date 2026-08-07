@@ -192,7 +192,7 @@ async function fetchViewAs(
 ): Promise<SeatViewLike> {
   const response = await ctx.app.inject({
     method: "GET",
-    url: "/api/matches/current",
+    url: `/api/rooms/${ctx.code}/matches/current`,
     headers: { origin: client.origin, cookie },
   });
   assert.equal(response.statusCode, 200);
@@ -209,7 +209,7 @@ async function postDecision(
 ): Promise<void> {
   const response = await ctx.app.inject({
     method: "POST",
-    url: "/api/matches/current/decision",
+    url: `/api/rooms/${ctx.code}/matches/current/decision`,
     headers: {
       origin: client.origin,
       cookie,
@@ -390,7 +390,7 @@ describe("rematch consent flow", () => {
       // Guest re-attaches with the rotated credential.
       const current = await app.inject({
         method: "GET",
-        url: "/api/matches/current",
+        url: `/api/rooms/${ctx.code}/matches/current`,
         headers: { origin: ctx.guest.origin, cookie: guestNewCookie },
       });
       assert.equal(current.statusCode, 200);

@@ -20,6 +20,11 @@ export type RoomInvite = {
   error?: string | null;
 };
 
+export function matchCurrentPath(code: string, decision = false): string {
+  if (!code) throw new Error("room code is required");
+  return `/api/rooms/${code}/matches/current${decision ? "/decision" : ""}`;
+}
+
 let csrfToken: string | null = null;
 
 export async function ensureSession(origin = ""): Promise<string> {
@@ -142,35 +147,16 @@ export async function enterHostModeAndCreateRoom(): Promise<RoomInvite> {
   return createRoomOnCurrentOrigin();
 }
 
-export type RoomRecovery =
-  | {
-      status: "none";
-      reason: null;
-      message: null;
-      room: null;
-    }
-  | {
-      status: "restored";
-      reason: null;
-      message: null;
-      room: {
-        code: string;
-        phase: string;
-        matchId: string | null;
-        seats: LobbySeat[];
-      };
-    }
-  | {
-      status: "failed";
-      reason: string | null;
-      message: string | null;
-      room: {
-        code: string;
-        phase: string;
-        matchId: string | null;
-        seats: LobbySeat[];
-      } | null;
-    };
+export type RoomRecoveryItem = {
+  code: string;
+  status: "restored" | "failed";
+  reason: string | null;
+  phase: string | null;
+  matchId: string | null;
+  seats: LobbySeat[];
+};
+
+export type RoomRecovery = { rooms: RoomRecoveryItem[] };
 
 export async function fetchRoomRecovery(): Promise<RoomRecovery> {
   const response = await fetch("/api/room-recovery", { cache: "no-store" });
@@ -180,10 +166,11 @@ export async function fetchRoomRecovery(): Promise<RoomRecovery> {
   return (await response.json()) as RoomRecovery;
 }
 
-export async function abandonFailedRoomRecovery(): Promise<void> {
+export async function abandonFailedRoomRecovery(roomCode: string): Promise<void> {
   await ensureSession();
   const response = await authedFetch("/api/room-recovery/abandon", {
     method: "POST",
+    body: JSON.stringify({ roomCode }),
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as {

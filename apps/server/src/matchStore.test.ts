@@ -244,6 +244,51 @@ describe("MatchStore", () => {
     }
   });
 
+  it("migrates nullable room codes when legacy events reference match_runs by foreign key", async () => {
+    const dbPath = await tempDbPath();
+    const created = sampleMatch("legacy-match-fk");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE match_runs (
+        match_id TEXT PRIMARY KEY NOT NULL,
+        room_code TEXT,
+        run_status TEXT NOT NULL,
+        winner_seat_id TEXT,
+        abort_reason TEXT,
+        resumed_from_match_id TEXT,
+        human_seat_id TEXT NOT NULL,
+        display_names_json TEXT NOT NULL,
+        seat_agents_json TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE match_events (
+        match_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        PRIMARY KEY (match_id, seq),
+        FOREIGN KEY (match_id) REFERENCES match_runs(match_id)
+      );
+    `);
+    db.prepare(`INSERT INTO match_runs VALUES (?, NULL, 'in_progress', NULL, NULL, NULL, ?, ?, ?, ?, ?)`)
+      .run("legacy-match-fk", "seat-1", JSON.stringify({ "seat-1": "你" }), "{}", JSON.stringify(created.state), new Date().toISOString());
+    const event = created.events[0] ?? { type: "match_started", matchId: "legacy-match-fk" };
+    db.prepare(`INSERT INTO match_events VALUES (?, 1, ?)`).run("legacy-match-fk", JSON.stringify(event));
+    db.close();
+
+    const store = openMatchStore(dbPath);
+    try {
+      store.migrateLegacyRuns([{ code: "4242", matchId: null }]);
+      const run = store.getRun("legacy-match-fk");
+      assert.ok(run);
+      assert.equal(run.runStatus, "migration_error");
+      assert.equal(run.roomCode, "__migration_error__");
+      assert.equal(store.listEvents("legacy-match-fk").length, 1);
+    } finally {
+      store.close();
+    }
+  });
+
   it("records technical abort with no winner and keeps the last snapshot", async () => {
     const dbPath = await tempDbPath();
     const store = openMatchStore(dbPath);

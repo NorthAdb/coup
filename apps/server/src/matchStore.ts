@@ -114,8 +114,14 @@ export function openMatchStore(dbPath: string): MatchStore {
   }
   const roomCodeColumn = columns.find((column) => column.name === "room_code");
   if (!roomCodeColumn || roomCodeColumn.notnull === 0) {
-    db.exec("BEGIN");
+    // Legacy DBs carry match_events with a FK referencing match_runs. SQLite
+    // RENAME rewrites that reference to the renamed table, so the old table
+    // cannot be dropped while FK enforcement is on. Follow the documented
+    // rebuild: disable FK enforcement outside the txn, rebuild parent and
+    // child tables, re-enable, then verify integrity.
+    db.exec("PRAGMA foreign_keys = OFF");
     try {
+      db.exec("BEGIN");
       db.exec(`UPDATE match_runs SET room_code = '__migration_error__' WHERE room_code IS NULL`);
       db.exec(`ALTER TABLE match_runs RENAME TO match_runs_before_room_code_constraint`);
       db.exec(`
@@ -142,11 +148,30 @@ export function openMatchStore(dbPath: string): MatchStore {
         resumed_from_match_id, human_seat_id, display_names_json,
         seat_agents_json, snapshot_json, updated_at
         FROM match_runs_before_room_code_constraint`);
+      db.exec(`ALTER TABLE match_events RENAME TO match_events_before_room_code_constraint`);
+      db.exec(`
+        CREATE TABLE match_events (
+          match_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          event_json TEXT NOT NULL,
+          PRIMARY KEY (match_id, seq),
+          FOREIGN KEY (match_id) REFERENCES match_runs(match_id)
+        )
+      `);
+      db.exec(`INSERT INTO match_events (match_id, seq, event_json)
+        SELECT match_id, seq, event_json FROM match_events_before_room_code_constraint`);
+      db.exec(`DROP TABLE match_events_before_room_code_constraint`);
       db.exec(`DROP TABLE match_runs_before_room_code_constraint`);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
+    } finally {
+      db.exec("PRAGMA foreign_keys = ON");
+    }
+    const violations = db.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) {
+      throw new Error(`migration_fk_check_failed:${violations.length}`);
     }
   }
   db.exec(`CREATE INDEX IF NOT EXISTS match_runs_room_status_updated ON match_runs (room_code, run_status, updated_at)`);

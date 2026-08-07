@@ -297,11 +297,11 @@ export async function createApp(options: CreateAppOptions) {
         if (seat.controller !== "remote_human") {
           // Presence is a remote-human lease; clean up stale entries from
           // older clients or a previous controller assignment.
-          presence.clearSeat(seat.seatId);
+          presence.clearSeat(activeRoomCode!, seat.seatId);
         }
       }
     }
-    presence.tick(now());
+    if (activeRoomCode) presence.tick(activeRoomCode, now());
   }
 
   function persistActiveRoom() {
@@ -315,21 +315,21 @@ export async function createApp(options: CreateAppOptions) {
   }
 
   function trackRemoteSeatsForMatch() {
-    presence.clear();
     if (!activeMatch || !activeRoomCode) return;
+    presence.clearRoom(activeRoomCode);
     const t = now();
     for (const seat of activeMatch.state.seats) {
       if (seat.controller === "remote_human" && !seat.eliminated) {
-        presence.trackSeat(seat.seatId);
+        presence.trackSeat(activeRoomCode, seat.seatId);
         // Treat match start as an initial heartbeat so silence starts the lease.
-        presence.noteHeartbeat(seat.seatId, t);
+        presence.noteHeartbeat(activeRoomCode, seat.seatId, t);
       }
     }
   }
 
   function trackRemoteSeatsAfterAuthorityRestore() {
-    presence.clear();
     if (!activeMatch || !activeRoomCode) return;
+    presence.clearRoom(activeRoomCode);
     const seatIds: string[] = [];
     for (const seat of activeMatch.state.seats) {
       if (seat.controller === "remote_human" && !seat.eliminated) {
@@ -337,7 +337,7 @@ export async function createApp(options: CreateAppOptions) {
       }
     }
     // Fresh 15s grace — authority downtime is not counted against soft timeout.
-    presence.grantRecoveryGrace(seatIds, now());
+    presence.grantRecoveryGrace(seatIds, activeRoomCode, now());
   }
 
   {
@@ -610,7 +610,7 @@ export async function createApp(options: CreateAppOptions) {
     recoveryReason = null;
     activeRoomCode = null;
     activeMatch = null;
-    presence.clear();
+    presence.clearAll();
 
     return reply.send({ status: "none", abandoned: true });
   });
@@ -1017,7 +1017,7 @@ export async function createApp(options: CreateAppOptions) {
         ...humanFacingPayload(activeMatch, undefined, "1"),
         phase: begun.room.phase,
         matchId: activeMatch.state.matchId,
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     },
   );
@@ -1043,12 +1043,12 @@ export async function createApp(options: CreateAppOptions) {
         return reply.code(403).send({ error: "remote_seat_required" });
       }
       const t = now();
-      presence.trackSeat(holder.seatId);
-      presence.noteHeartbeat(holder.seatId, t);
+      presence.trackSeat(room.code, holder.seatId);
+      presence.noteHeartbeat(room.code, holder.seatId, t);
       tickPresence();
       return reply.send({
         ok: true,
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     },
   );
@@ -1062,7 +1062,7 @@ export async function createApp(options: CreateAppOptions) {
       }
       tickPresence();
       return reply.send({
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     },
   );
@@ -1093,7 +1093,7 @@ export async function createApp(options: CreateAppOptions) {
       if (holder.kind === "local_human") {
         // Local human seats have no remote heartbeat lease. Older clients may
         // still call this endpoint on match entry; keep that call harmless.
-        presence.clearSeat(holder.seatId);
+        presence.clearSeat(room.code, holder.seatId);
         tickPresence();
         return reply.send({
           resumed: false,
@@ -1103,14 +1103,14 @@ export async function createApp(options: CreateAppOptions) {
             displayName: holder.displayName,
             rematchStatus: holder.rematchStatus,
           },
-          absences: presence.projectAll(now()),
+          absences: presence.projectAll(room.code, now()),
         });
       }
       tickPresence();
-      presence.trackSeat(holder.seatId);
-      const before = presence.get(holder.seatId);
+      presence.trackSeat(room.code, holder.seatId);
+      const before = presence.get(room.code, holder.seatId);
       if (!before || before.phase === "present") {
-        presence.noteHeartbeat(holder.seatId, now());
+        presence.noteHeartbeat(room.code, holder.seatId, now());
         return reply.send({
           resumed: false,
           seat: {
@@ -1119,7 +1119,7 @@ export async function createApp(options: CreateAppOptions) {
             displayName: holder.displayName,
             rematchStatus: holder.rematchStatus,
           },
-          absences: presence.projectAll(now()),
+          absences: presence.projectAll(room.code, now()),
         });
       }
       const issued = issueSeatToken();
@@ -1133,8 +1133,8 @@ export async function createApp(options: CreateAppOptions) {
       }
       persistActiveRoom();
       appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
-      presence.resume(holder.seatId);
-      presence.noteHeartbeat(holder.seatId, now());
+      presence.resume(room.code, holder.seatId);
+      presence.noteHeartbeat(room.code, holder.seatId, now());
       return reply.send({
         resumed: true,
         seat: {
@@ -1142,7 +1142,7 @@ export async function createApp(options: CreateAppOptions) {
           kind: holder.kind,
           displayName: holder.displayName,
         },
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     },
   );
@@ -1160,7 +1160,7 @@ export async function createApp(options: CreateAppOptions) {
     const seatId = request.params.seatId;
     const action = request.body?.action;
     tickPresence();
-    const absence = presence.get(seatId);
+    const absence = presence.get(room.code, seatId);
     if (
       !absence ||
       (absence.phase !== "absent" && absence.phase !== "timed_out")
@@ -1169,10 +1169,10 @@ export async function createApp(options: CreateAppOptions) {
     }
 
     if (action === "extend_wait") {
-      presence.extendWait(seatId, now());
+      presence.extendWait(room.code, seatId, now());
       return reply.send({
         action: "extend_wait",
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     }
 
@@ -1182,7 +1182,7 @@ export async function createApp(options: CreateAppOptions) {
       revokeAllRemoteCredentials(room.code);
       rooms.revokeSeatCredential(room.code, seatId);
       persistActiveRoom();
-      presence.clear();
+      presence.clearRoom(room.code);
       activeMatch = null;
       return reply.send({
         action: "technical_abort",
@@ -1208,11 +1208,11 @@ export async function createApp(options: CreateAppOptions) {
       );
       rooms.revokeSeatCredential(room.code, seatId);
       persistActiveRoom();
-      presence.clearSeat(seatId);
+      presence.clearSeat(room.code, seatId);
       return reply.send({
         action: "force_eliminate",
         ...humanFacingPayload(activeMatch, undefined, "1"),
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(room.code, now()),
       });
     }
 
@@ -1281,12 +1281,12 @@ export async function createApp(options: CreateAppOptions) {
     const deciding = activeDecidingSeatId(activeMatch.state);
     const blockedByAbsence =
       deciding !== null &&
-      presence.blocksAdvancement(deciding, true);
+      presence.blocksAdvancement(activeRoomCode!, deciding, true);
 
     return reply.send({
       ...humanFacingPayload(activeMatch, undefined, seatId),
       matchId: activeMatch.state.matchId,
-      absences: presence.projectAll(now()),
+      absences: presence.projectAll(activeRoomCode!, now()),
       pausedForAbsenceSeatId: blockedByAbsence ? deciding : null,
     });
   });
@@ -1300,20 +1300,20 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(403).send({ error: "seat_credential_required" });
     }
     tickPresence();
-    const absence = presence.get(seatId);
+    const absence = presence.get(activeRoomCode!, seatId);
     if (
       absence &&
       (absence.phase === "absent" || absence.phase === "timed_out")
     ) {
       return reply.code(409).send({
         error: "seat_absent",
-        absences: presence.projectAll(now()),
+        absences: presence.projectAll(activeRoomCode!, now()),
       });
     }
     // Decision during grace counts as channel recovery (no credential rotate).
     if (absence?.phase === "reconnecting") {
-      presence.noteHeartbeat(seatId, now());
-      presence.resume(seatId);
+      presence.noteHeartbeat(activeRoomCode!, seatId, now());
+      presence.resume(activeRoomCode!, seatId);
     }
     const body = request.body as SeatDecision;
     const matchId = activeMatch.state.matchId;
@@ -1346,11 +1346,11 @@ export async function createApp(options: CreateAppOptions) {
     ) {
       // 终局凭证保留到续局等待结束（加入→轮换；离开/处置→作废），
       // 让客人刷新后仍能认回原座位。
-      presence.clear();
+      presence.clearRoom(activeRoomCode);
     }
     return reply.send({
       ...humanFacingPayload(activeMatch, body.requestId, seatId),
-      absences: presence.projectAll(now()),
+      absences: presence.projectAll(activeRoomCode!, now()),
     });
   });
 

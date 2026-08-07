@@ -75,6 +75,54 @@ function sampleLobbyRoom(): RoomRecord {
 }
 
 describe("RoomStore", () => {
+  it("stores, loads, and clears rooms independently", async () => {
+    const dbPath = await tempDbPath();
+    const store = openRoomStore(dbPath);
+    const first = sampleLobbyRoom();
+    const second = { ...sampleLobbyRoom(), code: "5151" };
+    store.saveRoom(first);
+    store.saveRoom(second);
+    assert.deepEqual(store.loadRooms(), { ok: true, rooms: [first, second], failures: [] });
+    store.clearRoom(first.code);
+    assert.deepEqual(store.loadRooms(), { ok: true, rooms: [second], failures: [] });
+    store.close();
+  });
+
+  it("migrates the legacy room row and does not read it afterwards", async () => {
+    const dbPath = await tempDbPath();
+    const first = openRoomStore(dbPath);
+    first.debugOverwritePayload(JSON.stringify(sampleLobbyRoom()));
+    first.close();
+
+    const second = openRoomStore(dbPath);
+    assert.deepEqual(second.loadRooms(), {
+      ok: true,
+      rooms: [sampleLobbyRoom()],
+      failures: [],
+    });
+    second.debugOverwriteLegacyPayload(JSON.stringify({ ...sampleLobbyRoom(), code: "9999" }));
+    assert.deepEqual(second.loadRooms(), {
+      ok: true,
+      rooms: [sampleLobbyRoom()],
+      failures: [],
+    });
+    second.close();
+  });
+
+  it("reports corrupt legacy data while retaining it", async () => {
+    const dbPath = await tempDbPath();
+    const first = openRoomStore(dbPath);
+    first.debugOverwritePayload("{broken");
+    first.close();
+    const second = openRoomStore(dbPath);
+    const loaded = second.loadRooms();
+    assert.equal(loaded.ok, false);
+    if (loaded.ok) throw new Error("expected migration failure");
+    assert.equal(loaded.failures[0]?.roomCode, null);
+    assert.equal(loaded.failures[0]?.reason, "corrupt");
+    second.close();
+  });
+
   it("persists an active lobby room across reopen", async () => {
     const dbPath = await tempDbPath();
     const room = sampleLobbyRoom();
@@ -121,13 +169,14 @@ describe("RoomStore", () => {
   it("reports corrupt payload as load failure", async () => {
     const dbPath = await tempDbPath();
     const store = openRoomStore(dbPath);
-    store.saveActiveRoom(sampleLobbyRoom());
     store.debugOverwritePayload("{not-json");
-    const loaded = store.loadActiveRoom();
+    store.close();
+    const reopened = openRoomStore(dbPath);
+    const loaded = reopened.loadActiveRoom();
     assert.equal(loaded.ok, false);
     if (loaded.ok) throw new Error("expected failure");
     assert.equal(loaded.reason, "corrupt");
-    store.close();
+    reopened.close();
   });
 
   it("degrades legacy local_agent seats to closed and drops cli/modelId", async () => {
@@ -159,7 +208,9 @@ describe("RoomStore", () => {
         ],
       }),
     );
-    const loaded = store.loadActiveRoom();
+    store.close();
+    const reopened = openRoomStore(dbPath);
+    const loaded = reopened.loadActiveRoom();
     assert.equal(loaded.ok, true);
     if (!loaded.ok || !loaded.room) throw new Error("expected room");
     assert.equal(loaded.room.seats[1]?.kind, "closed");
@@ -167,6 +218,6 @@ describe("RoomStore", () => {
       Object.keys(loaded.room.seats[1] ?? {}).sort(),
       ["credentialHash", "displayName", "kind", "rematchStatus", "seatId"].sort(),
     );
-    store.close();
+    reopened.close();
   });
 });

@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { DomainEvent, MatchState } from "@coup/domain";
 
-/** 兼容旧库 seat_agents_json 列；联机版恒为空对象�?*/
+/** 兼容旧库 seat_agents_json 列；联机版恒为空对象�?*/
 export type LegacySeatAgent = {
   cli: string;
   modelId: string | null;
@@ -13,7 +13,8 @@ export type MatchRunStatus =
   | "in_progress"
   | "finished"
   | "technical_abort"
-  | "user_abort";
+  | "user_abort"
+  | "migration_error";
 
 export type StoredMatchEvent = {
   seq: number;
@@ -22,6 +23,7 @@ export type StoredMatchEvent = {
 
 export type MatchRunRecord = {
   matchId: string;
+  roomCode: string | null;
   runStatus: MatchRunStatus;
   winnerSeatId: string | null;
   abortReason: string | null;
@@ -35,6 +37,7 @@ export type MatchRunRecord = {
 
 export type CreateRunInput = {
   matchId: string;
+  roomCode?: string | null;
   humanSeatId: string;
   displayNames: Record<string, string>;
   seatAgents: Record<string, LegacySeatAgent>;
@@ -52,17 +55,17 @@ export type MatchStore = {
   ): MatchRunRecord;
   getRun(matchId: string): MatchRunRecord | null;
   listEvents(matchId: string): StoredMatchEvent[];
-  listRuns(): Array<{
+  listRuns(roomCode?: string): Array<{
     matchId: string;
     runStatus: MatchRunStatus;
     winnerSeatId: string | null;
     resumedFromMatchId: string | null;
     stateVersion: number;
   }>;
-  findResumableRun(): MatchRunRecord | null;
+  findResumableRun(roomCode?: string): MatchRunRecord | null;
   technicalAbort(matchId: string, reason: string): MatchRunRecord;
   userAbort(matchId: string): MatchRunRecord;
-  createResumeRun(fromMatchId: string, newMatchId: string): MatchRunRecord;
+  createResumeRun(fromMatchId: string, newMatchId: string, roomCode?: string): MatchRunRecord;
   /** Test/diagnostic: concatenate all text columns (must stay free of secrets). */
   debugDumpAllText(): string;
   close(): void;
@@ -84,6 +87,7 @@ export function openMatchStore(dbPath: string): MatchStore {
   db.exec(`
     CREATE TABLE IF NOT EXISTS match_runs (
       match_id TEXT PRIMARY KEY NOT NULL,
+      room_code TEXT,
       run_status TEXT NOT NULL,
       winner_seat_id TEXT,
       abort_reason TEXT,
@@ -103,6 +107,9 @@ export function openMatchStore(dbPath: string): MatchStore {
       FOREIGN KEY (match_id) REFERENCES match_runs(match_id)
     );
   `);
+  const columns = db.prepare(`PRAGMA table_info(match_runs)`).all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "room_code")) db.exec(`ALTER TABLE match_runs ADD COLUMN room_code TEXT`);
+  db.exec(`CREATE INDEX IF NOT EXISTS match_runs_room_status_updated ON match_runs (room_code, run_status, updated_at)`);
 
   function readEvents(matchId: string): DomainEvent[] {
     const rows = db
@@ -120,7 +127,8 @@ export function openMatchStore(dbPath: string): MatchStore {
     const row = db
       .prepare(
         `SELECT
-           match_id AS matchId,
+            match_id AS matchId,
+            room_code AS roomCode,
            run_status AS runStatus,
            winner_seat_id AS winnerSeatId,
            abort_reason AS abortReason,
@@ -134,7 +142,8 @@ export function openMatchStore(dbPath: string): MatchStore {
       )
       .get(matchId) as
       | {
-          matchId: string;
+           matchId: string;
+           roomCode: string | null;
           runStatus: MatchRunStatus;
           winnerSeatId: string | null;
           abortReason: string | null;
@@ -147,7 +156,8 @@ export function openMatchStore(dbPath: string): MatchStore {
       | undefined;
     if (!row) return null;
     return {
-      matchId: row.matchId,
+       matchId: row.matchId,
+       roomCode: row.roomCode,
       runStatus: row.runStatus,
       winnerSeatId: row.winnerSeatId,
       abortReason: row.abortReason,
@@ -185,6 +195,7 @@ export function openMatchStore(dbPath: string): MatchStore {
 
   function upsertRunRow(input: {
     matchId: string;
+    roomCode: string | null;
     runStatus: MatchRunStatus;
     winnerSeatId: string | null;
     abortReason: string | null;
@@ -196,12 +207,13 @@ export function openMatchStore(dbPath: string): MatchStore {
   }) {
     db.prepare(
       `INSERT INTO match_runs (
-         match_id, run_status, winner_seat_id, abort_reason,
+          match_id, room_code, run_status, winner_seat_id, abort_reason,
          resumed_from_match_id, human_seat_id, display_names_json,
          seat_agents_json, snapshot_json, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(match_id) DO UPDATE SET
-         run_status = excluded.run_status,
+          run_status = excluded.run_status,
+          room_code = excluded.room_code,
          winner_seat_id = excluded.winner_seat_id,
          abort_reason = excluded.abort_reason,
          resumed_from_match_id = excluded.resumed_from_match_id,
@@ -212,6 +224,7 @@ export function openMatchStore(dbPath: string): MatchStore {
          updated_at = excluded.updated_at`,
     ).run(
       input.matchId,
+      input.roomCode,
       input.runStatus,
       input.winnerSeatId,
       input.abortReason,
@@ -234,6 +247,7 @@ export function openMatchStore(dbPath: string): MatchStore {
       try {
         upsertRunRow({
           matchId: input.matchId,
+          roomCode: input.roomCode ?? null,
           runStatus: mapRunStatus(input.state.status),
           winnerSeatId: input.state.winnerSeatId,
           abortReason: null,
@@ -265,6 +279,7 @@ export function openMatchStore(dbPath: string): MatchStore {
         insertEvents(matchId, newEvents, nextSeq(matchId));
         upsertRunRow({
           matchId,
+           roomCode: current.roomCode,
           runStatus: mapRunStatus(state.status),
           winnerSeatId: state.winnerSeatId,
           abortReason: null,
@@ -303,11 +318,12 @@ export function openMatchStore(dbPath: string): MatchStore {
       }));
     },
 
-    listRuns() {
+    listRuns(roomCode) {
       const rows = db
         .prepare(
           `SELECT
              match_id AS matchId,
+             room_code AS roomCode,
              run_status AS runStatus,
              winner_seat_id AS winnerSeatId,
              resumed_from_match_id AS resumedFromMatchId,
@@ -316,13 +332,14 @@ export function openMatchStore(dbPath: string): MatchStore {
            ORDER BY updated_at DESC`,
         )
         .all() as Array<{
-        matchId: string;
+         matchId: string;
+         roomCode: string | null;
         runStatus: MatchRunStatus;
         winnerSeatId: string | null;
         resumedFromMatchId: string | null;
         snapshotJson: string;
       }>;
-      return rows.map((row) => ({
+       return rows.filter((row) => !roomCode || row.roomCode === roomCode).map((row) => ({
         matchId: row.matchId,
         runStatus: row.runStatus,
         winnerSeatId: row.winnerSeatId,
@@ -331,16 +348,16 @@ export function openMatchStore(dbPath: string): MatchStore {
       }));
     },
 
-    findResumableRun() {
+    findResumableRun(roomCode) {
       const row = db
         .prepare(
           `SELECT match_id AS matchId
            FROM match_runs
-           WHERE run_status = 'in_progress'
+           WHERE run_status = 'in_progress' AND (? IS NULL OR room_code = ?)
            ORDER BY updated_at DESC
            LIMIT 1`,
         )
-        .get() as { matchId: string } | undefined;
+        .get(roomCode ?? null, roomCode ?? null) as { matchId: string } | undefined;
       if (!row) return null;
       return readRun(row.matchId);
     },
@@ -352,6 +369,7 @@ export function openMatchStore(dbPath: string): MatchStore {
       try {
         upsertRunRow({
           matchId,
+          roomCode: current.roomCode,
           runStatus: "technical_abort",
           winnerSeatId: null,
           abortReason: reason,
@@ -382,6 +400,7 @@ export function openMatchStore(dbPath: string): MatchStore {
       try {
         upsertRunRow({
           matchId,
+          roomCode: current.roomCode,
           runStatus: "user_abort",
           winnerSeatId: null,
           abortReason: "user_abort",
@@ -401,7 +420,7 @@ export function openMatchStore(dbPath: string): MatchStore {
       return updated;
     },
 
-    createResumeRun(fromMatchId, newMatchId) {
+    createResumeRun(fromMatchId, newMatchId, roomCode) {
       const source = readRun(fromMatchId);
       if (!source) throw new Error(`match_not_found:${fromMatchId}`);
       if (
@@ -429,6 +448,7 @@ export function openMatchStore(dbPath: string): MatchStore {
 
       return store.createRun({
         matchId: newMatchId,
+        roomCode: roomCode ?? source.roomCode,
         humanSeatId: source.humanSeatId,
         displayNames: source.displayNames,
         seatAgents: source.seatAgents,

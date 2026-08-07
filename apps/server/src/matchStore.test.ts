@@ -36,6 +36,7 @@ function openSample(store: MatchStore, matchId = "match-1") {
   const created = sampleMatch(matchId);
   store.createRun({
     matchId,
+    roomCode: "4242",
     humanSeatId: "seat-1",
     displayNames: { "seat-1": "你", "seat-2": "灰狐" },
     seatAgents: {
@@ -134,6 +135,26 @@ describe("MatchStore", () => {
       assert.equal(resumable.events.at(-1)?.type, "turn_advanced");
     } finally {
       second.close();
+    }
+  });
+
+  it("finds in-progress runs by room and allows different rooms to coexist", async () => {
+    const dbPath = await tempDbPath();
+    const store = openMatchStore(dbPath);
+    try {
+      openSample(store, "match-a");
+      const created = sampleMatch("match-b");
+      store.createRun({
+        matchId: "match-b", roomCode: "5151", humanSeatId: "seat-1",
+        displayNames: { "seat-1": "你", "seat-2": "灰狐" },
+        seatAgents: { "seat-2": { cli: "stub", modelId: null } },
+        state: created.state, events: created.events,
+      });
+      assert.equal(store.findResumableRun("4242")?.matchId, "match-a");
+      assert.equal(store.findResumableRun("5151")?.matchId, "match-b");
+      assert.deepEqual(store.listRuns("5151").map((run) => run.matchId), ["match-b"]);
+    } finally {
+      store.close();
     }
   });
 

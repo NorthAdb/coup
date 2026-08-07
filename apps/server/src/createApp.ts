@@ -1323,6 +1323,7 @@ export async function createApp(options: CreateAppOptions) {
       const state = options.hosting?.getState();
       const port = state?.port ?? 0;
       const snap = lanSnapshot(port, room.code);
+      markRoomActive(room.code);
       return reply.send(snap);
     },
   );

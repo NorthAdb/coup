@@ -12,6 +12,28 @@ const room: RoomRecord = {
   seats: [],
 };
 
+it("treats a lobby with only the host seat as empty", () => {
+  const lobby: RoomRecord = {
+    ...room,
+    phase: "lobby",
+    matchId: null,
+    seats: [{ seatId: "1", kind: "local_human", credentialHash: null, displayName: null, rematchStatus: null }],
+  };
+
+  assert.equal(isRoomEmpty(lobby, null, () => null), true);
+});
+
+it("keeps a lobby occupied while a remote human has a seat", () => {
+  const lobby: RoomRecord = {
+    ...room,
+    phase: "lobby",
+    matchId: null,
+    seats: [{ seatId: "2", kind: "remote_human", credentialHash: null, displayName: null, rematchStatus: null }],
+  };
+
+  assert.equal(isRoomEmpty(lobby, null, () => null), false);
+});
+
 it("keeps a match room occupied while its local human is eliminated", () => {
   const match = {
     state: {

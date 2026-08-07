@@ -412,4 +412,49 @@ describe("room invite API", () => {
       await app.close();
     }
   });
+
+  it("counts room snapshot polling as activity but not other read-only queries", async () => {
+    let clock = 1_000_000;
+    const rooms = createRoomRegistry();
+    const app = await createApp({
+      webRoot: await tempWebRoot(),
+      dbPath: await tempDbPath(),
+      rooms,
+      now: () => clock,
+      hosting: {
+        getState: () => ({ bindMode: "host" as const, listenHost: "0.0.0.0", port: 8787 }),
+        ensureHostMode: async () => ({ bindMode: "host" as const, listenHost: "0.0.0.0", port: 8787 }),
+      },
+      listNetworkInterfaces: () => ({
+        Ethernet: [{ address: "192.168.1.42", family: "IPv4" as const, internal: false }],
+      }),
+    });
+
+    try {
+      const headers = await authedHeaders(app, "http://192.168.1.42:8787");
+      const first = await app.inject({ method: "POST", url: "/api/rooms", headers });
+      const firstCode = (first.json() as { code: string }).code;
+
+      clock += 30 * 60_000;
+      const snapshot = await app.inject({ method: "GET", url: `/api/rooms/${firstCode}` });
+      assert.equal(snapshot.statusCode, 200);
+      clock += 29 * 60_000;
+      await app.inject({ method: "POST", url: "/api/rooms", headers });
+      assert.equal((await app.inject({ method: "GET", url: `/api/rooms/${firstCode}/me` })).statusCode, 200);
+
+      clock += 60_000;
+      await app.inject({ method: "POST", url: "/api/rooms", headers });
+      assert.equal((await app.inject({ method: "GET", url: `/api/rooms/${firstCode}/me` })).statusCode, 404);
+
+      const second = await app.inject({ method: "POST", url: "/api/rooms", headers });
+      const secondCode = (second.json() as { code: string }).code;
+      clock += 30 * 60_000;
+      const me = await app.inject({ method: "GET", url: `/api/rooms/${secondCode}/me` });
+      assert.equal(me.statusCode, 200);
+      await app.inject({ method: "POST", url: "/api/rooms", headers });
+      assert.equal((await app.inject({ method: "GET", url: `/api/rooms/${secondCode}/me` })).statusCode, 404);
+    } finally {
+      await app.close();
+    }
+  });
 });

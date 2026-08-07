@@ -14,7 +14,13 @@ export function isRoomEmpty(
   match: ActiveMatch | null,
   absence: RoomAbsenceLookup,
 ): boolean {
-  if (room.phase !== "match" || !match) {
+  if (room.phase !== "match") {
+    return !room.seats.some(
+      (seat) => seat.kind === "remote_human",
+    );
+  }
+
+  if (!match) {
     return !room.seats.some(
       (seat) => seat.kind === "local_human" || seat.kind === "remote_human",
     );

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   canStartLobby,
   lobbyStartBlockHint,
+  matchCurrentPath,
   seatKindLabel,
 } from "./lanRoom.ts";
 import type { LobbySeat } from "./lanRoom.ts";
@@ -91,5 +92,19 @@ describe("seatKindLabel", () => {
     assert.equal(seatKindLabel("remote_human"), "远程人类");
     assert.equal(seatKindLabel("open"), "开放占座");
     assert.equal(seatKindLabel("closed"), "关闭");
+  });
+});
+
+describe("matchCurrentPath", () => {
+  it("scopes match reads and decisions to the current room", () => {
+    assert.equal(matchCurrentPath("1234"), "/api/rooms/1234/matches/current");
+    assert.equal(
+      matchCurrentPath("1234", true),
+      "/api/rooms/1234/matches/current/decision",
+    );
+  });
+
+  it("rejects missing room codes before a match request can be sent", () => {
+    assert.throws(() => matchCurrentPath(""), /room code is required/);
   });
 });

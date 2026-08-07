@@ -20,6 +20,11 @@ export type RoomInvite = {
   error?: string | null;
 };
 
+export function matchCurrentPath(code: string, decision = false): string {
+  if (!code) throw new Error("room code is required");
+  return `/api/rooms/${code}/matches/current${decision ? "/decision" : ""}`;
+}
+
 let csrfToken: string | null = null;
 
 export async function ensureSession(origin = ""): Promise<string> {

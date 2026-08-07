@@ -18,6 +18,7 @@ import {
   fetchMySeat,
   fetchRoom,
   fetchRoomRecovery,
+  matchCurrentPath,
   postRoomHeartbeat,
   postSeatDisposition,
   renameSeat,
@@ -90,7 +91,7 @@ export function App() {
 
           const enterMatchIfPossible = async () => {
             if (recovery.room.phase !== "match") return false;
-            const response = await fetch("/api/matches/current", {
+            const response = await fetch(matchCurrentPath(recovery.room.code), {
               credentials: "include",
               cache: "no-store",
             });
@@ -182,7 +183,7 @@ export function App() {
           setMySeatId(me.seat?.seatId ?? null);
           if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
           if (found.phase === "match") {
-            const response = await fetch("/api/matches/current", {
+            const response = await fetch(matchCurrentPath(code), {
               credentials: "include",
               cache: "no-store",
             });
@@ -256,7 +257,7 @@ export function App() {
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch("/api/matches/current", {
+      const response = await fetch(matchCurrentPath(room.code), {
         credentials: "include",
         cache: "no-store",
       });
@@ -281,11 +282,11 @@ export function App() {
   }
 
   async function submitDecision(decision: LegalDecision, label: string) {
-    if (!view) return;
+    if (!view || !room) return;
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch("/api/matches/current/decision", {
+      const response = await fetch(matchCurrentPath(room.code, true), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -454,7 +455,7 @@ export function App() {
       const me = await fetchMySeat(origin, code);
       setMySeatId((prev) => me.seat?.seatId ?? prev);
       if (found.phase === "match" && !view && !lanRoomViewOnly) {
-        const response = await fetch("/api/matches/current", {
+        const response = await fetch(matchCurrentPath(code), {
           credentials: "include",
           cache: "no-store",
         });
@@ -518,7 +519,7 @@ export function App() {
 
     const refreshMatch = async () => {
       try {
-        const response = await fetch("/api/matches/current", {
+        const response = await fetch(matchCurrentPath(room.code), {
           credentials: "include",
           cache: "no-store",
         });
@@ -639,7 +640,7 @@ export function App() {
     try {
       const result = await resumeRoomSeat(room.code);
       setAbsences(result.absences);
-      const response = await fetch("/api/matches/current", {
+      const response = await fetch(matchCurrentPath(room.code), {
         credentials: "include",
         cache: "no-store",
       });

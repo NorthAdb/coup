@@ -8,3 +8,7 @@ dist/
 !.env.example
 data/
 .scratch/brass-birmingham/research/
+.scratch/brass-birmingham/lobbybot.mjs
+.scratch/brass-birmingham/bot.mjs
+.scratch/brass-birmingham/guests_join.py
+.scratch/brass-birmingham/guest_cookies.json

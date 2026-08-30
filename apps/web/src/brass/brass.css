@@ -636,17 +636,20 @@
 
 .brass-board-wrap {
   position: relative;
-  background: #241e14;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(201, 162, 39, 0.06), transparent 55%),
+    #241d12;
   border-radius: var(--b-radius);
-  padding: 8px;
+  border: 1px solid rgba(201, 162, 39, 0.16);
+  padding: 10px;
   box-shadow: var(--b-shadow);
 }
 
 .brass-board {
   display: block;
   width: 100%;
-  height: calc(100vh - 268px);
-  min-height: 420px;
+  height: calc(100vh - 232px);
+  min-height: 480px;
   border-radius: 12px;
 }
 
@@ -663,7 +666,87 @@
 }
 
 .brass-loc.clickable rect:first-of-type {
-  filter: drop-shadow(0 0 6px rgba(217, 182, 74, 0.8));
+  filter: drop-shadow(0 0 7px rgba(232, 184, 60, 0.9));
+}
+
+/* ---------------- 地图局内动效 ---------------- */
+
+.b-anim {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+
+.b-pop {
+  animation: b-pop 0.5s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+@keyframes b-pop {
+  0% {
+    transform: scale(0.25);
+    opacity: 0;
+  }
+  65% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.b-flip {
+  animation: b-flip 0.6s ease-out both;
+}
+
+@keyframes b-flip {
+  0% {
+    filter: brightness(2.4) saturate(0.4);
+    transform: scaleY(0.55);
+  }
+  55% {
+    filter: brightness(1.5);
+    transform: scaleY(1.08);
+  }
+  100% {
+    filter: none;
+    transform: scaleY(1);
+  }
+}
+
+.b-ants {
+  animation: b-ants 0.9s linear infinite;
+}
+
+@keyframes b-ants {
+  to {
+    stroke-dashoffset: -44;
+  }
+}
+
+.b-plot-glow {
+  animation: b-glow-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes b-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.22;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .b-pop,
+  .b-flip,
+  .b-ants,
+  .b-plot-glow,
+  .brass-log-entry,
+  .brass-player-row.turn::before,
+  .brass-your-turn {
+    animation: none;
+  }
 }
 
 .brass-side {
@@ -689,11 +772,34 @@
   padding: 8px 6px;
   border-radius: 10px;
   border: 1px solid transparent;
+  position: relative;
 }
 
 .brass-player-row.turn {
   border-color: rgba(201, 162, 39, 0.8);
   background: rgba(201, 162, 39, 0.08);
+}
+
+.brass-player-row.turn::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 6px;
+  bottom: 6px;
+  width: 4px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--b-brass-bright), var(--b-brass-deep));
+  animation: b-turn-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes b-turn-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
 }
 
 .brass-player-row.absent {
@@ -751,6 +857,7 @@
   align-items: center;
   gap: 8px;
   margin: 6px 0;
+  flex-wrap: wrap;
 }
 
 .brass-market-name {
@@ -760,6 +867,14 @@
   color: var(--b-ink-soft);
 }
 
+.brass-market-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
 .brass-market-bar {
   display: flex;
   gap: 2px;
@@ -767,27 +882,44 @@
 }
 
 .brass-market-slot {
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
   border: 1px solid rgba(138, 121, 93, 0.6);
   display: grid;
   place-items: center;
-  font-size: 8.5px;
+  font-size: 7.5px;
   color: #9a8c6d;
-  background: var(--b-parchment-deep);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.35), rgba(0, 0, 0, 0.04)), var(--b-parchment-deep);
 }
 
 .brass-market-slot.filled {
   border-color: var(--b-ink-soft);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(0, 0, 0, 0.14)), #d8ccb0;
 }
 
 .brass-market-cube {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 2.5px;
   display: block;
-  transform: rotate(45deg);
+  border: 1px solid rgba(15, 12, 6, 0.7);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.brass-market-quote {
+  display: flex;
+  gap: 10px;
+  font-size: 11.5px;
+}
+
+.brass-market-quote b {
+  color: var(--b-rust);
+}
+
+.brass-market-quote i {
+  font-style: normal;
+  color: #6b6047;
 }
 
 .brass-market-hint {
@@ -815,11 +947,23 @@
   padding: 4px 6px;
   border-radius: 6px;
   background: rgba(138, 121, 93, 0.12);
+  animation: b-log-in 0.35s ease-out both;
 }
 
 .brass-log-entry.self {
   background: rgba(201, 162, 39, 0.18);
   font-weight: 600;
+}
+
+@keyframes b-log-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* 行动区 */
@@ -842,29 +986,44 @@
 
 .brass-card {
   display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: linear-gradient(160deg, #f9f3e2, #ece1c6);
-  border: 2px solid rgba(138, 121, 93, 0.7);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  width: 108px;
+  min-height: 78px;
+  box-sizing: border-box;
+  text-align: left;
+  background:
+    linear-gradient(165deg, rgba(255, 250, 235, 0.75), rgba(255, 250, 235, 0) 38%),
+    linear-gradient(160deg, #f7f0dd, #e7dbbd);
+  border: 1.5px solid rgba(112, 96, 68, 0.85);
   border-radius: 10px;
-  padding: 9px 14px;
-  font-size: 13.5px;
-  font-weight: 600;
+  padding: 8px 10px 9px;
   color: var(--b-ink-soft);
   cursor: pointer;
   transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
-  min-height: 42px;
+  box-shadow: 0 2px 8px rgba(15, 12, 6, 0.22), inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+.brass-card::after {
+  content: "";
+  position: relative;
+  display: block;
+  margin: auto -10px -9px;
+  height: 7px;
+  border-radius: 0 0 9px 9px;
+  background: linear-gradient(90deg, rgba(160, 127, 26, 0.35), rgba(160, 127, 26, 0.12), rgba(160, 127, 26, 0.35));
 }
 
 .brass-card:hover:not(:disabled) {
-  transform: translateY(-3px);
-  box-shadow: 0 8px 18px rgba(15, 12, 6, 0.25);
+  transform: translateY(-4px);
+  box-shadow: 0 10px 20px rgba(15, 12, 6, 0.3), inset 0 0 0 1px rgba(255, 255, 255, 0.5);
 }
 
 .brass-card.selected {
   border-color: var(--b-rust);
-  box-shadow: 0 0 0 3px rgba(166, 61, 47, 0.25);
-  transform: translateY(-3px);
+  box-shadow: 0 0 0 3px rgba(166, 61, 47, 0.28), 0 10px 20px rgba(15, 12, 6, 0.3);
+  transform: translateY(-4px);
 }
 
 .brass-card:disabled {
@@ -872,12 +1031,42 @@
   cursor: not-allowed;
 }
 
-.brass-card-icon {
-  width: 12px;
-  height: 12px;
+.brass-card-kind {
+  font-size: 9.5px;
+  letter-spacing: 0.22em;
+  color: #9a8c6d;
+  font-weight: 700;
+}
+
+.brass-card-title {
+  font-family: var(--b-font-display);
+  font-weight: 700;
+  font-size: 13.5px;
+  line-height: 1.25;
+  color: var(--b-ink);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.brass-card-chips {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.brass-card-chips i {
+  width: 11px;
+  height: 11px;
   border-radius: 3px;
-  background: linear-gradient(140deg, var(--b-brass-bright), var(--b-brass));
   display: inline-block;
+  border: 1px solid rgba(28, 22, 13, 0.55);
+  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.4);
+}
+
+.brass-card-chips i.wild {
+  background: linear-gradient(135deg, #f0e2b2, #caa64a);
 }
 
 .brass-spectating {
@@ -894,27 +1083,29 @@
 }
 
 .brass-act {
-  background: var(--b-parchment-deep);
-  border: 1.5px solid rgba(138, 121, 93, 0.7);
+  background: linear-gradient(180deg, #f4ecd7, #e2d5b4);
+  border: 1.5px solid rgba(112, 96, 68, 0.85);
   color: var(--b-ink-soft);
   font-weight: 700;
   font-size: 14px;
-  padding: 9px 18px;
-  border-radius: 10px;
+  padding: 10px 20px;
+  border-radius: 11px;
   cursor: pointer;
   transition: all 0.15s;
+  box-shadow: 0 2px 6px rgba(15, 12, 6, 0.18), inset 0 1.5px 0 rgba(255, 255, 255, 0.6);
 }
 
 .brass-act:hover:not(:disabled) {
   border-color: var(--b-brass-deep);
-  background: rgba(201, 162, 39, 0.2);
+  background: linear-gradient(180deg, #f8f1de, #ecdFB8);
+  transform: translateY(-1px);
 }
 
 .brass-act[data-active="true"] {
-  background: var(--b-brass);
+  background: linear-gradient(180deg, var(--b-brass-bright), var(--b-brass));
   border-color: var(--b-brass-deep);
   color: var(--b-ink);
-  box-shadow: 0 0 0 3px rgba(201, 162, 39, 0.3);
+  box-shadow: 0 0 0 3px rgba(201, 162, 39, 0.3), inset 0 1.5px 0 rgba(255, 255, 255, 0.5);
 }
 
 .brass-act:disabled {

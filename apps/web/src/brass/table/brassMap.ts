@@ -1,35 +1,39 @@
-/** 地图节点坐标（手工排布的示意地图，非精确地理）。 */
+/**
+ * 地图节点坐标：对照实体版图的地理排布手工精调（非精确测绘）。
+ * 画布 1180×930；注意保持连线与地点框无遮挡，调整时先在浏览器里核对。
+ */
 export const NODE_POS: Record<string, { x: number; y: number }> = {
-  warrington: { x: 320, y: 46 },
-  "stoke-on-trent": { x: 300, y: 140 },
-  leek: { x: 470, y: 92 },
-  belper: { x: 640, y: 76 },
-  nottingham: { x: 830, y: 56 },
-  derby: { x: 740, y: 170 },
-  uttoxeter: { x: 500, y: 190 },
-  stone: { x: 190, y: 210 },
-  "burton-on-trent": { x: 640, y: 280 },
-  stafford: { x: 170, y: 310 },
-  shrewsbury: { x: 60, y: 420 },
-  "farm-north": { x: 345, y: 330 },
-  cannock: { x: 300, y: 400 },
-  tamworth: { x: 580, y: 370 },
-  walsall: { x: 430, y: 440 },
-  wolverhampton: { x: 230, y: 470 },
-  coalbrookdale: { x: 105, y: 550 },
-  birmingham: { x: 520, y: 530 },
-  nuneaton: { x: 700, y: 460 },
-  coventry: { x: 790, y: 560 },
-  "farm-south": { x: 250, y: 640 },
-  kidderminster: { x: 195, y: 710 },
-  worcester: { x: 305, y: 770 },
-  redditch: { x: 560, y: 650 },
-  oxford: { x: 800, y: 740 },
-  gloucester: { x: 420, y: 760 },
+  warrington: { x: 150, y: 80 },
+  "stoke-on-trent": { x: 330, y: 185 },
+  leek: { x: 505, y: 125 },
+  belper: { x: 690, y: 115 },
+  nottingham: { x: 1030, y: 95 },
+  derby: { x: 855, y: 215 },
+  uttoxeter: { x: 610, y: 250 },
+  stone: { x: 270, y: 320 },
+  "burton-on-trent": { x: 820, y: 345 },
+  stafford: { x: 195, y: 425 },
+  shrewsbury: { x: 85, y: 565 },
+  "farm-north": { x: 490, y: 395 },
+  cannock: { x: 415, y: 500 },
+  tamworth: { x: 715, y: 480 },
+  walsall: { x: 570, y: 530 },
+  wolverhampton: { x: 345, y: 590 },
+  coalbrookdale: { x: 150, y: 690 },
+  dudley: { x: 435, y: 665 },
+  birmingham: { x: 665, y: 620 },
+  nuneaton: { x: 880, y: 540 },
+  coventry: { x: 1005, y: 630 },
+  "farm-south": { x: 390, y: 790 },
+  kidderminster: { x: 280, y: 815 },
+  worcester: { x: 455, y: 845 },
+  redditch: { x: 735, y: 740 },
+  oxford: { x: 1000, y: 845 },
+  gloucester: { x: 620, y: 862 },
 };
 
 export const MERCHANT_NODES = new Set(["warrington", "shrewsbury", "nottingham", "gloucester", "oxford"]);
 export const FARM_NODES = new Set(["farm-north", "farm-south"]);
 
-export const BOARD_WIDTH = 960;
-export const BOARD_HEIGHT = 830;
+export const BOARD_WIDTH = 1180;
+export const BOARD_HEIGHT = 930;

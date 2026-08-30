@@ -1,15 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BeerSource, BrassCommand, BrassState, CoalSource, IronSource, IndustryType } from "@coup/brass-domain";
 import {
   beerCandidates,
   buildOptionsForCard,
+  buyPriceAt,
   canScout,
   coalCandidates,
+  COAL_FLOOR_PRICE,
+  COAL_MARKET_CAPACITY,
+  COAL_MARKET_PRICES,
   developOptions,
+  IRON_FLOOR_PRICE,
+  IRON_MARKET_CAPACITY,
+  IRON_MARKET_PRICES,
   ironCandidates,
   LINKS,
   linkEndpoints,
   loanPreview,
+  LOCATIONS,
   MERCHANTS,
   networkOptions,
   sellTargets,
@@ -91,6 +99,36 @@ function merchantBeerBonus(location: string): string {
   if (bonus.type === "money") return `+£${bonus.amount}`;
   if (bonus.type === "income") return "收入+2格";
   return "免费研发";
+}
+
+/** 手牌卡：解析产业集合（地点卡 → 该地点可建产业；产业卡 → 卡面产业；万能 → null）。 */
+function cardIndustries(cardId: string): IndustryType[] | null {
+  if (cardId === "wild-location" || cardId === "wild-industry") return null;
+  const base = cardId.slice(0, cardId.lastIndexOf("#") >= 0 ? cardId.lastIndexOf("#") : undefined);
+  if (base.startsWith("loc-")) {
+    const loc = LOCATIONS[base.slice(4)];
+    if (!loc) return [];
+    return Array.from(new Set(loc.slots.flatMap((s) => s.industries)));
+  }
+  if (base.startsWith("ind-")) {
+    return base.slice(4).split("_") as IndustryType[];
+  }
+  return [];
+}
+
+function cardTitle(cardId: string): string {
+  if (cardId === "wild-location") return "任意地点";
+  if (cardId === "wild-industry") return "任意产业";
+  const base = cardId.slice(0, cardId.lastIndexOf("#") >= 0 ? cardId.lastIndexOf("#") : undefined);
+  if (base.startsWith("loc-")) return locationLabel(base.slice(4));
+  if (base.startsWith("ind-")) return (cardIndustries(cardId) ?? []).map((i) => INDUSTRY_SHORT[i] ?? i).join(" / ");
+  return cardId;
+}
+
+function cardKindLabel(cardId: string): string {
+  if (cardId === "wild-location" || cardId === "wild-industry") return "万能";
+  const base = cardId.slice(0, cardId.lastIndexOf("#") >= 0 ? cardId.lastIndexOf("#") : undefined);
+  return base.startsWith("loc-") ? "地点" : "产业";
 }
 
 export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecision, onError }: BrassTableProps) {
@@ -360,11 +398,23 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
             <h3>市场</h3>
             <div className="brass-market-row">
               <span className="brass-market-name">煤</span>
-              <MarketBar count={state.coalMarket} capacity={14} prices={[1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7]} color="#3d3a35" />
+              <MarketBar
+                count={state.coalMarket}
+                capacity={COAL_MARKET_CAPACITY}
+                prices={COAL_MARKET_PRICES}
+                floor={COAL_FLOOR_PRICE}
+                color="#3d3a35"
+              />
             </div>
             <div className="brass-market-row">
               <span className="brass-market-name">铁</span>
-              <MarketBar count={state.ironMarket} capacity={10} prices={[1, 1, 2, 2, 3, 3, 4, 4, 5, 5]} color="#b05f2c" />
+              <MarketBar
+                count={state.ironMarket}
+                capacity={IRON_MARKET_CAPACITY}
+                prices={IRON_MARKET_PRICES}
+                floor={IRON_FLOOR_PRICE}
+                color="#b05f2c"
+              />
             </div>
             <div className="brass-market-hint">买煤需连通商人位；市场空：煤£8 / 铁£6</div>
           </div>
@@ -379,11 +429,13 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
             const isSelected =
               (draft.mode !== "idle" && "cardId" in draft && draft.cardId === cardId) ||
               (draft.mode === "scout" && draft.cardIds.includes(cardId));
+            const industries = cardIndustries(cardId);
             return (
               <button
                 key={cardId}
                 type="button"
                 className={`brass-card ${isSelected ? "selected" : ""}`}
+                title={cardLabel(cardId)}
                 onClick={() => {
                   if (draft.mode === "scout") {
                     setDraft((d) => {
@@ -400,8 +452,18 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
                 }}
                 disabled={!isMyTurn}
               >
-                <span className="brass-card-icon" />
-                {cardLabel(cardId)}
+                <span className="brass-card-kind">{cardKindLabel(cardId)}</span>
+                <span className="brass-card-title">{cardTitle(cardId)}</span>
+                <span className="brass-card-chips">
+                  {(industries ?? ["wild"]).map((ind) => (
+                    <i
+                      key={ind}
+                      className={ind === "wild" ? "wild" : ""}
+                      style={ind === "wild" ? undefined : { background: INDUSTRY_COLOR[ind] }}
+                      title={ind === "wild" ? "任意" : INDUSTRY_LABEL[ind]}
+                    />
+                  ))}
+                </span>
               </button>
             );
           })}
@@ -606,18 +668,38 @@ function greedyBeer(state: BrassState, player: number, n: number, opts: { soldTi
   return sources;
 }
 
-function MarketBar({ count, capacity, prices, color }: { count: number; capacity: number; prices: number[]; color: string }) {
+function MarketBar({
+  count,
+  capacity,
+  prices,
+  floor,
+  color,
+}: {
+  count: number;
+  capacity: number;
+  prices: readonly number[];
+  floor: number;
+  color: string;
+}) {
+  const buyPrice = buyPriceAt(prices, capacity, count, 0, floor);
+  const sellPrice = count < capacity ? prices[capacity - 1 - count] : null;
   return (
-    <span className="brass-market-bar">
-      {Array.from({ length: capacity }, (_, i) => {
-        const occupied = i >= capacity - count;
-        const price = prices[i];
-        return (
-          <span key={i} className={`brass-market-slot ${occupied ? "filled" : ""}`} title={`£${price}`}>
-            {occupied ? <span className="brass-market-cube" style={{ background: color }} /> : <span className="brass-market-price">£{price}</span>}
-          </span>
-        );
-      })}
+    <span className="brass-market-wrap">
+      <span className="brass-market-bar">
+        {Array.from({ length: capacity }, (_, i) => {
+          const occupied = i >= capacity - count;
+          const price = prices[i];
+          return (
+            <span key={i} className={`brass-market-slot ${occupied ? "filled" : ""}`} title={`£${price}`}>
+              {occupied ? <span className="brass-market-cube" style={{ background: color }} /> : <span className="brass-market-price">£{price}</span>}
+            </span>
+          );
+        })}
+      </span>
+      <span className="brass-market-quote">
+        <b>买 £{buyPrice}</b>
+        <i>卖 {sellPrice === null ? "无空位" : `£${sellPrice}`}</i>
+      </span>
     </span>
   );
 }
@@ -689,11 +771,16 @@ function MatSummary({ mat }: { mat: Record<IndustryType, number[]> }) {
 }
 
 function LogPanel({ state, myPlayer }: { state: BrassState; myPlayer: number | null }) {
+  const listRef = useRef<HTMLDivElement>(null);
   const entries = state.log.slice(-60);
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [entries.length]);
   return (
     <div className="brass-panel brass-log">
       <h3>对局日志</h3>
-      <div className="brass-log-list">
+      <div className="brass-log-list" ref={listRef}>
         {entries.map((entry) => (
           <div key={entry.seq} className={`brass-log-entry ${entry.player === myPlayer ? "self" : ""}`}>
             {logText(entry, myPlayer)}
@@ -765,6 +852,12 @@ function BuildDraft({
                     state={state}
                     onChange={(sources) => onPatch({ coalSources: sources })}
                   />
+                ) : coalCands.length === 1 ? (
+                  <span className="brass-draft-detail">
+                    {coalCands[0].kind === "mine"
+                      ? coalLabel(state, { kind: "mine", tileId: coalCands[0].tileId })
+                      : coalLabel(state, { kind: "market" })}
+                  </span>
                 ) : (
                   <span className="brass-draft-warn">无可用煤源：需连通未翻面煤矿，或连通商人位从市场购买</span>
                 )
@@ -772,6 +865,12 @@ function BuildDraft({
               {spot.costIron > 0 ? (
                 ironCands.length > 1 ? (
                   <IronPicker count={spot.costIron} candidates={ironCands} sources={draft.ironSources} state={state} onChange={(sources) => onPatch({ ironSources: sources })} />
+                ) : ironCands.length === 1 ? (
+                  <span className="brass-draft-detail">
+                    {ironCands[0].kind === "works"
+                      ? ironLabel(state, { kind: "works", tileId: ironCands[0].tileId })
+                      : ironLabel(state, { kind: "market" })}
+                  </span>
                 ) : (
                   <span className="brass-draft-warn">无可用铁源（场上有未翻面铁厂时必须用铁厂）</span>
                 )

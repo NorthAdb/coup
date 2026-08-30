@@ -783,6 +783,9 @@ function IndustryTile({
           </linearGradient>
         </defs>
         <rect x={0.5} y={0.5} width={s - 1} height={s - 1} rx={5} fill={`url(#b-tile-${tile.id})`} stroke="#1c160d" strokeWidth={1.6} />
+        {/* 拥有者色环 + 角标：实体版瓦片背面即玩家色 */}
+        <rect x={2} y={2} width={s - 4} height={s - 4} rx={3.8} fill="none" stroke={playerColor(tile.player)} strokeWidth={2.1} opacity={0.95} />
+        <circle cx={s - 4.6} cy={4.6} r={2.6} fill={playerColor(tile.player)} stroke="#1c160d" strokeWidth={0.7} />
         <rect x={2.5} y={2} width={s - 5} height={s * 0.32} rx={3.5} fill="#ffffff" opacity={0.18} />
         {tile.flipped ? (
           <>

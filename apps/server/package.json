@@ -14,7 +14,8 @@
     "@coup/protocol": "0.0.0",
     "@fastify/static": "^8.2.0",
     "fastify": "^5.5.0",
-    "open": "^10.2.0"
+    "open": "^10.2.0",
+    "@coup/brass-domain": "*"
   },
   "devDependencies": {
     "@types/node": "^22.17.2",

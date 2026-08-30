@@ -32,6 +32,8 @@ import {
   type RoomRegistry,
 } from "./roomRegistry.js";
 import { openRoomStore, type RoomStore } from "./roomStore.js";
+import { allClaimedCodes, claimRoomCode } from "./roomCodePool.js";
+import { registerBrassRoutes } from "./brass/brassRoutes.js";
 import {
   IDLE_ROOM_RECLAIM_MS,
   IDLE_ROOM_SWEEP_MS,
@@ -198,7 +200,12 @@ export async function createApp(options: CreateAppOptions) {
   const initialRooms = roomStore.loadRooms();
   store.migrateLegacyRuns(initialRooms.rooms);
   const persistence = persistenceForStore(store);
-  const rooms = options.rooms ?? createRoomRegistry();
+  const rooms =
+    options.rooms ??
+    createRoomRegistry({
+      takenExtra: allClaimedCodes,
+      onCodeAllocated: claimRoomCode,
+    });
   const sessions = options.sessions ?? createSessionStore();
   const listIfaces = options.listNetworkInterfaces ?? networkInterfaces;
   const envOrigins = (process.env.COUP_ALLOWED_ORIGINS ?? "")
@@ -1673,6 +1680,21 @@ export async function createApp(options: CreateAppOptions) {
       turnDeadline: turnDeadlinePayload(room.code),
       autoDecision: lastAutoDecisionPayload(room.code),
     });
+  });
+
+  // Brass: Birmingham 房间/对局 API（ADR-0009）：复用会话守卫与房间码池。
+  registerBrassRoutes(app, {
+    dbPath,
+    now,
+    requireSession,
+    appendSetCookie,
+    getHostContext: () => {
+      const state = options.hosting?.getState();
+      if (!state) return null;
+      const candidates = listLanIpv4Candidates(listIfaces() as NetIfaceMap);
+      const lanHost = publicHost ?? selectedLanHost ?? pickDefaultLanIpv4(candidates);
+      return { bindMode: state.bindMode, port: state.port, lanHost };
+    },
   });
 
   await app.register(fastifyStatic, {

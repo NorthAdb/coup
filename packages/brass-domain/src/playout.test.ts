@@ -25,6 +25,7 @@ import {
   buyCost,
 } from './data/market.js';
 import type { BrassCommand, BrassState, CoalSource, IronSource, BeerSource } from './types.js';
+import type { CoalCandidate, IronCandidate, BeerCandidate } from './affordances.js';
 
 /**
  * 随机对局模糊测试：bot 依据 affordances + 现金约束构造合法命令打完整局，
@@ -74,10 +75,10 @@ function assignCoal(state: BrassState, atNodes: string[], n: number): CoalSource
   for (let i = 0; i < n; i++) {
     let assigned = false;
     for (const mine of mines) {
-      const a = avail.get(mine.tileId!) ?? mine.available;
+      const a = avail.get(mine.tileId) ?? mine.available;
       if (a > 0) {
-        avail.set(mine.tileId!, a - 1);
-        sources.push({ kind: 'mine', tileId: mine.tileId! });
+        avail.set(mine.tileId, a - 1);
+        sources.push({ kind: 'mine', tileId: mine.tileId });
         assigned = true;
         break;
       }
@@ -97,10 +98,10 @@ function assignIron(state: BrassState, n: number): IronSource[] {
   for (let i = 0; i < n; i++) {
     let assigned = false;
     for (const w of works) {
-      const a = avail.get(w.tileId!) ?? w.available;
+      const a = avail.get(w.tileId) ?? w.available;
       if (a > 0) {
-        avail.set(w.tileId!, a - 1);
-        sources.push({ kind: 'works', tileId: w.tileId! });
+        avail.set(w.tileId, a - 1);
+        sources.push({ kind: 'works', tileId: w.tileId });
         assigned = true;
         break;
       }
@@ -115,25 +116,25 @@ function assignBeer(state: BrassState, player: number, n: number, opts: { soldTi
   const cands = beerCandidates(state, player, n, opts);
   const sources: BeerSource[] = [];
   const avail = new Map<string, number>();
-  const own = cands.filter((c) => c.kind === 'brewery' && c.owner === player);
-  const opp = cands.filter((c) => c.kind === 'brewery' && c.owner !== player);
-  const merchant = cands.find((c) => c.kind === 'merchant');
+  const own = cands.filter((c): c is Extract<BeerCandidate, { kind: 'brewery' }> => c.kind === 'brewery' && c.owner === player);
+  const opp = cands.filter((c): c is Extract<BeerCandidate, { kind: 'brewery' }> => c.kind === 'brewery' && c.owner !== player);
+  const merchant = cands.find((c): c is Extract<BeerCandidate, { kind: 'merchant' }> => c.kind === 'merchant');
   for (let i = 0; i < n; i++) {
     let assigned = false;
     for (const pool of [own, opp]) {
       for (const b of pool) {
-        const a = avail.get(b.tileId!) ?? b.available;
+        const a = avail.get(b.tileId) ?? b.available;
         if (a > 0) {
-          avail.set(b.tileId!, a - 1);
-          sources.push({ kind: 'brewery', tileId: b.tileId! });
+          avail.set(b.tileId, a - 1);
+          sources.push({ kind: 'brewery', tileId: b.tileId });
           assigned = true;
           break;
         }
       }
       if (assigned) break;
     }
-    if (!assigned && merchant) {
-      sources.push({ kind: 'merchant', merchantSlotId: merchant.merchantSlotId! });
+    if (!assigned && merchant && merchant.kind === 'merchant') {
+      sources.push({ kind: 'merchant', merchantSlotId: merchant.merchantSlotId });
       assigned = true;
     }
     if (!assigned) return [];
@@ -213,7 +214,7 @@ function planCommand(rand: () => number, state: BrassState, stats: Stats): Brass
                 { linkIndex: a.linkIndex, coalSources: coalA },
                 { linkIndex: b.linkIndex, coalSources: coalB },
               ],
-              beerSource: beer.kind === 'brewery' ? { kind: 'brewery', tileId: beer.tileId! } : { kind: 'merchant', merchantSlotId: beer.merchantSlotId! },
+              beerSource: beer.kind === 'brewery' ? { kind: 'brewery', tileId: beer.tileId } : { kind: 'merchant', merchantSlotId: beer.merchantSlotId },
               ...ev,
             });
           }

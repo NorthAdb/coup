@@ -130,15 +130,9 @@ export function buildOptionsForCard(state: BrassState, player: number, cardId: s
 // 资源来源候选
 // ---------------------------------------------------------------------------
 
-export interface CoalCandidate {
-  kind: 'mine' | 'market';
-  tileId?: string;
-  location?: string;
-  distance?: number;
-  available: number;
-  /** 市场单块价（含兜底说明）。 */
-  priceEach?: number;
-}
+export type CoalCandidate =
+  | { kind: 'mine'; tileId: string; location: string; distance: number; available: number }
+  | { kind: 'market'; available: number; priceEach: number };
 
 export function coalCandidates(state: BrassState, atNodes: string[]): CoalCandidate[] {
   const distMaps = atNodes.map((n) => distances(state, n));
@@ -153,16 +147,12 @@ export function coalCandidates(state: BrassState, atNodes: string[]): CoalCandid
   );
   if (!marketConnected) return [];
   const priceEach = state.coalMarket > 0 ? COAL_MARKET_PRICES[COAL_MARKET_CAPACITY - state.coalMarket] : COAL_FLOOR_PRICE;
-  return [{ kind: 'market', available: state.coalMarket > 0 ? state.coalMarket : Infinity, priceEach }];
+  return [{ kind: 'market' as const, available: state.coalMarket > 0 ? state.coalMarket : Infinity, priceEach }];
 }
 
-export interface IronCandidate {
-  kind: 'works' | 'market';
-  tileId?: string;
-  location?: string;
-  available: number;
-  priceEach?: number;
-}
+export type IronCandidate =
+  | { kind: 'works'; tileId: string; location: string; available: number }
+  | { kind: 'market'; available: number; priceEach: number };
 
 export function ironCandidates(state: BrassState): IronCandidate[] {
   const works = state.placedTiles
@@ -170,18 +160,12 @@ export function ironCandidates(state: BrassState): IronCandidate[] {
     .map((t) => ({ kind: 'works' as const, tileId: t.id, location: t.location, available: t.iron }));
   if (works.length > 0) return works;
   const priceEach = state.ironMarket > 0 ? IRON_MARKET_PRICES[IRON_MARKET_CAPACITY - state.ironMarket] : IRON_FLOOR_PRICE;
-  return [{ kind: 'market', available: state.ironMarket > 0 ? state.ironMarket : Infinity, priceEach }];
+  return [{ kind: 'market' as const, available: state.ironMarket > 0 ? state.ironMarket : Infinity, priceEach }];
 }
 
-export interface BeerCandidate {
-  kind: 'brewery' | 'merchant';
-  tileId?: string;
-  merchantSlotId?: string;
-  location?: string;
-  owner?: number;
-  available: number;
-  bonus?: string;
-}
+export type BeerCandidate =
+  | { kind: 'brewery'; tileId: string; location: string; owner: number; available: number }
+  | { kind: 'merchant'; merchantSlotId: string; location: string; available: number; bonus: string };
 
 export function beerCandidates(
   state: BrassState,
@@ -207,7 +191,8 @@ export function beerCandidates(
   if (opts.merchantSlotId) {
     const m = state.merchantTiles.find((x) => x.slotId === opts.merchantSlotId);
     if (m && !m.blank && m.beer) {
-      out.push({ kind: 'merchant', merchantSlotId: m.slotId, location: m.location, available: 1, bonus: MERCHANTS[m.location]?.bonus.type });
+      const bonus = MERCHANTS[m.location]?.bonus.type;
+      out.push({ kind: 'merchant' as const, merchantSlotId: m.slotId, location: m.location, available: 1, bonus: bonus ?? '' });
     }
   }
   return out;

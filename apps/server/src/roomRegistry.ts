@@ -161,7 +161,17 @@ export type RoomRegistry = {
     | { ok: false; reason: "room_not_found" | "seat_not_found" };
 };
 
-function defaultSeats(): LobbySeat[] {
+export type CreateRoomRegistryOptions = {
+  /** 座位数（含房主）；coup 默认 6，brass 传 4。 */
+  seatCount?: number;
+  /** 分配新码时额外参考的占用码（跨游戏共享码池）。 */
+  takenExtra?: () => string[];
+  /** 分配/恢复房间码后的回调（登记到共享码池）。 */
+  onCodeAllocated?: (code: string) => void;
+};
+
+function defaultSeats(seatCount = 6): LobbySeat[] {
+  const count = Math.max(2, Math.min(8, seatCount));
   const seats: LobbySeat[] = [
     {
       seatId: "1",
@@ -171,7 +181,7 @@ function defaultSeats(): LobbySeat[] {
       rematchStatus: null,
     },
   ];
-  for (let n = 2; n <= 6; n += 1) {
+  for (let n = 2; n <= count; n += 1) {
     seats.push({
       seatId: String(n),
       kind: "open",
@@ -192,17 +202,22 @@ export function publicSeats(room: RoomRecord): PublicLobbySeat[] {
   }));
 }
 
-export function createRoomRegistry(): RoomRegistry {
+export function createRoomRegistry(options?: CreateRoomRegistryOptions): RoomRegistry {
   const rooms = new Map<string, RoomRecord>();
+  const seatCount = options?.seatCount ?? 6;
+  const takenExtra = options?.takenExtra;
+  const onCodeAllocated = options?.onCodeAllocated;
 
   return {
     create() {
-      const code = allocateRoomCode(new Set(rooms.keys()));
+      const taken = new Set([...rooms.keys(), ...(takenExtra?.() ?? [])]);
+      const code = allocateRoomCode(taken);
+      onCodeAllocated?.(code);
       const room: RoomRecord = {
         code,
         phase: "lobby",
         createdAt: Date.now(),
-        seats: defaultSeats(),
+        seats: defaultSeats(seatCount),
         matchId: null,
         turnTimeLimitSec: DEFAULT_TURN_TIME_LIMIT_SEC,
       };
@@ -214,6 +229,7 @@ export function createRoomRegistry(): RoomRegistry {
       // 旧版持久化房间没有该字段：回填默认值。
       cloned.turnTimeLimitSec = normalizeTurnTimeLimit(cloned.turnTimeLimitSec);
       rooms.set(cloned.code, cloned);
+      onCodeAllocated?.(cloned.code);
     },
     getByCode(code) {
       if (!isValidRoomCode(code)) return null;

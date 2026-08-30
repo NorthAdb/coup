@@ -28,6 +28,16 @@ export const INDUSTRY_COLOR: Record<IndustryType, string> = {
   brewery: "#d08a2e",
 };
 
+/** 手牌/面板产业字块：底色 + 字色（与瓦片观感一致，保证小尺寸可读）。 */
+export const INDUSTRY_CHIP: Record<IndustryType, { color: string; ink: string }> = {
+  cotton: { color: "#d99a5b", ink: "#3a2510" },
+  manufacturer: { color: "#8a6fae", ink: "#f3ecdc" },
+  pottery: { color: "#4e9a8a", ink: "#0e2924" },
+  coal: { color: "#45413a", ink: "#e8dfc8" },
+  iron: { color: "#b3572d", ink: "#fbe9d8" },
+  brewery: { color: "#b08d57", ink: "#33230f" },
+};
+
 export function locationLabel(id: string): string {
   if (LOCATIONS[id]) return LOCATIONS[id].name;
   if (MERCHANTS[id]) return MERCHANTS[id].name;

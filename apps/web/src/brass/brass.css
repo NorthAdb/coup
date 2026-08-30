@@ -768,8 +768,8 @@
 .brass-player-row {
   display: grid;
   grid-template-columns: 14px 1fr;
-  gap: 2px 8px;
-  padding: 8px 6px;
+  gap: 3px 8px;
+  padding: 10px 6px;
   border-radius: 10px;
   border: 1px solid transparent;
   position: relative;
@@ -810,7 +810,7 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  margin-top: 4px;
+  margin-top: 3px;
   border: 2px solid rgba(58, 52, 42, 0.4);
 }
 
@@ -822,16 +822,40 @@
 
 .brass-player-stats {
   grid-column: 2;
-  font-size: 12px;
-  color: #6b6047;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.brass-player-stats .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.brass-player-stats .stat i {
+  font-style: normal;
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  color: #9a8c6d;
+  white-space: nowrap;
+}
+
+.brass-player-stats .stat b {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--b-ink);
+  white-space: nowrap;
 }
 
 .brass-mat {
   grid-column: 2;
   display: flex;
-  gap: 4px;
+  gap: 5px;
   flex-wrap: wrap;
-  margin-top: 3px;
+  margin-top: 4px;
 }
 
 .brass-mat-chip {
@@ -841,15 +865,22 @@
   font-size: 11px;
   background: var(--b-parchment-deep);
   border-radius: 6px;
-  padding: 1px 6px;
+  padding: 1.5px 6px 1.5px 3px;
   color: var(--b-ink-soft);
+  font-weight: 600;
 }
 
-.brass-mat-chip i {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
+.brass-mat-chip .mat-char {
+  width: 14px;
+  height: 14px;
+  border-radius: 3.5px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 800;
+  font-style: normal;
+  line-height: 1;
+  border: 1px solid rgba(20, 15, 8, 0.45);
 }
 
 .brass-market-row {
@@ -882,13 +913,13 @@
 }
 
 .brass-market-slot {
-  width: 15px;
-  height: 15px;
-  border-radius: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 4.5px;
   border: 1px solid rgba(138, 121, 93, 0.6);
   display: grid;
   place-items: center;
-  font-size: 7.5px;
+  font-size: 8.5px;
   color: #9a8c6d;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.35), rgba(0, 0, 0, 0.04)), var(--b-parchment-deep);
 }
@@ -953,19 +984,37 @@
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
+  line-height: 1.5;
   color: #55503f;
 }
 
 .brass-log-entry {
-  padding: 4px 6px;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 4.5px 7px;
   border-radius: 6px;
   background: rgba(138, 121, 93, 0.12);
   animation: b-log-in 0.35s ease-out both;
 }
 
+.brass-log-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex: none;
+  border: 1px solid rgba(20, 15, 8, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
 .brass-log-entry.self {
   background: rgba(201, 162, 39, 0.18);
   font-weight: 600;
+}
+
+.brass-log-entry.self .brass-log-dot {
+  border-color: rgba(20, 15, 8, 0.55);
 }
 
 @keyframes b-log-in {
@@ -998,12 +1047,13 @@
 }
 
 .brass-card {
+  position: relative;
   display: inline-flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 3px;
+  gap: 5px;
   width: 118px;
-  min-height: 78px;
+  min-height: 88px;
   box-sizing: border-box;
   text-align: left;
   background:
@@ -1011,21 +1061,22 @@
     linear-gradient(160deg, #f7f0dd, #e7dbbd);
   border: 1.5px solid rgba(112, 96, 68, 0.85);
   border-radius: 10px;
-  padding: 8px 10px 9px;
+  padding: 12px 11px 10px;
   color: var(--b-ink-soft);
   cursor: pointer;
   transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
   box-shadow: 0 2px 8px rgba(15, 12, 6, 0.22), inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+  overflow: hidden;
 }
 
-.brass-card::after {
-  content: "";
-  position: relative;
-  display: block;
-  margin: auto -10px -9px;
-  height: 7px;
-  border-radius: 0 0 9px 9px;
-  background: linear-gradient(90deg, rgba(160, 127, 26, 0.35), rgba(160, 127, 26, 0.12), rgba(160, 127, 26, 0.35));
+.brass-card-band {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  border-radius: 8.5px 8.5px 0 0;
+  box-shadow: 0 1px 2px rgba(15, 12, 6, 0.25);
 }
 
 .brass-card:hover:not(:disabled) {
@@ -1045,17 +1096,18 @@
 }
 
 .brass-card-kind {
-  font-size: 9.5px;
-  letter-spacing: 0.22em;
-  color: #9a8c6d;
+  font-size: 9px;
+  letter-spacing: 0.24em;
+  color: #94866a;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .brass-card-title {
   font-family: var(--b-font-display);
   font-weight: 700;
-  font-size: 12.5px;
-  line-height: 1.25;
+  font-size: 13.5px;
+  line-height: 1.3;
   color: var(--b-ink);
   overflow: hidden;
   display: -webkit-box;
@@ -1065,21 +1117,28 @@
 
 .brass-card-chips {
   display: flex;
-  gap: 4px;
-  margin-top: 2px;
+  gap: 5px;
+  margin-top: auto;
+  flex-wrap: wrap;
 }
 
-.brass-card-chips i {
-  width: 11px;
-  height: 11px;
-  border-radius: 3px;
-  display: inline-block;
-  border: 1px solid rgba(28, 22, 13, 0.55);
-  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.4);
+.brass-card-chips .chip {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 11.5px;
+  font-weight: 800;
+  font-style: normal;
+  line-height: 1;
+  border: 1px solid rgba(28, 22, 13, 0.5);
+  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.35);
 }
 
-.brass-card-chips i.wild {
+.brass-card-chips .chip.wild {
   background: linear-gradient(135deg, #f0e2b2, #caa64a);
+  color: #4a3a12;
 }
 
 .brass-spectating {
@@ -1138,13 +1197,15 @@
   background: rgba(201, 162, 39, 0.1);
   border: 1px dashed rgba(160, 127, 26, 0.6);
   border-radius: 10px;
-  padding: 10px 14px;
+  padding: 12px 16px;
+  line-height: 1.5;
 }
 
 .brass-draft-step {
   font-weight: 700;
   font-size: 13.5px;
   color: var(--b-ink-soft);
+  letter-spacing: 0.02em;
 }
 
 .brass-draft-detail {

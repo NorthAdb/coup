@@ -25,7 +25,7 @@ import {
 import type { BrassSeatAbsence, BrassView } from "../brassApi.js";
 import { submitBrassCommand } from "../brassApi.js";
 import {
-  INDUSTRY_COLOR,
+  INDUSTRY_CHIP,
   INDUSTRY_LABEL,
   INDUSTRY_SHORT,
   cardLabel,
@@ -227,8 +227,12 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
     if (draft.mode === "build" && buildInfo) {
       for (const spot of buildInfo.info.spots) set.add(spot.location);
     }
+    if (draft.mode === "sell" && myPlayer !== null) {
+      // 卖货模式：高亮所有可出售瓦片所在地点
+      for (const t of sellTargets(state, myPlayer)) set.add(t.location);
+    }
     return set;
-  }, [draft, buildInfo]);
+  }, [draft, buildInfo, state, myPlayer]);
 
   const highlightedLinks = useMemo(() => {
     const set = new Set<number>();
@@ -354,6 +358,12 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
             highlightedLocations={highlightedLocations}
             highlightedLinks={highlightedLinks}
             selectedLocation={draft.mode === "build" ? draft.location : null}
+            selectedLinkIndex={draft.mode === "network" ? (draft.linkIndexes[draft.linkIndexes.length - 1] ?? null) : null}
+            previewSlot={
+              draft.mode === "build" && draft.location && buildInfo?.spot
+                ? { location: draft.location, slotIndex: draft.slotIndex ?? buildInfo.spot.emptySlots[0] ?? 0, industry: buildInfo.spot.industry, level: buildInfo.spot.tileLevel }
+                : null
+            }
             onLocationClick={(loc) => {
               if (draft.mode === "build") patchDraft({ location: loc, industry: null, slotIndex: null, overbuildTileId: null });
             }}
@@ -429,7 +439,18 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
             const isSelected =
               (draft.mode !== "idle" && "cardId" in draft && draft.cardId === cardId) ||
               (draft.mode === "scout" && draft.cardIds.includes(cardId));
-            const industries = cardIndustries(cardId);
+            const isWild = cardId === "wild-location" || cardId === "wild-industry";
+            const base = cardId.slice(0, cardId.lastIndexOf("#") >= 0 ? cardId.lastIndexOf("#") : undefined);
+            const isLoc = !isWild && base.startsWith("loc-");
+            const inds = Array.from(new Set(cardIndustries(cardId) ?? []));
+            const band = isWild
+              ? "linear-gradient(90deg, #caa64a, #8a6f2c)"
+              : isLoc
+                ? "linear-gradient(90deg, #6b5a41, #4a3d2c)"
+                : INDUSTRY_CHIP[inds[0]]
+                  ? `linear-gradient(90deg, ${INDUSTRY_CHIP[inds[0]].color}, ${INDUSTRY_CHIP[inds[0]].color}99)`
+                  : undefined;
+            const slotCount = isLoc ? (LOCATIONS[base.slice(4)]?.slots.length ?? 0) : 0;
             return (
               <button
                 key={cardId}
@@ -452,17 +473,19 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
                 }}
                 disabled={!isMyTurn}
               >
-                <span className="brass-card-kind">{cardKindLabel(cardId)}</span>
+                <span className="brass-card-band" style={band ? { background: band } : undefined} />
+                <span className="brass-card-kind">{cardKindLabel(cardId)}{isLoc && slotCount ? ` · ${slotCount} 槽` : ""}</span>
                 <span className="brass-card-title">{cardTitle(cardId)}</span>
                 <span className="brass-card-chips">
-                  {(industries ?? ["wild"]).map((ind) => (
-                    <i
-                      key={ind}
-                      className={ind === "wild" ? "wild" : ""}
-                      style={ind === "wild" ? undefined : { background: INDUSTRY_COLOR[ind] }}
-                      title={ind === "wild" ? "任意" : INDUSTRY_LABEL[ind]}
-                    />
-                  ))}
+                  {isWild ? (
+                    <i className="chip wild">✦</i>
+                  ) : (
+                    inds.map((ind) => (
+                      <i key={ind} className="chip" style={{ background: INDUSTRY_CHIP[ind].color, color: INDUSTRY_CHIP[ind].ink }}>
+                        {INDUSTRY_SHORT[ind]}
+                      </i>
+                    ))
+                  )}
                 </span>
               </button>
             );
@@ -735,7 +758,26 @@ function PlayersPanel({
               {absence && absence.phase !== "present" ? " ⚠离席" : ""}
             </span>
             <span className="brass-player-stats">
-              £{p.money} · 收入 {incomeLevelOf(p.incomeSpace)} · {p.vp} 分 · 连线 {state.linksLeft[i]} · 手牌 {handCount}
+              <span className="stat">
+                <i>资金</i>
+                <b>£{p.money}</b>
+              </span>
+              <span className="stat">
+                <i>收入</i>
+                <b>{incomeLevelOf(p.incomeSpace)}</b>
+              </span>
+              <span className="stat">
+                <i>分数</i>
+                <b>{p.vp}</b>
+              </span>
+              <span className="stat">
+                <i>连线</i>
+                <b>{state.linksLeft[i]}</b>
+              </span>
+              <span className="stat">
+                <i>手牌</i>
+                <b>{handCount}</b>
+              </span>
             </span>
             <MatSummary mat={p.mat} />
           </div>
@@ -761,7 +803,9 @@ function MatSummary({ mat }: { mat: Record<IndustryType, number[]> }) {
         if (!stack || stack.length === 0) return null;
         return (
           <span key={ind} className="brass-mat-chip" title={`${INDUSTRY_LABEL[ind]}：剩 ${stack.length} 块（最低 ${roman(Math.min(...stack))} 级）`}>
-            <i style={{ background: INDUSTRY_COLOR[ind] }} />
+            <i className="mat-char" style={{ background: INDUSTRY_CHIP[ind].color, color: INDUSTRY_CHIP[ind].ink }}>
+              {INDUSTRY_SHORT[ind]}
+            </i>
             {stack.length}
           </span>
         );
@@ -783,7 +827,11 @@ function LogPanel({ state, myPlayer }: { state: BrassState; myPlayer: number | n
       <div className="brass-log-list" ref={listRef}>
         {entries.map((entry) => (
           <div key={entry.seq} className={`brass-log-entry ${entry.player === myPlayer ? "self" : ""}`}>
-            {logText(entry, myPlayer)}
+            <span
+              className="brass-log-dot"
+              style={{ background: entry.player !== undefined ? playerColor(entry.player) : "#9a8c6d" }}
+            />
+            <span>{logText(entry, myPlayer)}</span>
           </div>
         ))}
       </div>

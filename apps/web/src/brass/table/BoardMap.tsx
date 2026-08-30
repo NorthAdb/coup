@@ -14,6 +14,8 @@ export type BoardMapProps = {
   /** 已选中的目标。 */
   selectedLocation?: string | null;
   selectedLinkIndex?: number | null;
+  /** 建造预览：目标槽位上的半透明幽灵瓦片。 */
+  previewSlot?: { location: string; slotIndex: number; industry: IndustryType; level: number } | null;
   onLocationClick?: (location: string) => void;
   onLinkClick?: (linkIndex: number) => void;
 };
@@ -380,6 +382,7 @@ export function BoardMap({
   highlightedLinks,
   selectedLocation,
   selectedLinkIndex,
+  previewSlot,
   onLocationClick,
   onLinkClick,
 }: BoardMapProps) {
@@ -538,7 +541,7 @@ export function BoardMap({
             {clickable ? (
               <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={18} strokeLinecap="round" />
             ) : null}
-            {/* 已放置的 Link 板块：木梁 + 轨道纹 */}
+            {/* 已放置的 Link 板块：木梁 + 轨道纹；铺路选中的线给幽灵板块预览 */}
             {occupied.map((link) => (
               <g key={link.id} transform={`translate(${mid.x},${mid.y}) rotate(${angle})`}>
                 <g className={`b-anim ${newLinkIds.has(link.id) ? "b-pop" : ""}`}>
@@ -550,6 +553,13 @@ export function BoardMap({
                 </g>
               </g>
             ))}
+            {!occupied.length && selectedLinkIndex === index && myPlayer !== null ? (
+              <g transform={`translate(${mid.x},${mid.y}) rotate(${angle})`} opacity={0.55} style={{ pointerEvents: "none" }}>
+                <rect x={-23} y={-9.5} width={46} height={19} rx={4.5} fill={playerColor(myPlayer)} stroke="#241f16" strokeWidth={1.6} strokeDasharray="4 3" />
+                <line x1={-19} y1={2.6} x2={19} y2={2.6} stroke="#241f16" strokeWidth={5.4} strokeDasharray="2.2 5.6" opacity={0.32} />
+                <line x1={-19} y1={2.6} x2={19} y2={2.6} stroke="#f3e7c8" strokeWidth={1.1} opacity={0.6} />
+              </g>
+            ) : null}
           </g>
         );
       })}
@@ -586,6 +596,8 @@ export function BoardMap({
             ) : null}
             <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={9} fill="url(#b-plot-face)" stroke="#221c13" strokeWidth={1.8} />
             <rect x={-w / 2 + 2.5} y={-h / 2 + 2.5} width={w - 5} height={11} rx={6} fill="#ffffff" opacity={0.07} />
+            {/* 地名分区底带：让名字自成一层，不与剪影/槽位挤在一起 */}
+            <rect x={-w / 2 + 3.5} y={-h / 2 + 3.5} width={w - 7} height={18.5} rx={6} fill="#100c07" opacity={0.32} style={{ pointerEvents: "none" }} />
             {/* 城市剪影（地名下方） */}
             <g style={{ pointerEvents: "none" }}>
               <CitySkyline id={id} farm={farm} />
@@ -620,9 +632,10 @@ export function BoardMap({
                               x={cx}
                               y={slotW / 2 + 4.5}
                               textAnchor="middle"
-                              fontSize={count === 1 ? 14 : 12}
+                              fontSize={count === 1 ? 14 : 11.5}
                               fontWeight={700}
                               fill={INDUSTRY_SLOT_INK[ind]}
+                              fillOpacity={0.92}
                               stroke="#0f0c07"
                               strokeWidth={0.4}
                               paintOrder="stroke"
@@ -641,6 +654,18 @@ export function BoardMap({
                           isNew={newTileIds.has(tile.id)}
                           isFlippedNow={flippedTileIds.has(tile.id)}
                         />
+                      ) : previewSlot && previewSlot.location === id && previewSlot.slotIndex === slotIndex ? (
+                        <g opacity={0.5} style={{ pointerEvents: "none" }}>
+                          <IndustryTile
+                            tile={{ id: `preview-${id}-${slotIndex}`, industry: previewSlot.industry, level: previewSlot.level, player: myPlayer ?? 0, flipped: false, coal: 0, iron: 0, beer: 0 }}
+                            x={1.5}
+                            y={1.5}
+                            size={slotW - 3}
+                            isNew={false}
+                            isFlippedNow={false}
+                          />
+                          <rect x={1} y={1} width={slotW - 2} height={slotW - 2} rx={5} fill="none" stroke="#f3ead6" strokeWidth={1.4} strokeDasharray="4 3" />
+                        </g>
                       ) : null}
                     </g>
                   );

@@ -29,6 +29,7 @@ import {
   roman,
 } from "../labels.js";
 import { BoardMap, playerColor } from "./BoardMap.js";
+import { RulesModal } from "./RulesModal.js";
 
 type SaleDraft = {
   tileId: string;
@@ -295,10 +296,12 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
               {Math.floor(deadlineLeft / 60)}:{String(deadlineLeft % 60).padStart(2, "0")}
             </span>
           ) : null}
+          {isMyTurn ? <span className="brass-your-turn">轮到你了</span> : null}
           {autoDecision ? <span className="brass-auto-note">已自动代打</span> : null}
         </div>
         <div className="brass-topbar-right">
           <span className="brass-room-code">房间 {roomCode}</span>
+          <RulesModal />
           <button type="button" className="brass-ghost-btn" onClick={() => setShowLog((v) => !v)}>
             {showLog ? "收起日志" : "查看日志"}
           </button>

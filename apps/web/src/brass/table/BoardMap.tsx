@@ -143,7 +143,7 @@ export function BoardMap({
             <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={8} fill={farm ? "#e6d9bc" : "#f6efdd"} stroke="#8a795d" strokeWidth={1.6} />
             <rect x={-w / 2} y={-h / 2} width={w} height={16} rx={8} fill="#6b5a41" />
             <text y={farm ? -3 : -16} textAnchor="middle" fontSize={farm ? 8.5 : 11} fill="#f3ead6" fontWeight={700}>
-              {locationLabel(id)}
+              {farm ? (id === "farm-north" ? "酒厂·北" : "酒厂·南") : locationLabel(id)}
             </text>
             {/* 槽位 */}
             {!farm

@@ -1,4 +1,18 @@
-# 《政变》Coup
+# Midland Works · 线上桌游工坊
+
+一个跑在云服务器上的多游戏联机平台，React + Fastify + SQLite，单进程全栈。现收录两款桌游：
+
+## 《工业革命：伯明翰》Brass: Birmingham（2026-08 新增）
+
+2–4 人经济策略桌游的网页联机版：
+
+- **完整规则引擎** `packages/brass-domain`（纯函数、无 IO）：6 产业 45 块瓦片/人、22 个可建地点（含 2 农场酒厂）、39 条运河/铁路连线、5 商人位 9 板、煤/铁市场与收入轨、Build/Network/Develop/Sell/Loan/Scout/Pass 七种行动全量校验（煤最近优先、双轨啤酒、覆盖规则、商人啤酒奖励、时代切换与两段计分）。
+- **规则数据三源交叉验证**：官方规则书 PDF、ikegami/tts_brass（官方扫描 TTS 脚本）、npow/BrassBirmingham，逐表核对（详见 `.scratch/brass-birmingham/spec.md`，冲突裁决记录在案）。
+- **平行房间栈** `apps/server/src/brass/`：`/api/brass/rooms/*` 全套路由，复用 coup 的会话/CSRF 守卫、心跳离席状态机与 4 位房间码（跨游戏共享码池，`docs/adr/0009`）；独立 SQLite 表（`brass_rooms`/`brass_runs`），支持重启恢复、观战、增量轮询与超时代打（Pass）。
+- **独立视觉**：入口 `/brass`，工业时代黄铜/羊皮纸主题，SVG 版图 + 行动向导（自动推导合法目标与资源来源）、市场格价条、中文日志。门户首页 `/` 选择游戏。
+- **质量**：19 项规则单测 + 多种子随机完整对局模糊测试（2/3/4 人开局到终局，VP 分布接近真实对局）。
+
+## 《政变》Coup
 
 一个跑在云服务器上的《政变》（Coup）多人卡牌对战游戏：互联网联机房间 + 本机 Agent 单机对战双形态，React + Fastify + SQLite，单进程全栈。
 

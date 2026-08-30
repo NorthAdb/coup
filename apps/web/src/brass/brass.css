@@ -1107,3 +1107,35 @@
     order: 1;
   }
 }
+
+.brass-your-turn {
+  background: var(--b-rust);
+  color: #fff7e6;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 700;
+  animation: brass-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes brass-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+.brass-rules {
+  max-width: 640px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.brass-rules-body p {
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--b-ink-soft);
+  margin: 8px 0;
+}
+
+.brass-rules-body b {
+  color: var(--b-rust);
+}

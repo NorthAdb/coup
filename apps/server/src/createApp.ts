@@ -617,10 +617,17 @@ export async function createApp(options: CreateAppOptions) {
           run.roomCode !== room.code ||
           run.runStatus !== "in_progress"
         ) {
+          // 区分三种失败：缺 run / 房间不匹配 / run 已结束（常见于上次进程
+          // 未干净收尾的僵尸房，用户可放弃重建）。
+          const reason = !run
+            ? "match_not_active"
+            : run.roomCode !== room.code
+              ? "match_room_mismatch"
+              : "match_not_active";
           recovery.set(room.code, {
             code: room.code,
             status: "failed",
-            reason: !run ? "match_not_active" : "match_room_mismatch",
+            reason,
             room,
           });
           continue;

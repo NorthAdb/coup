@@ -347,7 +347,7 @@ describe("room invite API", () => {
     }
   });
 
-  it("rejects the eleventh concurrent room with a capacity error", async () => {
+  it("rejects the twenty-first concurrent room with a capacity error", async () => {
     const app = await createApp({
       webRoot: await tempWebRoot(),
       dbPath: await tempDbPath(),
@@ -362,7 +362,7 @@ describe("room invite API", () => {
 
     try {
       const headers = await authedHeaders(app, "http://192.168.1.42:8787");
-      for (let i = 0; i < 10; i += 1) {
+      for (let i = 0; i < 20; i += 1) {
         const created = await app.inject({ method: "POST", url: "/api/rooms", headers });
         assert.equal(created.statusCode, 200);
       }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { DomainCommand, DomainEvent, MatchState } from "@coup/domain";
 import {
   applyCommand,
@@ -148,8 +149,9 @@ export async function startMatch(
 ): Promise<ActiveMatch> {
   const { seats, persistence, roomCode } = options;
   const created = createMatch({
-    matchId: options.matchId ?? `match-${Date.now()}`,
-    seed: options.seed ?? `seed-${Date.now()}`,
+    // randomUUID：两房同毫秒开局不再撞主键（旧实现 Date.now() 有碰撞风险）。
+    matchId: options.matchId ?? `match-${randomUUID()}`,
+    seed: options.seed ?? `seed-${randomUUID()}`,
     seats: seats.map((seat) => ({
       seatId: seat.seatId,
       controller: seat.controller,

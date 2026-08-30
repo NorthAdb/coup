@@ -210,10 +210,10 @@ function cliDisplayName(cli: "opencode" | "claude" | "stub"): string {
 /** Readable seat-card label for public CLI / model projection. */
 export function seatModelLabel(seat: SeatModelLabelInput): string {
   if (seat.controller === "local_human") {
-    return "本地人类";
+    return "房主";
   }
   if (seat.controller === "remote_human") {
-    return "远程人类";
+    return "玩家";
   }
   const cli = seat.cli ?? "stub";
   const model = shortModelLabel(seat.modelId) ?? "占位";

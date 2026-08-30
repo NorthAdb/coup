@@ -1,3 +1,4 @@
+import { sfx } from "@coup/web-desk";
 import type { LobbySeat, RoomInvite } from "./lanRoom";
 import { LobbySeatList } from "./LobbySeatList";
 
@@ -11,6 +12,7 @@ type GuestRoomConfirmProps = {
   onClaim: (seatId: string) => void;
   onRename: () => void;
   onResumeMatch?: () => void;
+  onSpectate?: () => void;
   onBack: () => void;
 };
 
@@ -24,39 +26,77 @@ export function GuestRoomConfirm({
   onClaim,
   onRename,
   onResumeMatch,
+  onSpectate,
   onBack,
 }: GuestRoomConfirmProps) {
+  const occupiedCount = seats.filter(
+    (seat) => seat.kind === "local_human" || seat.kind === "remote_human",
+  ).length;
+
   return (
-    <section className="panel guest-console" aria-label="客人大厅">
-      <button type="button" className="ghost" disabled={busy} onClick={onBack}>
-        ← 返回
-      </button>
-      <div className="guest-console-grid">
-        <div className="guest-console-meta">
-          <p className="eyebrow">加入方 · 大厅</p>
-          <h2>房间 {room.code}</h2>
-          <p className="lede">
+    <section className="lobby-card" aria-label="客人大厅">
+      <div className="lobby-top">
+        <div className="lobby-title">
+          <p className="console-eyebrow">Guest · 加入方</p>
+          <h2>政变 · 房间 {room.code}</h2>
+        </div>
+        <span className="lobby-phase-chip">
+          {room.phase === "match"
+            ? "对局进行中"
+            : room.phase === "rematch"
+              ? "续局等待中"
+              : `${occupiedCount} 人已就座`}
+        </span>
+      </div>
+
+      <div className="lobby-grid">
+        <div className="invite-panel">
+          <p className="console-lede">
             {room.phase === "match"
-              ? "已确认房间存在。"
+              ? "这桌已经开局。没有你的空位时，可以先以观众身份观战。"
               : room.phase === "rematch"
-                ? "已确认房间存在，正处于续局等待。"
-                : "已确认房间存在。选择开放座位占座；开局由主机决定。"}
-          </p>
-          <p className="hint ok">
-            {room.phase === "match"
-              ? "对局进行中，座位已锁定。"
-              : room.phase === "rematch"
-                ? "等待确认加入新对局…"
-                : "等待主机开局…"}
+                ? "房主正在组织下一局，确认加入即可保留原座位。"
+                : "挑一个亮着的空位入座；开局由房主决定。"}
           </p>
           {room.phase === "match" && onResumeMatch ? (
-            <button type="button" disabled={busy} onClick={onResumeMatch}>
+            <button
+              type="button"
+              className="start-btn"
+              disabled={busy}
+              onClick={() => {
+                sfx.play("confirm");
+                onResumeMatch();
+              }}
+            >
               返回对局
             </button>
           ) : null}
+          {room.phase !== "lobby" && onSpectate ? (
+            <button
+              type="button"
+              className="ghost-btn"
+              disabled={busy}
+              onClick={() => {
+                sfx.play("click");
+                onSpectate();
+              }}
+            >
+              以观众身份观战
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="ghost-btn"
+            disabled={busy}
+            onClick={() => {
+              sfx.play("click");
+              onBack();
+            }}
+          >
+            ← 换个房间号
+          </button>
         </div>
-        <div className="guest-console-seats">
-          <h3 className="lobby-seats-heading">座位矩阵</h3>
+        <div className="lobby-seats-panel">
           <LobbySeatList
             seats={seats}
             mySeatId={mySeatId}

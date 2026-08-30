@@ -18,11 +18,39 @@ export type RoomInvite = {
   bindMode: string;
   lanOrigin: string | null;
   error?: string | null;
+  /** 回合限时（秒）；0 = 不限时。 */
+  turnTimeLimitSec?: number;
 };
 
-export function matchCurrentPath(code: string, decision = false): string {
+const PLAYER_NAME_KEY = "coup.playerName";
+
+export function loadPlayerName(): string {
+  try {
+    return globalThis.localStorage?.getItem(PLAYER_NAME_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function savePlayerName(name: string): void {
+  try {
+    globalThis.localStorage?.setItem(PLAYER_NAME_KEY, name);
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+export function matchCurrentPath(
+  code: string,
+  decision = false,
+  query?: { since?: number; spectate?: boolean },
+): string {
   if (!code) throw new Error("room code is required");
-  return `/api/rooms/${code}/matches/current${decision ? "/decision" : ""}`;
+  const params = new URLSearchParams();
+  if (query?.since != null) params.set("since", String(query.since));
+  if (query?.spectate) params.set("spectate", "1");
+  const qs = params.toString();
+  return `/api/rooms/${code}/matches/current${decision ? "/decision" : ""}${qs ? `?${qs}` : ""}`;
 }
 
 let csrfToken: string | null = null;
@@ -377,12 +405,12 @@ export function lobbyStartBlockHint(
   }
   const open = seats.filter((s) => s.kind === "open");
   if (open.length > 0) {
-    return "仍有「开放占座」空槽，请占满或关闭。";
+    return `还有 ${open.length} 个空位：等朋友加入，或点座位上的「关闭」腾出局。`;
   }
   const effective = seats.filter(
     (s) => s.kind === "local_human" || s.kind === "remote_human",
   );
-  if (effective.length < 2) return "至少还需 1 名真人入座才能开局。";
+  if (effective.length < 2) return "至少还需 1 名玩家入座才能开局。";
   if (effective.length > 6) return "有效座位至多 6 人。";
   return null;
 }
@@ -394,14 +422,33 @@ export function canStartLobby(seats: LobbySeat[], phase?: string): boolean {
 export function seatKindLabel(kind: LobbySeat["kind"]): string {
   switch (kind) {
     case "local_human":
-      return "本地人类";
+      return "房主";
     case "remote_human":
-      return "远程人类";
+      return "已入座";
     case "open":
-      return "开放占座";
+      return "空位 · 可加入";
     case "closed":
-      return "关闭";
+      return "已关闭";
   }
+}
+
+/** 房间设置更新（仅房主，大厅/续局阶段）。 */
+export async function updateRoomSettings(
+  code: string,
+  settings: { turnTimeLimitSec: number },
+): Promise<{ turnTimeLimitSec: number }> {
+  await ensureSession();
+  const response = await authedFetch(`/api/rooms/${code}/settings`, {
+    method: "PATCH",
+    body: JSON.stringify(settings),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    throw new Error(body?.error ?? "无法保存房间设置");
+  }
+  return (await response.json()) as { turnTimeLimitSec: number };
 }
 
 export type SeatAbsenceView = {

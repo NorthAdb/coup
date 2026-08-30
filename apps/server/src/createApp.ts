@@ -1,4 +1,5 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { homedir, networkInterfaces } from "node:os";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
@@ -12,6 +13,7 @@ import {
   type MatchPersistence,
 } from "./matchRuntime.js";
 import { openMatchStore, type MatchRunRecord, type MatchStore } from "./matchStore.js";
+import { planAutoDecision, type AutoDecisionKind } from "./autoDecision.js";
 import {
   listLanIpv4Candidates,
   pickDefaultLanIpv4,
@@ -23,6 +25,7 @@ import {
 } from "./lobbyStart.js";
 import {
   createRoomRegistry,
+  normalizeTurnTimeLimit,
   publicSeats,
   roomInvitePayload,
   type RoomRecord,
@@ -31,6 +34,7 @@ import {
 import { openRoomStore, type RoomStore } from "./roomStore.js";
 import {
   IDLE_ROOM_RECLAIM_MS,
+  IDLE_ROOM_SWEEP_MS,
   isRoomEmpty,
   MAX_ROOMS,
 } from "./roomLifecycle.js";
@@ -343,6 +347,8 @@ export async function createApp(options: CreateAppOptions) {
     if (activeMatchId && store.getRun(activeMatchId)?.runStatus === "in_progress") {
       store.technicalAbort(activeMatchId, abortReason);
     }
+    clearTurnTimer(code);
+    lastAutoDecisions.delete(code);
     rooms.dissolve(code);
     roomStore.clearRoom(code);
     matchesByRoom.delete(code);
@@ -410,6 +416,140 @@ export async function createApp(options: CreateAppOptions) {
    */
   function matchForRoom(code: string) {
     return matchesByRoom.get(code) ?? null;
+  }
+
+  /*
+   * 回合计时器（ADR-0008）：权威侧为「当前欠决策的座位」武装 setTimeout，
+   * 到期未决策则由服务器以其名义提交自动决策。缺席暂停时顺延重排。
+   */
+  type TurnTimerState = {
+    timeoutId: ReturnType<typeof setTimeout> | null;
+    seatId: string | null;
+    deadlineAt: number | null;
+    durationMs: number;
+    armedForVersion: number;
+  };
+
+  const turnTimers = new Map<string, TurnTimerState>();
+  const lastAutoDecisions = new Map<
+    string,
+    { seatId: string; at: number; kind: AutoDecisionKind; matchId: string }
+  >();
+
+  function turnTimeLimitMs(code: string): number {
+    const room = rooms.getByCode(code);
+    const limitSec = normalizeTurnTimeLimit(room?.turnTimeLimitSec);
+    return limitSec > 0 ? limitSec * 1000 : 0;
+  }
+
+  function clearTurnTimer(code: string) {
+    const timer = turnTimers.get(code);
+    if (timer?.timeoutId) {
+      clearTimeout(timer.timeoutId);
+    }
+    turnTimers.delete(code);
+  }
+
+  function turnDeadlinePayload(code: string) {
+    const timer = turnTimers.get(code);
+    if (
+      !timer ||
+      timer.seatId == null ||
+      timer.deadlineAt == null ||
+      timer.durationMs <= 0
+    ) {
+      return null;
+    }
+    return {
+      seatId: timer.seatId,
+      deadlineAt: timer.deadlineAt,
+      durationMs: timer.durationMs,
+    };
+  }
+
+  function lastAutoDecisionPayload(code: string) {
+    const record = lastAutoDecisions.get(code);
+    const match = matchesByRoom.get(code);
+    if (!record || !match || record.matchId !== match.state.matchId) {
+      return null;
+    }
+    return { seatId: record.seatId, at: record.at, kind: record.kind };
+  }
+
+  function armTurnTimer(code: string) {
+    clearTurnTimer(code);
+    const match = matchesByRoom.get(code);
+    if (!match || match.state.status !== "in_progress") return;
+    const durationMs = turnTimeLimitMs(code);
+    if (durationMs <= 0) return;
+    const deciding = activeDecidingSeatId(match.state);
+    if (!deciding) return;
+    // 缺席暂停中的座位不倒计时；等回席或处置后再武装。
+    if (presence.blocksAdvancement(code, deciding, true)) return;
+
+    const deadlineAt = now() + durationMs;
+    const armedForVersion = match.state.stateVersion;
+    const timeoutId = setTimeout(() => {
+      void fireTurnTimeout(code, armedForVersion);
+    }, durationMs + 40);
+    // 不阻止进程退出
+    (timeoutId as { unref?: () => void }).unref?.();
+    turnTimers.set(code, {
+      timeoutId,
+      seatId: deciding,
+      deadlineAt,
+      durationMs,
+      armedForVersion,
+    });
+  }
+
+  async function fireTurnTimeout(code: string, armedForVersion: number) {
+    const match = matchesByRoom.get(code);
+    if (!match || match.state.stateVersion !== armedForVersion) {
+      turnTimers.delete(code);
+      return;
+    }
+    const timer = turnTimers.get(code);
+    const seatId = timer?.seatId ?? activeDecidingSeatId(match.state);
+    clearTurnTimer(code);
+    if (!match || match.state.status !== "in_progress" || !seatId) return;
+
+    // 缺席暂停：顺延一轮再武装（对局此刻不应推进）。
+    if (presence.blocksAdvancement(code, seatId, true)) {
+      armTurnTimer(code);
+      return;
+    }
+
+    const plan = planAutoDecision(match.state, seatId);
+    if (!plan) {
+      armTurnTimer(code);
+      return;
+    }
+
+    try {
+      const result = await submitHumanDecision(
+        match,
+        {
+          protocolVersion: 1,
+          requestId: `auto-${match.state.stateVersion}-${seatId}`,
+          stateVersion: match.state.stateVersion,
+          decision: plan.decision,
+        },
+        { persistence, actingSeatId: seatId },
+      );
+      if (result.ok) {
+        matchesByRoom.set(code, result.match);
+        lastAutoDecisions.set(code, {
+          seatId,
+          at: now(),
+          kind: plan.kind,
+          matchId: result.match.state.matchId,
+        });
+      }
+    } catch {
+      // 持久化失败等：交由下次决策路径的 technicalAbort 语义处理。
+    }
+    armTurnTimer(code);
   }
 
   function resolveMatchSeatId(
@@ -496,6 +636,8 @@ export async function createApp(options: CreateAppOptions) {
           room,
         });
         trackRemoteSeatsAfterAuthorityRestore(room.code, match);
+        // 重启后按满时长重排回合计时（ADR-0008）。
+        armTurnTimer(room.code);
       } else {
         if (room.phase === "rematch" && room.matchId) {
           const run = store.getRun(room.matchId);
@@ -588,7 +730,16 @@ export async function createApp(options: CreateAppOptions) {
   app.addHook("onClose", async () => {
     store.close();
     roomStore.close();
+    for (const code of [...turnTimers.keys()]) {
+      clearTurnTimer(code);
+    }
   });
+
+  // 空房兜底清扫：不再依赖「下次建房时」才触发回收。
+  const idleSweepTimer = setInterval(() => {
+    reclaimIdleRooms();
+  }, IDLE_ROOM_SWEEP_MS);
+  (idleSweepTimer as { unref?: () => void }).unref?.();
 
   app.addHook("onResponse", async (request, reply) => {
     if (reply.statusCode < 200 || reply.statusCode >= 300) return;
@@ -888,6 +1039,40 @@ export async function createApp(options: CreateAppOptions) {
     });
   });
 
+  // 房间设置：仅房主、仅大厅/续局阶段（ADR-0008）。
+  app.patch<{
+    Params: { code: string };
+    Body: { turnTimeLimitSec?: number };
+  }>("/api/rooms/:code/settings", async (request, reply) => {
+    const host = requireHostSeat(request, reply, request.params.code);
+    if (!host) return;
+    const raw = request.body?.turnTimeLimitSec;
+    if (typeof raw !== "number" || !Number.isFinite(raw)) {
+      return reply.code(400).send({ error: "invalid_setting" });
+    }
+    const normalized = normalizeTurnTimeLimit(raw);
+    if (normalized !== raw) {
+      return reply.code(400).send({ error: "invalid_setting" });
+    }
+    const result = rooms.updateSettings(host.room.code, {
+      turnTimeLimitSec: normalized,
+    });
+    if (!result.ok) {
+      if (result.reason === "room_not_found") {
+        return reply.code(404).send({ error: "room_not_found" });
+      }
+      if (result.reason === "room_locked") {
+        return reply.code(409).send({ error: "room_locked" });
+      }
+      return reply.code(400).send({ error: "invalid_setting" });
+    }
+    persistActiveRoom();
+    return reply.send({
+      turnTimeLimitSec: result.room.turnTimeLimitSec,
+      seats: publicSeats(result.room),
+    });
+  });
+
   app.post<{ Params: { code: string } }>(
     "/api/rooms/:code/rematch",
     async (request, reply) => {
@@ -1041,7 +1226,7 @@ export async function createApp(options: CreateAppOptions) {
 
       const setupSeats = lobbySeatsToMatchSetup(room);
 
-      const matchId = `match-${Date.now()}`;
+      const matchId = `match-${randomUUID()}`;
       let activeMatch: ActiveMatch;
       try {
         activeMatch = await startMatch({
@@ -1070,12 +1255,16 @@ export async function createApp(options: CreateAppOptions) {
       matchesByRoom.set(room.code, activeMatch);
       persistActiveRoom();
       trackRemoteSeatsForMatch(room.code, activeMatch);
+      lastAutoDecisions.delete(room.code);
+      armTurnTimer(room.code);
 
       return reply.send({
         ...humanFacingPayload(activeMatch, undefined, "1"),
         phase: begun.room.phase,
         matchId: activeMatch.state.matchId,
         absences: presence.projectAll(room.code, now()),
+        turnDeadline: turnDeadlinePayload(room.code),
+        autoDecision: null,
       });
     },
   );
@@ -1242,6 +1431,8 @@ export async function createApp(options: CreateAppOptions) {
       rooms.revokeSeatCredential(room.code, seatId);
       persistActiveRoom();
       presence.clearRoom(room.code);
+      clearTurnTimer(room.code);
+      lastAutoDecisions.delete(room.code);
       matchesByRoom.delete(room.code);
       return reply.send({
         action: "technical_abort",
@@ -1269,10 +1460,13 @@ export async function createApp(options: CreateAppOptions) {
       rooms.revokeSeatCredential(room.code, seatId);
       persistActiveRoom();
       presence.clearSeat(room.code, seatId);
+      armTurnTimer(room.code);
       return reply.send({
         action: "force_eliminate",
         ...humanFacingPayload(activeMatch, undefined, "1"),
         absences: presence.projectAll(room.code, now()),
+        turnDeadline: turnDeadlinePayload(room.code),
+        autoDecision: lastAutoDecisionPayload(room.code),
       });
     }
 
@@ -1328,7 +1522,10 @@ export async function createApp(options: CreateAppOptions) {
     },
   );
 
-  app.get<{ Params: { code: string } }>(
+  app.get<{
+    Params: { code: string };
+    Querystring: { since?: string; spectate?: string };
+  }>(
     "/api/rooms/:code/matches/current",
     async (request, reply) => {
     const room = rooms.getByCode(request.params.code);
@@ -1338,8 +1535,11 @@ export async function createApp(options: CreateAppOptions) {
       return reply.code(404).send({ error: "no_active_match" });
     }
 
-    const seatId = resolveMatchSeatId(request, room.code, activeMatch);
-    if (!seatId) {
+    const wantsSpectate = request.query.spectate === "1";
+    const seatId = wantsSpectate
+      ? null
+      : resolveMatchSeatId(request, room.code, activeMatch);
+    if (!seatId && !wantsSpectate) {
       return reply.code(403).send({ error: "seat_credential_required" });
     }
 
@@ -1348,12 +1548,50 @@ export async function createApp(options: CreateAppOptions) {
     const blockedByAbsence =
       deciding !== null &&
       presence.blocksAdvancement(room.code, deciding, true);
-
-    return reply.send({
-      ...humanFacingPayload(activeMatch, undefined, seatId),
-      matchId: activeMatch.state.matchId,
+    const sharedTail = {
       absences: presence.projectAll(room.code, now()),
       pausedForAbsenceSeatId: blockedByAbsence ? deciding : null,
+      turnDeadline: turnDeadlinePayload(room.code),
+      autoDecision: lastAutoDecisionPayload(room.code),
+    };
+
+    // 增量轮询（ADR-0008）：状态未变时只回轻量载荷。
+    const sinceRaw = request.query.since;
+    if (sinceRaw != null && sinceRaw !== "") {
+      const since = Number(sinceRaw);
+      if (
+        Number.isInteger(since) &&
+        since === activeMatch.state.stateVersion
+      ) {
+        return reply.send({ unchanged: true, stateVersion: since, ...sharedTail });
+      }
+    }
+
+    if (wantsSpectate) {
+      // 观战：剥离一切私有态与合法决策的只读投影。
+      const firstSeatId = activeMatch.state.seats[0]?.seatId ?? "1";
+      const projection = toSeatView(
+        activeMatch,
+        firstSeatId,
+        `spec-${activeMatch.state.stateVersion}`,
+      );
+      return reply.send({
+        view: {
+          ...projection,
+          seatId: "spectator",
+          privateState: { hiddenCharacters: [], exchangeHand: null },
+          legalDecisions: [],
+          spectator: true,
+        },
+        matchId: activeMatch.state.matchId,
+        ...sharedTail,
+      });
+    }
+
+    return reply.send({
+      ...humanFacingPayload(activeMatch, undefined, seatId ?? undefined),
+      matchId: activeMatch.state.matchId,
+      ...sharedTail,
     });
     },
   );
@@ -1400,6 +1638,7 @@ export async function createApp(options: CreateAppOptions) {
       if (run && run.runStatus === "in_progress") {
         store.technicalAbort(matchId, abortReasonFrom(error));
       }
+      clearTurnTimer(room.code);
       matchesByRoom.delete(room.code);
       return reply.code(502).send({
         error: abortReasonFrom(error),
@@ -1420,9 +1659,12 @@ export async function createApp(options: CreateAppOptions) {
       // 让客人刷新后仍能认回原座位。
       presence.clearRoom(room.code);
     }
+    armTurnTimer(room.code);
     return reply.send({
       ...humanFacingPayload(activeMatch, body.requestId, seatId),
       absences: presence.projectAll(room.code, now()),
+      turnDeadline: turnDeadlinePayload(room.code),
+      autoDecision: lastAutoDecisionPayload(room.code),
     });
   });
 

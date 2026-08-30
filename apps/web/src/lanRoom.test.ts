@@ -26,7 +26,7 @@ describe("lobbyStartBlockHint", () => {
         { seatId: "3", kind: "open" },
       ]),
     );
-    assert.equal(hint, "仍有「开放占座」空槽，请占满或关闭。");
+    assert.equal(hint, "还有 1 个空位：等朋友加入，或点座位上的「关闭」腾出局。");
   });
 
   it("blocks start when only the host is seated", () => {
@@ -36,7 +36,7 @@ describe("lobbyStartBlockHint", () => {
         { seatId: "2", kind: "closed" },
       ]),
     );
-    assert.equal(hint, "至少还需 1 名真人入座才能开局。");
+    assert.equal(hint, "至少还需 1 名玩家入座才能开局。");
   });
 
   it("allows start with two humans and no open seats", () => {
@@ -88,10 +88,10 @@ describe("lobbyStartBlockHint", () => {
 
 describe("seatKindLabel", () => {
   it("labels every lobby seat kind", () => {
-    assert.equal(seatKindLabel("local_human"), "本地人类");
-    assert.equal(seatKindLabel("remote_human"), "远程人类");
-    assert.equal(seatKindLabel("open"), "开放占座");
-    assert.equal(seatKindLabel("closed"), "关闭");
+    assert.equal(seatKindLabel("local_human"), "房主");
+    assert.equal(seatKindLabel("remote_human"), "已入座");
+    assert.equal(seatKindLabel("open"), "空位 · 可加入");
+    assert.equal(seatKindLabel("closed"), "已关闭");
   });
 });
 
@@ -101,6 +101,21 @@ describe("matchCurrentPath", () => {
     assert.equal(
       matchCurrentPath("1234", true),
       "/api/rooms/1234/matches/current/decision",
+    );
+  });
+
+  it("appends since / spectate query params", () => {
+    assert.equal(
+      matchCurrentPath("1234", false, { since: 7 }),
+      "/api/rooms/1234/matches/current?since=7",
+    );
+    assert.equal(
+      matchCurrentPath("1234", false, { spectate: true }),
+      "/api/rooms/1234/matches/current?spectate=1",
+    );
+    assert.equal(
+      matchCurrentPath("1234", false, { since: 3, spectate: true }),
+      "/api/rooms/1234/matches/current?since=3&spectate=1",
     );
   });
 

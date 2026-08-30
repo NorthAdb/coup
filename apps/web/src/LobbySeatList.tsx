@@ -16,6 +16,7 @@ type LobbySeatListProps = {
   onRename?: () => void;
 };
 
+/** 大厅座位圆盘：每个座位一张位次卡，状态一目了然。 */
 export function LobbySeatList({
   seats,
   mySeatId,
@@ -28,91 +29,102 @@ export function LobbySeatList({
 }: LobbySeatListProps) {
   return (
     <div className="lobby-seats" aria-label="座位">
-      <ul className="lobby-seat-list">
+      <ul className="seat-grid">
         {seats.map((seat) => {
           const mine = mySeatId === seat.seatId;
           const configurable =
             Boolean(onConfigure) &&
             seat.kind !== "local_human" &&
             seat.seatId !== "1";
-          const configValue =
-            seat.kind === "closed"
-              ? "closed"
-              : seat.kind === "remote_human"
-                ? "remote_human"
-                : "open";
+          const claimable = Boolean(onClaim) && seat.kind === "open" && !mySeatId;
+          const occupied = seat.kind === "local_human" || seat.kind === "remote_human";
+          const initial = seat.displayName?.slice(0, 1) ?? String(seat.seatId);
           return (
             <li
               key={seat.seatId}
-              className={`lobby-seat${mine ? " mine" : ""}${
-                configurable ? " configurable" : ""
-              }`}
+              className={[
+                "lobby-seat",
+                mine ? "mine" : "",
+                occupied ? "occupied" : "",
+                seat.kind === "closed" ? "closed" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
             >
-              <span className="lobby-seat-id">座 {seat.seatId}</span>
-              <span className="lobby-seat-kind">{seatKindLabel(seat.kind)}</span>
+              <span className="seat-orb" aria-hidden="true">
+                {occupied || mine ? initial : "—"}
+              </span>
+              <span className="lobby-seat-name">
+                {seat.displayName ?? `座位 ${seat.seatId}`}
+                {mine ? "（你）" : ""}
+              </span>
+              <span className="lobby-seat-kind">
+                {seatKindLabel(seat.kind)}
+                {mine ? " · 你" : ""}
+              </span>
               {seat.rematchStatus ? (
                 <span className="lobby-seat-rematch">
                   {seat.rematchStatus === "awaiting"
-                    ? "待确认"
+                    ? "待确认加入"
                     : seat.rematchStatus === "confirmed"
                       ? "已确认加入"
                       : "已离开"}
                 </span>
               ) : null}
-              <span className="lobby-seat-name">
-                {seat.displayName ?? "—"}
-                {mine ? "（你）" : ""}
-              </span>
-              {onClaim && seat.kind === "open" ? (
-                <button
-                  type="button"
-                  disabled={busy || Boolean(mySeatId)}
-                  onClick={() => onClaim(seat.seatId)}
-                >
-                  占座
-                </button>
-              ) : null}
-              {configurable && onConfigure ? (
-                <div className="lobby-seat-config">
-                  <select
-                    aria-label={`座位 ${seat.seatId} 类型`}
+              <span className="seat-actions">
+                {claimable ? (
+                  <button
+                    type="button"
+                    className="chip-btn"
                     disabled={busy}
-                    value={configValue}
-                    onChange={(event) => {
-                      const kind = event.target.value;
-                      if (kind === "open") {
-                        onConfigure(seat.seatId, { kind: "open" });
-                      } else if (kind === "closed") {
-                        onConfigure(seat.seatId, { kind: "closed" });
-                      }
-                    }}
+                    onClick={() => onClaim?.(seat.seatId)}
                   >
-                    {seat.kind === "remote_human" ? (
-                      <option value="remote_human" disabled>
-                        已占（远程）
-                      </option>
-                    ) : null}
-                    <option value="open">开放占座</option>
-                    <option value="closed">关闭</option>
-                  </select>
-                </div>
-              ) : null}
+                    入座
+                  </button>
+                ) : null}
+                {configurable && onConfigure ? (
+                  seat.kind === "open" ? (
+                    <button
+                      type="button"
+                      className="mini-toggle close"
+                      disabled={busy}
+                      onClick={() => onConfigure(seat.seatId, { kind: "closed" })}
+                    >
+                      关闭
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="mini-toggle"
+                      disabled={busy}
+                      onClick={() => onConfigure(seat.seatId, { kind: "open" })}
+                    >
+                      重新开放
+                    </button>
+                  )
+                ) : null}
+              </span>
             </li>
           );
         })}
       </ul>
       {mySeatId ? (
-        <label className="field">
-          显示名
-          <span className="lobby-rename-row">
+        <label className="field" style={{ marginTop: "0.9rem", maxWidth: "26rem" }}>
+          你的名字
+          <span className="rename-row">
             <input
               value={displayNameDraft}
               disabled={busy}
-              maxLength={24}
+              maxLength={12}
               onChange={(event) => onDisplayNameDraftChange(event.target.value)}
             />
             {onRename ? (
-              <button type="button" disabled={busy} onClick={onRename}>
+              <button
+                type="button"
+                className="mini-toggle"
+                disabled={busy}
+                onClick={onRename}
+              >
                 改名
               </button>
             ) : null}

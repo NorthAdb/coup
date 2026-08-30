@@ -10,7 +10,7 @@ describe("seatModelLabel", () => {
         cli: null,
         modelId: null,
       }),
-      "本地人类",
+      "房主",
     );
   });
 
@@ -21,7 +21,7 @@ describe("seatModelLabel", () => {
         cli: null,
         modelId: null,
       }),
-      "远程人类",
+      "玩家",
     );
   });
 

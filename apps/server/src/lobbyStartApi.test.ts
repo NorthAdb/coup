@@ -390,11 +390,8 @@ describe("multi-human match from lobby", () => {
       };
       assert.equal(guestView.view.seatId, "2");
       assert.ok(guestView.view.privateState.hiddenCharacters.length >= 1);
-      // Private hands must differ across seats.
-      assert.notDeepEqual(
-        guestView.view.privateState.hiddenCharacters,
-        hostStart.view.privateState.hiddenCharacters,
-      );
+      // 双方暗牌是各自投影：角色组合可能碰巧相同（每种角色有 3 张），
+      // 但彼此都只看得到自己的手牌——座位归属由上面的 seatId 断言保证。
 
       // Seat 1 acts first in a fresh two-human match.
       assert.ok(hostStart.view.legalDecisions.length > 0);

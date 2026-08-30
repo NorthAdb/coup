@@ -1,7 +1,13 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { LobbySeat, LobbySeatKind, RoomPhase, RoomRecord } from "./roomRegistry.js";
+import {
+  normalizeTurnTimeLimit,
+  type LobbySeat,
+  type LobbySeatKind,
+  type RoomPhase,
+  type RoomRecord,
+} from "./roomRegistry.js";
 
 export type RoomLoadFailure = {
   roomCode: string | null;
@@ -62,6 +68,8 @@ function parseRoom(raw: unknown): RoomRecord | null {
     createdAt: room.createdAt,
     seats: seats as LobbySeat[],
     matchId: room.matchId,
+    // 旧版持久化载荷没有该字段：回填默认。
+    turnTimeLimitSec: normalizeTurnTimeLimit(room.turnTimeLimitSec),
   };
 }
 

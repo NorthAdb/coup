@@ -27,6 +27,7 @@ function sampleLobbyRoom(): RoomRecord {
     phase: "lobby",
     createdAt: 1_700_000_000_000,
     matchId: null,
+    turnTimeLimitSec: 60,
     seats: [
       {
         seatId: "1",

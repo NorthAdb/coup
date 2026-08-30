@@ -9,6 +9,13 @@ import {
   type UntargetedActionType,
 } from "./actionDraft";
 import {
+  CardBack,
+  CharacterCardFace,
+  CharacterCrest,
+  CharacterMiniFace,
+  ROLE_VISUAL,
+} from "./characterArt";
+import {
   calloutHoldMs,
   cssSpeedFactor,
   drawHoldMs,
@@ -30,7 +37,6 @@ import {
   eventParts,
   phaseHint,
   rationaleSourceLabel,
-  ROLE_CARD,
   seatModelLabel,
   type DecisionRationaleView,
   type SeatCallout,
@@ -45,6 +51,7 @@ import {
 } from "./resultBeat";
 import { RulesPanel } from "./RulesPanel";
 import { seatTintClass, seatTintClassForId } from "./seatColor";
+import { sfx, type SfxName } from "./sfx";
 import { TextPartsView } from "./textParts";
 
 type AgentPhase = "idle" | "thinking" | "validating" | "retrying" | "failed";
@@ -52,6 +59,30 @@ type AgentPhase = "idle" | "thinking" | "validating" | "retrying" | "failed";
 type DeskOverlay =
   | { kind: "reveal"; character: CharacterId; caption: string }
   | { kind: "draw"; caption: string };
+
+type Toast = { id: number; text: string; tone: "info" | "warn" };
+
+/** 权威侧回合计时（ADR-0008）；durationMs 为本期限总时长。 */
+export type TurnDeadline = {
+  seatId: string;
+  deadlineAt: number;
+  durationMs: number;
+};
+
+/** 服务器超时代为提交的自动决策提示。 */
+export type AutoDecisionNotice = {
+  seatId: string;
+  at: number;
+  kind: "pass" | "income" | "concede" | "reveal" | "exchange";
+};
+
+const AUTO_KIND_LABEL: Record<AutoDecisionNotice["kind"], string> = {
+  pass: "自动放弃",
+  income: "自动收入",
+  concede: "自动放弃证明",
+  reveal: "自动揭示影响力",
+  exchange: "自动完成交换",
+};
 
 export type MatchDeskProps = {
   view: SeatView;
@@ -66,6 +97,14 @@ export type MatchDeskProps = {
   seatStatusFor?: (seatId: string) => string | null;
   /** 联机版传入的离席抽屉等旁路 UI；本机版留空。 */
   absenceSlot?: ReactNode;
+  /** 房间号（联机版传入，顶栏展示）。 */
+  roomCode?: string | null;
+  /** 权威回合计时；null 表示未启用或当前无人欠决策。 */
+  turnDeadline?: TurnDeadline | null;
+  /** 服务器超时自动决策（用于「超时」提示）。 */
+  autoDecision?: AutoDecisionNotice | null;
+  /** 观战模式：只读桌面，不渲染行动与响应控件。 */
+  spectator?: boolean;
 };
 
 function agentPhaseLabel(phase: AgentPhase): string {
@@ -125,6 +164,40 @@ function seatName(
   return seats.find((seat) => seat.seatId === seatId)?.displayName ?? seatId;
 }
 
+/** 事件音效映射：表现层把领域事件翻译成可听的节拍。 */
+function sfxForEvent(event: SeatView["projectedHistory"][number]): SfxName | null {
+  switch (event.type) {
+    case "action_declared":
+      return event.actionType === "coup" || event.actionType === "assassinate"
+        ? "challenge"
+        : "deal";
+    case "action_resolved":
+      return event.coinsGained != null || event.coinsStolen != null
+        ? "coin"
+        : "flip";
+    case "block_declared":
+      return "block";
+    case "challenge_declared":
+      return "challenge";
+    case "response_passed":
+      return "click";
+    case "claim_proven":
+      return "flip";
+    case "claim_conceded":
+      return "flip";
+    case "influence_revealed":
+      return "reveal";
+    case "seat_eliminated":
+      return "eliminate";
+    case "host_absence_elimination":
+      return "eliminate";
+    case "match_finished":
+      return "victory";
+    default:
+      return null;
+  }
+}
+
 function stageContent(view: SeatView): {
   eyebrow: string;
   title: string;
@@ -148,14 +221,17 @@ function stageContent(view: SeatView): {
     );
     const winnerId =
       finished?.type === "match_finished" ? finished.winnerSeatId : null;
+    const mine = winnerId === view.seatId;
     const titleParts: TextPart[] = winnerId
-      ? [seat(winnerId), text(" 获胜")]
-      : [text("有人 获胜")];
+      ? [seat(winnerId), text(mine ? " 加冕称帝" : " 执掌宫廷")]
+      : [text("尘埃落定")];
     return {
-      eyebrow: "对局结束",
+      eyebrow: mine ? "胜利" : "对局结束",
       title: titleParts.map((part) => part.text).join(""),
       titleParts,
-      text: "本局已结束。可返回开局页查看事件列表或开新局。",
+      text: mine
+        ? "你在宫廷的博弈中笑到了最后。"
+        : "本局已结束。房主可开启续局，或返回房间。",
       claim: null,
     };
   }
@@ -164,14 +240,14 @@ function stageContent(view: SeatView): {
     const yours = publicState.currentSeatId === view.seatId;
     const titleParts: TextPart[] = yours
       ? [text("轮到你行动")]
-      : [text("轮到 "), seat(publicState.currentSeatId)];
+      : [seat(publicState.currentSeatId), text(" 的回合")];
     return {
       eyebrow: "当前回合",
       title: titleParts.map((part) => part.text).join(""),
       titleParts,
       text: yours
-        ? "从底部合法行动栏选择一项；需要目标时先点行动再点高亮座位，经确认条提交。"
-        : "对手正在决策，舞台保持等待。",
+        ? "从底部选择一项行动；需要目标时先点行动，再点桌面上的高亮座位。"
+        : "静观其变，把握质疑与阻挡的时机。",
       claim: null,
     };
   }
@@ -241,6 +317,87 @@ function waitMs(ms: number): Promise<void> {
   });
 }
 
+/** SVG 倒计时环：谁欠决策一目了然。 */
+function TurnTimerRing({
+  deadline,
+  mySeatId,
+  busy,
+}: {
+  deadline: TurnDeadline;
+  mySeatId: string;
+  busy: boolean;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  const lastTickRef = useRef(-1);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 200);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const remainingMs = Math.max(0, deadline.deadlineAt - now);
+  const remainingSec = Math.ceil(remainingMs / 1000);
+  const fraction = Math.max(
+    0,
+    Math.min(1, remainingMs / Math.max(1, deadline.durationMs)),
+  );
+  const mine = deadline.seatId === mySeatId;
+  const urgent = mine && remainingSec <= 10;
+  const dash = 2 * Math.PI * 20;
+
+  useEffect(() => {
+    if (!mine || busy) return;
+    if (remainingSec <= 5 && remainingSec > 0 && lastTickRef.current !== remainingSec) {
+      lastTickRef.current = remainingSec;
+      sfx.play("tick");
+    }
+  }, [mine, busy, remainingSec]);
+
+  return (
+    <div
+      className={[
+        "turn-timer",
+        mine ? "mine" : "theirs",
+        urgent ? "urgent" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      role="timer"
+      aria-label={mine ? `你的剩余时间 ${remainingSec} 秒` : `剩余时间 ${remainingSec} 秒`}
+    >
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <circle cx="24" cy="24" r="20" className="turn-timer-track" />
+        <circle
+          cx="24"
+          cy="24"
+          r="20"
+          className="turn-timer-arc"
+          strokeDasharray={`${dash * fraction} ${dash}`}
+        />
+      </svg>
+      <span className="turn-timer-num">{remainingSec}</span>
+      <span className="turn-timer-who">{mine ? "你的时间" : "对方时间"}</span>
+    </div>
+  );
+}
+
+/** 座位头像：座位色圆徽 + 显示名首字。 */
+function SeatAvatar({
+  name,
+  tintClass,
+  eliminated,
+}: {
+  name: string;
+  tintClass: string;
+  eliminated: boolean;
+}) {
+  return (
+    <span className={`seat-avatar ${tintClass}${eliminated ? " dead" : ""}`} aria-hidden="true">
+      {name.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
 function draftActionSummaryNodes(
   draft: ActionDraft,
   seats: SeatView["publicState"]["seats"],
@@ -264,6 +421,154 @@ function draftActionSummaryNodes(
   );
 }
 
+/** 对手座位卡：头像、钱币、影响力（暗牌背/明牌纹章）、状态与目标选择。 */
+function OpponentSeat({
+  seat,
+  seatIndex,
+  view,
+  spectator,
+  busy,
+  replaying,
+  pendingTarget,
+  activeTargetIds,
+  callout,
+  rationale,
+  turnDeadline,
+  seatStatusFor,
+  onChooseTarget,
+}: {
+  seat: SeatView["publicState"]["seats"][number];
+  seatIndex: number;
+  view: SeatView;
+  spectator: boolean;
+  busy: boolean;
+  replaying: boolean;
+  pendingTarget: TargetedActionType | null;
+  activeTargetIds: string[];
+  callout: SeatCallout | null;
+  rationale: DecisionRationaleView | undefined;
+  turnDeadline: TurnDeadline | null;
+  seatStatusFor: MatchDeskProps["seatStatusFor"];
+  onChooseTarget: (seatId: string) => void;
+}) {
+  const isCurrent = seat.seatId === view.publicState.currentSeatId;
+  const isActive = seat.seatId === view.publicState.activeSeatId;
+  const targetable =
+    !spectator &&
+    pendingTarget != null &&
+    activeTargetIds.includes(seat.seatId);
+  const hiddenCount = Math.max(
+    0,
+    seat.influenceCount - seat.revealedCharacters.length,
+  );
+  const deadline = turnDeadline;
+  const [timerFraction, setTimerFraction] = useState(1);
+
+  useEffect(() => {
+    if (!deadline) return;
+    const update = () =>
+      setTimerFraction(
+        Math.max(
+          0,
+          Math.min(
+            1,
+            (deadline.deadlineAt - Date.now()) /
+              Math.max(1, deadline.durationMs),
+          ),
+        ),
+      );
+    update();
+    const id = window.setInterval(update, 300);
+    return () => window.clearInterval(id);
+  }, [deadline]);
+
+  return (
+    <article
+      className={[
+        "seat",
+        seatTintClass(seatIndex),
+        isCurrent ? "current" : "",
+        isActive ? "active" : "",
+        targetable ? "targetable" : "",
+        seat.eliminated ? "eliminated" : "",
+        rationale ? "has-rationale" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      onClick={
+        targetable && !busy && !replaying
+          ? () => onChooseTarget(seat.seatId)
+          : undefined
+      }
+    >
+      {deadline && !seat.eliminated ? (
+        <div className="seat-timer" aria-hidden="true">
+          <span className="seat-timer-bar" style={{ transform: `scaleX(${timerFraction})` }} />
+        </div>
+      ) : null}
+      <div className="seat-header">
+        <SeatAvatar
+          name={seat.displayName}
+          tintClass={seatTintClass(seatIndex)}
+          eliminated={seat.eliminated}
+        />
+        <span className={`seat-name seat-name-tint ${seatTintClass(seatIndex)}`}>
+          {seat.displayName}
+        </span>
+        <span className="coin">
+          <span className="coin-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16">
+              <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" strokeWidth="1.6" />
+            </svg>
+          </span>
+          {seat.coins}
+        </span>
+      </div>
+      {callout ? (
+        <div className="seat-callout" role="status">
+          <TextPartsView parts={callout.parts} seats={view.publicState.seats} />
+        </div>
+      ) : null}
+      {rationale ? (
+        <div className="seat-rationale-panel">
+          <span className="seat-rationale-source">
+            {rationaleSourceLabel(rationale.source)}
+          </span>
+          <span className="seat-rationale-text">{rationale.text}</span>
+        </div>
+      ) : null}
+      <div className="mini-cards" aria-hidden="true">
+        {Array.from({ length: hiddenCount }, (_, index) => (
+          <span key={`h-${index}`} className="mini-card">
+            <CardBack className="mini-back-svg" />
+          </span>
+        ))}
+        {seat.revealedCharacters.map((character, index) => (
+          <span
+            key={`r-${character}-${index}`}
+            className="mini-card revealed"
+            title={CHARACTER_LABEL[character]}
+          >
+            <CharacterMiniFace character={character} />
+          </span>
+        ))}
+      </div>
+      <div className="seat-meta">
+        <span className="model-name">{seatModelLabel(seat)}</span>
+        <span className="seat-status">
+          {seat.eliminated
+            ? "已出局"
+            : (seatStatusFor?.(seat.seatId) ??
+              (isCurrent ? "行动中" : isActive ? "待响应" : "观战中"))}
+        </span>
+      </div>
+      {targetable && pendingTarget ? (
+        <span className="seat-target-hint">点此选为目标</span>
+      ) : null}
+    </article>
+  );
+}
+
 export function MatchDesk({
   view,
   busy,
@@ -275,6 +580,10 @@ export function MatchDesk({
   onRematch,
   seatStatusFor,
   absenceSlot,
+  roomCode,
+  turnDeadline,
+  autoDecision,
+  spectator = false,
 }: MatchDeskProps) {
   const [pace, setPace] = useState<DeskPace>(() => loadDeskPace());
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -286,12 +595,20 @@ export function MatchDesk({
   const [exchangeKeepSelected, setExchangeKeepSelected] = useState<string[]>(
     [],
   );
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [soundOn, setSoundOn] = useState(() => sfx.isEnabled());
   const reducedMotion = usePrefersReducedMotion();
   const seenHistoryRef = useRef(view.projectedHistory.length);
   const matchIdRef = useRef(view.matchId);
   const eventListRef = useRef<HTMLOListElement | null>(null);
   const calloutTimersRef = useRef<Record<string, number>>({});
   const replayGenRef = useRef(0);
+  const toastSeqRef = useRef(0);
+  const seenAutoAtRef = useRef(autoDecision?.at ?? 0);
+  const wasMyTurnRef = useRef(
+    view.publicState.phase === "await_action" &&
+      view.publicState.currentSeatId === view.seatId,
+  );
 
   const speed = cssSpeedFactor(pace, reducedMotion);
 
@@ -301,6 +618,26 @@ export function MatchDesk({
       document.documentElement.style.removeProperty("--speed");
     };
   }, [speed]);
+
+  function pushToast(text: string, tone: Toast["tone"] = "info") {
+    const id = ++toastSeqRef.current;
+    setToasts((current) => [...current.slice(-2), { id, text, tone }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    }, 3800);
+  }
+
+  // 服务器超时代决策提示（ADR-0008）
+  useEffect(() => {
+    if (autoDecision && autoDecision.at > seenAutoAtRef.current) {
+      seenAutoAtRef.current = autoDecision.at;
+      pushToast(
+        `${seatName(view.publicState.seats, autoDecision.seatId)} 超时，${AUTO_KIND_LABEL[autoDecision.kind]}`,
+        "warn",
+      );
+      sfx.play("timeout");
+    }
+  }, [autoDecision?.at, autoDecision?.seatId, autoDecision?.kind]);
 
   useEffect(() => {
     if (matchIdRef.current !== view.matchId) {
@@ -317,6 +654,7 @@ export function MatchDesk({
         window.clearTimeout(timer);
       }
       calloutTimersRef.current = {};
+      sfx.play("deal");
     }
   }, [view.matchId, view.projectedHistory.length]);
 
@@ -331,6 +669,20 @@ export function MatchDesk({
       setActionDraft(null);
     }
   }, [view.publicState.phase, view.stateVersion]);
+
+  const myTurnNow =
+    !spectator &&
+    view.publicState.status !== "finished" &&
+    view.publicState.phase === "await_action" &&
+    view.publicState.currentSeatId === view.seatId;
+
+  // 轮到你：提示音 + 舞台脉冲
+  useEffect(() => {
+    if (myTurnNow && !wasMyTurnRef.current && !replaying && !busy) {
+      sfx.play("turn");
+    }
+    wasMyTurnRef.current = myTurnNow;
+  }, [myTurnNow, replaying, busy]);
 
   useEffect(() => {
     const history = view.projectedHistory;
@@ -368,6 +720,11 @@ export function MatchDesk({
 
       for (const step of steps) {
         if (cancelled || replayGenRef.current !== gen) return;
+
+        const beatSound = sfxForEvent(step.event);
+        if (beatSound) {
+          sfx.play(beatSound);
+        }
 
         if (step.callout) {
           showCallout(step.callout.seatId, step.callout);
@@ -487,9 +844,10 @@ export function MatchDesk({
       "choose_influence_to_reveal",
     ].includes(decision.type),
   );
-  const showResponseBar = responseDecisions.length > 0;
+  const showResponseBar = !spectator && responseDecisions.length > 0;
   const exchangeHand = view.privateState.exchangeHand ?? null;
   const showExchange =
+    !spectator &&
     view.publicState.phase === "await_exchange_selection" &&
     exchangeHand != null &&
     exchangeHand.length > 0;
@@ -498,7 +856,12 @@ export function MatchDesk({
   const showActionConfirm =
     actionDraft != null && !showResponseBar && !showExchange && !finished;
   const actionsLocked =
-    busy || replaying || showResponseBar || showExchange || finished;
+    spectator ||
+    busy ||
+    replaying ||
+    showResponseBar ||
+    showExchange ||
+    finished;
   const liveStage = stageContent(view);
   const stage = stageBeat
     ? {
@@ -518,6 +881,17 @@ export function MatchDesk({
     agentPhase === "retrying"
       ? view.publicState.activeSeatId
       : null;
+  const winnerId = finished
+    ? (() => {
+        const finishedEvent = view.projectedHistory.find(
+          (event) => event.type === "match_finished",
+        );
+        return finishedEvent?.type === "match_finished"
+          ? finishedEvent.winnerSeatId
+          : null;
+      })()
+    : null;
+  const iWon = winnerId != null && winnerId === view.seatId;
 
   const keptLabels =
     exchangeHand
@@ -528,9 +902,20 @@ export function MatchDesk({
     const next = toggleDeskPace(pace);
     setPace(next);
     saveDeskPace(next);
+    sfx.play("click");
+  }
+
+  function toggleSound() {
+    const next = !soundOn;
+    setSoundOn(next);
+    sfx.setEnabled(next);
+    if (next) {
+      sfx.play("confirm");
+    }
   }
 
   function selectUntargeted(actionType: UntargetedActionType) {
+    sfx.play("click");
     setActionDraft((current) =>
       current?.kind === "untargeted" && current.actionType === actionType
         ? null
@@ -539,6 +924,7 @@ export function MatchDesk({
   }
 
   function selectTargeted(actionType: TargetedActionType) {
+    sfx.play("click");
     setActionDraft((current) =>
       current?.kind === "targeted" && current.actionType === actionType
         ? null
@@ -547,6 +933,7 @@ export function MatchDesk({
   }
 
   function chooseTarget(targetSeatId: string) {
+    sfx.play("confirm");
     setActionDraft((current) => {
       if (current?.kind !== "targeted") return current;
       return { ...current, targetSeatId };
@@ -558,6 +945,7 @@ export function MatchDesk({
     const decision = actionDraftToDecision(actionDraft);
     if (!decision) return;
     setActionDraft(null);
+    sfx.play("confirm");
     onSubmitDecision(decision, `draft-${actionDraft.actionType}`);
   }
 
@@ -568,28 +956,67 @@ export function MatchDesk({
       exchangeKeepSelected,
     );
     setExchangeKeepSelected([]);
+    sfx.play("confirm");
     onSubmitDecision(
       { type: "choose_exchange_cards", returnCardIds },
       "exchange-keep",
     );
   }
 
+  function submitResponse(decision: LegalDecision) {
+    if (decision.type === "challenge_claim") {
+      sfx.play("challenge");
+    } else if (decision.type === "declare_block") {
+      sfx.play("block");
+    } else {
+      sfx.play("click");
+    }
+    onSubmitDecision(decision, `${decision.type}`);
+  }
+
+  const aliveSeats = view.publicState.seats.filter((seat) => !seat.eliminated);
+
   return (
     <div className="desk-shell">
       <header className="desk-topbar">
         <div className="desk-brand">
-          <h1>政变</h1>
-          <span className="round-badge">
-            {view.publicState.seats.length} 人桌 · v{view.stateVersion}
+          <span className="brand-crest" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M4 18 L6 9 L10 13 L12 5 L14 13 L18 9 L20 18 Z"
+                fill="currentColor"
+              />
+              <rect x="4" y="19" width="16" height="2" rx="1" fill="currentColor" />
+            </svg>
           </span>
+          <h1>政变</h1>
+          {roomCode ? (
+            <span className="room-chip">
+              房间 {roomCode} · {aliveSeats.length}/{view.publicState.seats.length} 人
+            </span>
+          ) : (
+            <span className="room-chip">
+              {view.publicState.seats.length} 人对局
+            </span>
+          )}
+          {spectator ? <span className="spectator-chip">观战中</span> : null}
         </div>
         <div className="top-actions">
+          <button
+            type="button"
+            className={`icon-button${soundOn ? " on" : ""}`}
+            onClick={toggleSound}
+            aria-pressed={soundOn}
+            title={soundOn ? "关闭音效" : "开启音效"}
+          >
+            {soundOn ? "🔊" : "🔇"}
+          </button>
           <button
             type="button"
             className="quiet-button"
             onClick={() => setRulesOpen(true)}
           >
-            规则介绍
+            规则
           </button>
           <button
             type="button"
@@ -597,155 +1024,158 @@ export function MatchDesk({
             onClick={() => cyclePace()}
             aria-pressed={pace === "fast"}
           >
-            {pace === "fast" ? "快速模式" : "平衡节奏"}
+            {pace === "fast" ? "快节奏" : "从容"}
           </button>
           {finished && onRematch ? (
             <button
               type="button"
-              className="quiet-button"
+              className="quiet-button accent"
               disabled={busy}
-              onClick={() => onRematch()}
+              onClick={() => {
+                sfx.play("click");
+                onRematch();
+              }}
             >
-              继续对局
+              续局等待
             </button>
           ) : null}
           <button
             type="button"
             className="quiet-button"
             disabled={busy}
-            onClick={() => onReturnToSetup()}
+            onClick={() => {
+              sfx.play("click");
+              onReturnToSetup();
+            }}
           >
             {returnLabel}
           </button>
         </div>
       </header>
 
-      <main className="board desk-layout" aria-label="策划桌">
-        <section className="opponents" aria-label="座位">
-          {view.publicState.seats.map((seat, seatIndex) => {
-            const isCurrent = seat.seatId === view.publicState.currentSeatId;
-            const isActive = seat.seatId === view.publicState.activeSeatId;
-            const targetable =
-              pendingTarget != null && activeTargetIds.includes(seat.seatId);
-            const hiddenCount = Math.max(
-              0,
-              seat.influenceCount - seat.revealedCharacters.length,
-            );
-            const rationale =
-              thinkingSeatId === seat.seatId
-                ? undefined
-                : decisionRationales[seat.seatId];
-            const callout = callouts[seat.seatId];
-            return (
-              <article
-                key={seat.seatId}
-                className={[
-                  "seat",
-                  seatTintClass(seatIndex),
-                  isCurrent ? "current" : "",
-                  isActive ? "active" : "",
-                  targetable ? "targetable" : "",
-                  seat.eliminated ? "eliminated" : "",
-                  rationale ? "has-rationale" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-              >
-                <div className="seat-header">
-                  <span
-                    className={`seat-name seat-name-tint ${seatTintClass(seatIndex)}`}
-                  >
-                    {seat.displayName}
+      <main className="board desk-layout" aria-label="宫廷牌桌">
+        <section className="table-zone">
+          <section className="opponents-strip" aria-label="座位">
+            {view.publicState.seats.map((seat, seatIndex) => {
+              if (seat.seatId === view.seatId) return null;
+              return (
+                <OpponentSeat
+                  key={seat.seatId}
+                  seat={seat}
+                  seatIndex={seatIndex}
+                  view={view}
+                  spectator={spectator}
+                  busy={busy}
+                  replaying={replaying}
+                  pendingTarget={pendingTarget}
+                  activeTargetIds={activeTargetIds}
+                  callout={callouts[seat.seatId] ?? null}
+                  rationale={
+                    thinkingSeatId === seat.seatId
+                      ? undefined
+                      : decisionRationales[seat.seatId]
+                  }
+                  turnDeadline={
+                    turnDeadline?.seatId === seat.seatId ? turnDeadline : null
+                  }
+                  seatStatusFor={seatStatusFor}
+                  onChooseTarget={chooseTarget}
+                />
+              );
+            })}
+            {absenceSlot}
+          </section>
+
+          <div className="table-felt">
+            <div className="felt-rim" aria-hidden="true" />
+            <div className="table-watermark" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="M4 18 L6 9 L10 13 L12 5 L14 13 L18 9 L20 18 Z"
+                  fill="currentColor"
+                />
+                <rect x="4" y="19" width="16" height="2" rx="1" fill="currentColor" />
+              </svg>
+            </div>
+
+            <div className="table-top">
+              {turnDeadline ? (
+                <TurnTimerRing
+                  deadline={turnDeadline}
+                  mySeatId={view.seatId}
+                  busy={busy}
+                />
+              ) : null}
+              <div className={`stage-card${myTurnNow && !stageBeat ? " my-turn" : ""}`}>
+                <div className="eyebrow">{stage.eyebrow}</div>
+                <h2>
+                  <TextPartsView
+                    parts={stage.titleParts}
+                    seats={view.publicState.seats}
+                  />
+                </h2>
+                <p>{stage.text}</p>
+                {stage.claim ? (
+                  <div className="claim-token entering">
+                    <span>角色声明</span>
+                    <strong>{stage.claim}</strong>
+                  </div>
+                ) : null}
+                {busy ? (
+                  <p className="agent-phase" aria-live="polite">
+                    {agentPhaseLabel(agentPhase)}
+                  </p>
+                ) : null}
+                {replaying && !busy ? (
+                  <p className="agent-phase" aria-live="polite">
+                    桌面回放中…
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="table-center">
+              <div className="court-deck" aria-label="宫廷牌库">
+                <span className="deck-card back-3">
+                  <CardBack />
+                </span>
+                <span className="deck-card back-2">
+                  <CardBack />
+                </span>
+                <span className="deck-card back-1">
+                  <CardBack />
+                </span>
+                <span className="deck-count">宫廷牌库</span>
+              </div>
+              {finished && winnerId ? (
+                <div className={`win-banner${iWon ? " mine" : ""}`} role="status">
+                  <span className="win-crown" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path
+                        d="M3 17 L5 8 L9.5 12 L12 4.5 L14.5 12 L19 8 L21 17 Z"
+                        fill="currentColor"
+                      />
+                      <rect x="3" y="18.5" width="18" height="2.4" rx="1.2" fill="currentColor" />
+                    </svg>
                   </span>
-                  <span className="coin">{seat.coins}</span>
-                </div>
-                {callout ? (
-                  <div className="seat-callout" role="status">
+                  <strong>
                     <TextPartsView
-                      parts={callout.parts}
+                      parts={[
+                        {
+                          type: "seat",
+                          seatId: winnerId,
+                          text: seatName(view.publicState.seats, winnerId),
+                        },
+                        { type: "text", text: iWon ? " 加冕" : " 获胜" },
+                      ]}
                       seats={view.publicState.seats}
                     />
-                  </div>
-                ) : null}
-                {rationale ? (
-                  <div className="seat-rationale-panel">
-                    <span className="seat-rationale-source">
-                      {rationaleSourceLabel(rationale.source)}
-                    </span>
-                    <span className="seat-rationale-text">{rationale.text}</span>
-                  </div>
-                ) : null}
-                <div className="mini-cards" aria-hidden="true">
-                  {Array.from({ length: hiddenCount }, (_, index) => (
-                    <span key={`h-${index}`} className="mini-card" />
-                  ))}
-                  {seat.revealedCharacters.map((character, index) => (
-                    <span
-                      key={`r-${character}-${index}`}
-                      className="mini-card revealed"
-                      title={CHARACTER_LABEL[character]}
-                    />
-                  ))}
+                  </strong>
                 </div>
-                <div className="seat-meta">
-                  <span className="model-name">
-                    {seatModelLabel(seat)}
-                    {seat.seatId === view.seatId ? " · 你" : ""}
-                  </span>
-                  <span className="seat-status">
-                    {seat.eliminated
-                      ? "已淘汰"
-                      : (seatStatusFor?.(seat.seatId) ??
-                        (isCurrent
-                          ? "当前回合"
-                          : isActive
-                            ? "待响应"
-                            : "观察中"))}
-                  </span>
-                </div>
-                {targetable && pendingTarget ? (
-                  <button
-                    type="button"
-                    className="seat-target-button"
-                    disabled={busy || replaying}
-                    onClick={() => chooseTarget(seat.seatId)}
-                  >
-                    选定为目标
-                  </button>
-                ) : null}
-              </article>
-            );
-          })}
-        </section>
+              ) : null}
+            </div>
 
-        <div className="main-column">
-          <section className="stage" aria-label="行动舞台">
-            <div className="stage-card">
-              <div className="eyebrow">{stage.eyebrow}</div>
-              <h2>
-                <TextPartsView
-                  parts={stage.titleParts}
-                  seats={view.publicState.seats}
-                />
-              </h2>
-              <p>{stage.text}</p>
-              {stage.claim ? (
-                <div className="claim-token entering">
-                  <span>角色声明</span>
-                  <strong>{stage.claim}</strong>
-                </div>
-              ) : null}
-              {busy ? (
-                <p className="agent-phase" aria-live="polite">
-                  {agentPhaseLabel(agentPhase)}
-                </p>
-              ) : null}
-              {replaying && !busy ? (
-                <p className="agent-phase" aria-live="polite">
-                  结果节拍回放中…
-                </p>
-              ) : null}
-
+            <div className="table-actions">
               {showExchange && exchangeHand ? (
                 <div
                   className="response-bar confirmation-bar exchange-bar"
@@ -765,23 +1195,29 @@ export function MatchDesk({
                         <button
                           key={card.cardId}
                           type="button"
-                          className={
-                            selected
-                              ? "response-button primary"
-                              : "response-button"
-                          }
+                          className={`exchange-card-button${selected ? " picked" : ""}`}
                           disabled={busy || replaying}
-                          onClick={() =>
+                          aria-label={`保留 ${CHARACTER_LABEL[card.character]}${selected ? "（已选）" : ""}`}
+                          aria-pressed={selected}
+                          onClick={() => {
+                            sfx.play("click");
                             setExchangeKeepSelected((current) =>
                               toggleKeepSelection(
                                 current,
                                 card.cardId,
                                 keepNeeded,
                               ),
-                            )
-                          }
+                            );
+                          }}
                         >
-                          {CHARACTER_LABEL[card.character]}
+                          <CharacterCardFace
+                            character={card.character}
+                            name={CHARACTER_LABEL[card.character]}
+                            ability={ROLE_HINTS[card.character]}
+                          />
+                          <span className={`pick-mark${selected ? " show" : ""}`}>
+                            留
+                          </span>
                         </button>
                       );
                     })}
@@ -791,9 +1227,12 @@ export function MatchDesk({
                       type="button"
                       className="response-button"
                       disabled={busy || replaying}
-                      onClick={() => setExchangeKeepSelected([])}
+                      onClick={() => {
+                        sfx.play("cancel");
+                        setExchangeKeepSelected([]);
+                      }}
                     >
-                      取消
+                      重选
                     </button>
                     <button
                       type="button"
@@ -805,7 +1244,7 @@ export function MatchDesk({
                       }
                       onClick={() => confirmExchangeKeep()}
                     >
-                      确认
+                      确认保留
                     </button>
                   </div>
                 </div>
@@ -827,7 +1266,10 @@ export function MatchDesk({
                       type="button"
                       className="response-button"
                       disabled={busy || replaying}
-                      onClick={() => setActionDraft(null)}
+                      onClick={() => {
+                        sfx.play("cancel");
+                        setActionDraft(null);
+                      }}
                     >
                       取消
                     </button>
@@ -857,7 +1299,7 @@ export function MatchDesk({
                       label = `阻挡（${CHARACTER_LABEL[decision.claimedCharacter]}）`;
                     }
                     if (decision.type === "pass_challenge") label = "放弃";
-                    if (decision.type === "challenge_claim") label = "质疑";
+                    if (decision.type === "challenge_claim") label = "质疑！";
                     if (decision.type === "concede_claim") label = "放弃证明";
                     if (decision.type === "prove_claim") {
                       label = `证明（${CHARACTER_LABEL[decision.character]}）`;
@@ -878,12 +1320,7 @@ export function MatchDesk({
                             : "response-button"
                         }
                         disabled={busy || replaying}
-                        onClick={() =>
-                          onSubmitDecision(
-                            decision,
-                            `${decision.type}-${index}`,
-                          )
-                        }
+                        onClick={() => submitResponse(decision)}
                       >
                         {label}
                       </button>
@@ -891,138 +1328,179 @@ export function MatchDesk({
                   })}
                 </div>
               ) : null}
+
+              {spectator && !finished ? (
+                <div className="response-bar spectator-bar" aria-label="观战提示">
+                  <span>观战中 — 牌局由对局者推进，刷新可同步最新战况。</span>
+                </div>
+              ) : null}
             </div>
-          </section>
+          </div>
 
           <section className="player-zone" aria-label="手牌与行动">
+            <div className="player-identity">
+              <SeatAvatar
+                name={localSeat?.displayName ?? "你"}
+                tintClass={seatTintClass(
+                  view.publicState.seats.findIndex(
+                    (seat) => seat.seatId === view.seatId,
+                  ),
+                )}
+                eliminated={Boolean(localSeat?.eliminated)}
+              />
+              <div className="player-identity-text">
+                <strong>{localSeat?.displayName ?? "你"}</strong>
+                <span className="player-coins">
+                  <span className="coin-icon" aria-hidden="true">
+                    <svg viewBox="0 0 16 16">
+                      <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                      <circle cx="8" cy="8" r="3.4" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.7" />
+                    </svg>
+                  </span>
+                  {localSeat?.coins ?? 0}
+                </span>
+              </div>
+            </div>
+
             <div className="hand" aria-label="你的隐藏牌">
               {view.privateState.hiddenCharacters.length === 0 ? (
-                <p className="hand-empty">无隐藏牌</p>
+                <p className="hand-empty">影响力已耗尽</p>
               ) : (
-                view.privateState.hiddenCharacters.map((character, index) => {
-                  const meta = ROLE_CARD[character];
-                  return (
-                    <article
-                      key={`${character}-${index}`}
-                      className="role-card"
-                      style={{ ["--role" as string]: meta.tint }}
-                    >
-                      <div className="role-icon">{meta.icon}</div>
-                      <span className="role-name">
-                        {CHARACTER_LABEL[character]}
-                      </span>
-                      <span className="role-action">{meta.hint}</span>
-                    </article>
-                  );
-                })
+                view.privateState.hiddenCharacters.map((character, index) => (
+                  <div
+                    key={`${character}-${index}`}
+                    className="role-card"
+                    style={{
+                      ["--role-deep" as string]: ROLE_VISUAL[character].deep,
+                      ["--role-lite" as string]: ROLE_VISUAL[character].lite,
+                    }}
+                  >
+                    <CharacterCardFace
+                      character={character}
+                      name={CHARACTER_LABEL[character]}
+                      ability={ROLE_HINTS[character]}
+                    />
+                  </div>
+                ))
               )}
             </div>
 
-            <div className="action-zone">
-              <div className="action-label">
-                <span>
-                  {pendingTarget
-                    ? "再点高亮座位选定目标，然后确认"
-                    : showActionConfirm
-                      ? "确认条确认后才会提交"
-                      : showResponseBar || showExchange
-                        ? "请先处理舞台上的响应"
-                        : finished
-                          ? "对局已结束"
-                          : "选择一个合法行动"}
-                </span>
-                <span>你的金币：{localSeat?.coins ?? 0}</span>
+            {!spectator ? (
+              <div className="action-zone">
+                <div className="action-label">
+                  <span>
+                    {pendingTarget
+                      ? "点击桌面高亮座位选定目标"
+                      : showActionConfirm
+                        ? "确认后才会提交"
+                        : showResponseBar || showExchange
+                          ? "请先处理桌面上的响应"
+                          : finished
+                            ? "对局已结束"
+                            : myTurnNow
+                              ? "选择一个行动"
+                              : "等待他人行动"}
+                  </span>
+                </div>
+                <div className="action-bar" aria-label="合法行动">
+                  <button
+                    type="button"
+                    className="action-button"
+                    disabled={actionsLocked || !canIncome}
+                    onClick={() => selectUntargeted("income")}
+                  >
+                    <span className="action-name">收入</span>
+                    <small>+1 金币</small>
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button"
+                    disabled={actionsLocked || !canForeignAid}
+                    onClick={() => selectUntargeted("foreign_aid")}
+                  >
+                    <span className="action-name">外援</span>
+                    <small>+2 金币</small>
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button"
+                    disabled={
+                      actionsLocked ||
+                      coupTargetIds.length === 0 ||
+                      (pendingTarget != null && pendingTarget !== "coup")
+                    }
+                    onClick={() => selectTargeted("coup")}
+                  >
+                    <span className="action-name">
+                      {pendingTarget === "coup" ? "取消政变" : "政变"}
+                    </span>
+                    <small>7 金币</small>
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button claim-duke"
+                    disabled={actionsLocked || !canTax}
+                    onClick={() => selectUntargeted("tax")}
+                  >
+                    <span className="action-name">征税</span>
+                    <small>公爵 · +3</small>
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button claim-assassin"
+                    disabled={
+                      actionsLocked ||
+                      assassinateTargetIds.length === 0 ||
+                      (pendingTarget != null && pendingTarget !== "assassinate")
+                    }
+                    onClick={() => selectTargeted("assassinate")}
+                  >
+                    <span className="action-name">
+                      {pendingTarget === "assassinate" ? "取消刺杀" : "刺杀"}
+                    </span>
+                    <small>刺客 · 3 金币</small>
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button claim-captain"
+                    disabled={
+                      actionsLocked ||
+                      stealTargetIds.length === 0 ||
+                      (pendingTarget != null && pendingTarget !== "steal")
+                    }
+                    onClick={() => selectTargeted("steal")}
+                  >
+                    <span className="action-name">
+                      {pendingTarget === "steal" ? "取消偷窃" : "偷窃"}
+                    </span>
+                    <small>队长 · +2</small>
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button claim-ambassador"
+                    disabled={actionsLocked || !canExchange}
+                    onClick={() => selectUntargeted("exchange")}
+                  >
+                    <span className="action-name">交换</span>
+                    <small>大使 · 换牌</small>
+                  </button>
+                </div>
               </div>
-              <div className="action-bar" aria-label="合法行动">
-                <button
-                  type="button"
-                  className="action-button"
-                  disabled={actionsLocked || !canIncome}
-                  onClick={() => selectUntargeted("income")}
-                >
-                  收入
-                  <small>+1</small>
-                </button>
-                <button
-                  type="button"
-                  className="action-button"
-                  disabled={actionsLocked || !canForeignAid}
-                  onClick={() => selectUntargeted("foreign_aid")}
-                >
-                  外援
-                  <small>+2</small>
-                </button>
-                <button
-                  type="button"
-                  className="action-button"
-                  disabled={
-                    actionsLocked ||
-                    coupTargetIds.length === 0 ||
-                    (pendingTarget != null && pendingTarget !== "coup")
-                  }
-                  onClick={() => selectTargeted("coup")}
-                >
-                  {pendingTarget === "coup" ? "取消政变" : "政变"}
-                  <small>7 金币</small>
-                </button>
-                <button
-                  type="button"
-                  className="action-button"
-                  disabled={actionsLocked || !canTax}
-                  onClick={() => selectUntargeted("tax")}
-                >
-                  征税
-                  <small>公爵 · +3</small>
-                </button>
-                <button
-                  type="button"
-                  className="action-button"
-                  disabled={
-                    actionsLocked ||
-                    assassinateTargetIds.length === 0 ||
-                    (pendingTarget != null && pendingTarget !== "assassinate")
-                  }
-                  onClick={() => selectTargeted("assassinate")}
-                >
-                  {pendingTarget === "assassinate" ? "取消刺杀" : "刺杀"}
-                  <small>刺客 · 3</small>
-                </button>
-                <button
-                  type="button"
-                  className="action-button"
-                  disabled={
-                    actionsLocked ||
-                    stealTargetIds.length === 0 ||
-                    (pendingTarget != null && pendingTarget !== "steal")
-                  }
-                  onClick={() => selectTargeted("steal")}
-                >
-                  {pendingTarget === "steal" ? "取消偷窃" : "偷窃"}
-                  <small>队长 · 目标</small>
-                </button>
-                <button
-                  type="button"
-                  className="action-button"
-                  disabled={actionsLocked || !canExchange}
-                  onClick={() => selectUntargeted("exchange")}
-                >
-                  交换
-                  <small>大使</small>
-                </button>
-              </div>
-            </div>
+            ) : null}
           </section>
-        </div>
+        </section>
 
         <aside className="event-rail" aria-label="对局记录">
-          {absenceSlot}
           <div className="rail-title">
             <span>对局记录</span>
             <span>{view.projectedHistory.length} 条</span>
           </div>
           <ol className="event-list" ref={eventListRef}>
             {view.projectedHistory.map((event, index) => (
-              <li key={`${event.type}-${index}`} className="event">
+              <li
+                key={`${event.type}-${index}`}
+                className={`event event-${event.type}`}
+              >
                 <TextPartsView
                   parts={eventParts(event, view.publicState.seats)}
                   seats={view.publicState.seats}
@@ -1037,12 +1515,16 @@ export function MatchDesk({
         <div className="reveal-overlay" aria-live="polite">
           <div
             className="reveal-card"
-            style={{ ["--role" as string]: ROLE_CARD[overlay.character].tint }}
+            style={{
+              ["--role-deep" as string]: ROLE_VISUAL[overlay.character].deep,
+              ["--role-lite" as string]: ROLE_VISUAL[overlay.character].lite,
+            }}
           >
-            <div className="role-icon">
-              {ROLE_CARD[overlay.character].icon}
-            </div>
-            <strong>{CHARACTER_LABEL[overlay.character]}</strong>
+            <CharacterCardFace
+              character={overlay.character}
+              name={CHARACTER_LABEL[overlay.character]}
+              ability={ROLE_HINTS[overlay.character]}
+            />
             <p>{overlay.caption}</p>
           </div>
         </div>
@@ -1055,7 +1537,23 @@ export function MatchDesk({
         </div>
       ) : null}
 
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`desk-toast ${toast.tone}`}>
+            {toast.text}
+          </div>
+        ))}
+      </div>
+
       <RulesPanel open={rulesOpen} onClose={() => setRulesOpen(false)} />
     </div>
   );
 }
+
+const ROLE_HINTS: Record<CharacterId, string> = {
+  duke: "征税 +3 · 阻挡外援",
+  assassin: "付 3 金币刺杀",
+  captain: "偷取 2 金币 · 阻挡偷窃",
+  ambassador: "交换手牌 · 阻挡偷窃",
+  contessa: "阻挡刺杀",
+};

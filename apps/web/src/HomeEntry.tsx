@@ -1,3 +1,7 @@
+import { useState } from "react";
+import { RulesPanel } from "@coup/web-desk";
+import { sfx } from "@coup/web-desk";
+
 type HomeEntryProps = {
   onCreateRoom: () => void;
   onJoinRoom: () => void;
@@ -27,50 +31,90 @@ export function HomeEntry({
   recoveryRooms = [],
   onAbandonRecovery,
 }: HomeEntryProps) {
+  const [rulesOpen, setRulesOpen] = useState(false);
+
   return (
     <div className="home-b" aria-label="入口">
-      <div className="b-hero">
-        <p className="eyebrow">互联网房间</p>
-        <h1>创建房间</h1>
+      <div className="home-hero">
+        <span className="home-crest" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path
+              d="M4 18 L6 9 L10 13 L12 5 L14 13 L18 9 L20 18 Z"
+              fill="currentColor"
+            />
+            <rect x="4" y="19" width="16" height="2" rx="1" fill="currentColor" />
+          </svg>
+        </span>
+        <p className="home-eyebrow">Coup · 宫廷博弈</p>
+        <h1>政 变</h1>
+        <p className="home-tagline">五种身份，两枚暗牌，一次虚张声势定乾坤。</p>
+
         {recoveryRooms.length > 0 ? (
-          <>
-            <p>服务器已恢复以下房间，可逐房放弃不需要的房间。</p>
+          <div className="recovery-card">
+            <p>检测到服务器恢复了以下房间：</p>
             {recoveryRooms.map((room) => (
-              <div key={room.code}>
-                <p>房间 {room.code}：{room.status === "failed" ? `恢复失败（${recoveryReasonMessage(room.reason)}）` : "已恢复"}</p>
-                <button type="button" disabled={busy} onClick={() => onAbandonRecovery?.(room.code)}>
-                  放弃房间 {room.code}
-                </button>
-              </div>
+              <p key={room.code}>
+                房间 {room.code}：
+                {room.status === "failed"
+                  ? `恢复失败（${recoveryReasonMessage(room.reason)}）`
+                  : "已恢复（可用原房间号加入）"}
+              </p>
             ))}
-          </>
-        ) : (
-          <>
-            <p>
-              你创建房间后获得 4 位房间号，把它发给朋友；座位配置与开局在后续步骤完成。
-            </p>
             <button
               type="button"
-              className="primary xl"
+              className="ghost-btn"
               disabled={busy}
-              onClick={() => onCreateRoom()}
+              onClick={() => onAbandonRecovery?.(recoveryRooms[0]?.code ?? "")}
             >
-              创建房间
+              放弃房间 {recoveryRooms[0]?.code}
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="home-actions">
+              <button
+                type="button"
+                className="home-btn"
+                disabled={busy}
+                onClick={() => {
+                  sfx.play("confirm");
+                  onCreateRoom();
+                }}
+              >
+                创建房间
+              </button>
+              <button
+                type="button"
+                className="home-btn ghost"
+                disabled={busy}
+                onClick={() => {
+                  sfx.play("click");
+                  onJoinRoom();
+                }}
+              >
+                加入房间
+              </button>
+            </div>
+            <div className="home-facts">
+              <span>2–6 人同桌</span>
+              <span>4 位房间号邀请</span>
+              <span>掉线回席保护</span>
+            </div>
+            <button
+              type="button"
+              className="ghost-btn"
+              style={{ marginTop: "1.1rem" }}
+              onClick={() => {
+                sfx.play("click");
+                setRulesOpen(true);
+              }}
+            >
+              怎么玩？
             </button>
           </>
         )}
       </div>
-      <aside className="b-side">
-        <button
-          type="button"
-          className="side-card"
-          disabled={busy}
-          onClick={() => onJoinRoom()}
-        >
-          <strong>加入房间</strong>
-          <span>输入房主分享的 4 位房间号</span>
-        </button>
-      </aside>
+      <RulesPanel open={rulesOpen} onClose={() => setRulesOpen(false)} />
     </div>
   );
 }

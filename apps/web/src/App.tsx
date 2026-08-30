@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { LegalDecision, SeatView } from "@coup/protocol";
-import { MatchDesk } from "@coup/web-desk";
+import { MatchDesk, sfx, type AutoDecisionNotice, type TurnDeadline } from "@coup/web-desk";
 import { HomeEntry } from "./HomeEntry";
 import { HostInvitePanel } from "./HostInvitePanel";
 import { JoinRoomPage } from "./JoinRoomPage";
@@ -18,12 +18,15 @@ import {
   fetchMySeat,
   fetchRoom,
   fetchRoomRecovery,
+  loadPlayerName,
   matchCurrentPath,
   postRoomHeartbeat,
   postSeatDisposition,
   renameSeat,
   resumeRoomSeat,
+  savePlayerName,
   startRoomMatch,
+  updateRoomSettings,
   type DispositionAction,
   type LobbySeat,
   type RoomInvite,
@@ -39,6 +42,16 @@ type AgentPhase =
 
 type Screen = "home" | "host-invite" | "join" | "guest-confirm";
 
+type MatchPollBody = {
+  view?: SeatView;
+  unchanged?: boolean;
+  stateVersion?: number;
+  absences?: SeatAbsenceView[];
+  pausedForAbsenceSeatId?: string | null;
+  turnDeadline?: TurnDeadline | null;
+  autoDecision?: AutoDecisionNotice | null;
+};
+
 function initialScreen(): Screen {
   const params = new URLSearchParams(window.location.search);
   if (window.location.pathname === "/join" || params.has("code")) {
@@ -52,19 +65,51 @@ export function App() {
   const [room, setRoom] = useState<RoomInvite | null>(null);
   const [lobbySeats, setLobbySeats] = useState<LobbySeat[]>([]);
   const [mySeatId, setMySeatId] = useState<string | null>(null);
-  const [displayNameDraft, setDisplayNameDraft] = useState("客人");
+  const [displayNameDraft, setDisplayNameDraft] = useState(() => loadPlayerName() || "客人");
   const [view, setView] = useState<SeatView | null>(null);
+  const [spectator, setSpectator] = useState(false);
+  const [turnDeadline, setTurnDeadline] = useState<TurnDeadline | null>(null);
+  const [autoDecision, setAutoDecision] = useState<AutoDecisionNotice | null>(null);
   const [decisionRationales] = useState<Record<string, never>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [absences, setAbsences] = useState<SeatAbsenceView[]>([]);
-  const [lanRoomViewOnly, setLanRoomViewOnly] = useState(false);
   const [pausedForAbsenceSeatId, setPausedForAbsenceSeatId] = useState<
     string | null
   >(null);
+  const [turnTimeLimitSec, setTurnTimeLimitSec] = useState(60);
+  const [lanRoomViewOnly, setLanRoomViewOnly] = useState(false);
   const [recoveryRooms, setRecoveryRooms] = useState<
     Array<{ code: string; status: "restored" | "failed"; reason: string | null }>
   >([]);
+
+  // 错误提示 4 秒后自动消失
+  useEffect(() => {
+    if (!error) return;
+    const id = window.setTimeout(() => setError(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [error]);
+
+  // 浏览器标签页标题跟随状态
+  useEffect(() => {
+    document.title = view
+      ? "政变 · 对局中"
+      : room
+        ? `政变 · 房间 ${room.code}`
+        : "政变 Coup · 宫廷博弈";
+  }, [view, room]);
+
+  function applyPollBody(body: MatchPollBody) {
+    if (body.view) {
+      setView(body.view);
+      setTurnDeadline(body.turnDeadline ?? null);
+      if (body.autoDecision) setAutoDecision(body.autoDecision);
+    }
+    if (body.absences) setAbsences(body.absences);
+    if (body.pausedForAbsenceSeatId !== undefined) {
+      setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId);
+    }
+  }
 
   useEffect(() => {
     void (async () => {
@@ -77,6 +122,7 @@ export function App() {
           const found = await fetchRoom(window.location.origin, recovered.code);
           setRoom(found);
           setLobbySeats(found.seats ?? recovered.seats);
+          setTurnTimeLimitSec(found.turnTimeLimitSec ?? 60);
           const me = await fetchMySeat(
             window.location.origin,
             recovered.code,
@@ -91,12 +137,9 @@ export function App() {
               cache: "no-store",
             });
             if (!response.ok) return false;
-            const body = (await response.json()) as {
-              view: SeatView;
-              matchId: string;
-            };
-            setView(body.view);
-            return true;
+            const body = (await response.json()) as MatchPollBody;
+            applyPollBody(body);
+            return Boolean(body.view);
           };
 
           // Seat cookie distinguishes host vs guest on the same Origin.
@@ -143,6 +186,7 @@ export function App() {
           const invite = await createRoomOnCurrentOrigin();
           setRoom(invite);
           setLobbySeats(invite.seats ?? []);
+          setTurnTimeLimitSec(invite.turnTimeLimitSec ?? 60);
           setMySeatId("1");
           setDisplayNameDraft(
             invite.seats?.find((s) => s.seatId === "1")?.displayName ?? "你",
@@ -168,6 +212,7 @@ export function App() {
           const found = await fetchRoom(window.location.origin, code);
           setRoom(found);
           setLobbySeats(found.seats ?? []);
+          setTurnTimeLimitSec(found.turnTimeLimitSec ?? 60);
           const me = await fetchMySeat(window.location.origin, code);
           setMySeatId(me.seat?.seatId ?? null);
           if (me.seat?.displayName) setDisplayNameDraft(me.seat.displayName);
@@ -177,12 +222,9 @@ export function App() {
               cache: "no-store",
             });
             if (response.ok) {
-              const body = (await response.json()) as {
-                view: SeatView;
-                matchId: string;
-              };
-              setView(body.view);
-              return;
+              const body = (await response.json()) as MatchPollBody;
+              applyPollBody(body);
+              if (body.view) return;
             }
           }
           setScreen("guest-confirm");
@@ -202,6 +244,7 @@ export function App() {
       const invite = await enterHostModeAndCreateRoom();
       setRoom(invite);
       setLobbySeats(invite.seats ?? []);
+      setTurnTimeLimitSec(invite.turnTimeLimitSec ?? 60);
       setMySeatId("1");
       setDisplayNameDraft(
         invite.seats?.find((s) => s.seatId === "1")?.displayName ?? "你",
@@ -230,6 +273,8 @@ export function App() {
 
   function returnToLanRoom() {
     setView(null);
+    setTurnDeadline(null);
+    setSpectator(false);
     setAbsences([]);
     setPausedForAbsenceSeatId(null);
     setError(null);
@@ -249,18 +294,38 @@ export function App() {
       if (!response.ok) {
         throw new Error("当前对局不可用");
       }
-      const body = (await response.json()) as {
-        view: SeatView;
-        matchId: string;
-        absences?: SeatAbsenceView[];
-        pausedForAbsenceSeatId?: string | null;
-      };
-      setView(body.view);
-      setAbsences(body.absences ?? []);
-      setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId ?? null);
+      const body = (await response.json()) as MatchPollBody;
+      if (!body.view) throw new Error("当前对局不可用");
+      applyPollBody(body);
+      setSpectator(false);
       setLanRoomViewOnly(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "无法返回对局");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function enterSpectate() {
+    if (!room) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(matchCurrentPath(room.code, false, { spectate: true }), {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error("观战不可用");
+      }
+      const body = (await response.json()) as MatchPollBody;
+      if (!body.view) throw new Error("观战不可用");
+      applyPollBody(body);
+      setSpectator(true);
+      setLanRoomViewOnly(false);
+      setScreen("guest-confirm");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "无法观战");
     } finally {
       setBusy(false);
     }
@@ -276,7 +341,7 @@ export function App() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           protocolVersion: 1,
-          requestId: `req-${view.stateVersion}-${label}`,
+          requestId: `req-${view.stateVersion}-${label}-${Date.now()}`,
           stateVersion: view.stateVersion,
           decision,
         }),
@@ -291,14 +356,13 @@ export function App() {
         }
         throw new Error(body?.error ?? "提交失败");
       }
-      const body = (await response.json()) as {
-        view: SeatView;
-        absences?: SeatAbsenceView[];
-      };
-      setView(body.view);
-      if (body.absences) setAbsences(body.absences);
+      const body = (await response.json()) as MatchPollBody;
+      applyPollBody(body);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "提交失败");
+      if ((err as Error).message !== "seat_absent") {
+        setError(err instanceof Error ? err.message : "提交失败");
+        sfx.play("error");
+      }
     } finally {
       setBusy(false);
     }
@@ -312,11 +376,25 @@ export function App() {
       const body = await startRoomMatch(room.code);
       setView(body.view);
       setRoom({ ...room, phase: body.phase });
+      setSpectator(false);
       setLanRoomViewOnly(false);
+      sfx.play("deal");
     } catch (err) {
       setError(err instanceof Error ? err.message : "无法开局");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleTurnTimeLimitChange(seconds: number) {
+    if (!room) return;
+    const previous = turnTimeLimitSec;
+    setTurnTimeLimitSec(seconds);
+    try {
+      await updateRoomSettings(room.code, { turnTimeLimitSec: seconds });
+    } catch (err) {
+      setTurnTimeLimitSec(previous);
+      setError(err instanceof Error ? err.message : "保存设置失败");
     }
   }
 
@@ -332,6 +410,9 @@ export function App() {
         seats: next.seats,
       });
       setLobbySeats(next.seats);
+      setView(null);
+      setTurnDeadline(null);
+      setSpectator(false);
       setScreen("host-invite");
     } catch (err) {
       setError(err instanceof Error ? err.message : "无法进入续局等待");
@@ -348,6 +429,7 @@ export function App() {
       const result = await confirmRoomRematch(room.code);
       setLobbySeats(result.seats);
       setMySeatId(result.seat.seatId);
+      sfx.play("confirm");
     } catch (err) {
       setError(err instanceof Error ? err.message : "加入对局失败");
     } finally {
@@ -366,6 +448,7 @@ export function App() {
       setLobbySeats([]);
       setMySeatId(null);
       setAbsences([]);
+      setSpectator(false);
       setScreen("home");
     } catch (err) {
       setError(err instanceof Error ? err.message : "离开对局失败");
@@ -379,15 +462,18 @@ export function App() {
     setBusy(true);
     setError(null);
     try {
+      const name = displayNameDraft.trim() || loadPlayerName() || "客人";
       const result = await claimSeat(
         window.location.origin,
         room.code,
         seatId,
-        displayNameDraft.trim() || "客人",
+        name,
       );
+      savePlayerName(name);
       setLobbySeats(result.seats);
       setMySeatId(result.seat.seatId);
       if (result.seat.displayName) setDisplayNameDraft(result.seat.displayName);
+      sfx.play("join");
     } catch (err) {
       setError(err instanceof Error ? err.message : "占座失败");
     } finally {
@@ -400,12 +486,14 @@ export function App() {
     setBusy(true);
     setError(null);
     try {
+      const name = displayNameDraft.trim() || "客人";
       const result = await renameSeat(
         window.location.origin,
         room.code,
         mySeatId,
-        displayNameDraft.trim() || "客人",
+        name,
       );
+      savePlayerName(name);
       setLobbySeats(result.seats);
       if (result.seat.displayName) setDisplayNameDraft(result.seat.displayName);
     } catch (err) {
@@ -420,15 +508,12 @@ export function App() {
     config: { kind: "open" } | { kind: "closed" },
   ) {
     if (!room) return;
-    setBusy(true);
-    setError(null);
+    // 乐观更新：预设会连发多次，等每个响应回来即可
     try {
       const result = await configureLobbySeat(room.code, seatId, config);
       setLobbySeats(result.seats);
     } catch (err) {
       setError(err instanceof Error ? err.message : "配置座位失败");
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -437,6 +522,7 @@ export function App() {
       const found = await fetchRoom(origin, code);
       setRoom(found);
       setLobbySeats(found.seats ?? []);
+      setTurnTimeLimitSec((prev) => found.turnTimeLimitSec ?? prev);
       const me = await fetchMySeat(origin, code);
       setMySeatId((prev) => me.seat?.seatId ?? prev);
       if (found.phase === "match" && !view && !lanRoomViewOnly) {
@@ -445,11 +531,10 @@ export function App() {
           cache: "no-store",
         });
         if (response.ok) {
-          const body = (await response.json()) as {
-            view: SeatView;
-            matchId: string;
-          };
-          setView(body.view);
+          const body = (await response.json()) as MatchPollBody;
+          if (body.view) {
+            applyPollBody(body);
+          }
         }
       }
     } catch {
@@ -497,28 +582,36 @@ export function App() {
     };
   }, [view?.publicState?.status, view?.matchId, room?.code, mySeatId]);
 
-  // LAN match: poll view/presence and keep remote-seat heartbeat alive.
+  // LAN match: incremental poll (since=stateVersion) + presence heartbeat.
   useEffect(() => {
     if (!view || !room || room.phase !== "match") return;
     let cancelled = false;
 
     const refreshMatch = async () => {
       try {
-        const response = await fetch(matchCurrentPath(room.code), {
-          credentials: "include",
-          cache: "no-store",
-        });
+        const since = view.stateVersion;
+        const response = await fetch(
+          matchCurrentPath(room.code, false, { since }),
+          {
+            credentials: "include",
+            cache: "no-store",
+          },
+        );
         if (!response.ok || cancelled) return;
-        const body = (await response.json()) as {
-          view: SeatView;
-          matchId: string;
-          absences?: SeatAbsenceView[];
-          pausedForAbsenceSeatId?: string | null;
-        };
+        const body = (await response.json()) as MatchPollBody;
         if (cancelled) return;
-        setView(body.view);
-        setAbsences(body.absences ?? []);
-        setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId ?? null);
+        if (body.unchanged) {
+          // 状态未变：只刷新在线/暂停信息，不重建视图（ADR-0008）
+          if (body.absences) setAbsences(body.absences);
+          if (body.pausedForAbsenceSeatId !== undefined) {
+            setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId);
+          }
+          if (body.turnDeadline !== undefined) {
+            setTurnDeadline(body.turnDeadline);
+          }
+          return;
+        }
+        applyPollBody(body);
       } catch {
         /* ignore */
       }
@@ -553,7 +646,7 @@ export function App() {
       window.clearInterval(pollId);
       window.clearInterval(beatId);
     };
-  }, [view?.matchId, room?.code, room?.phase, mySeatId]);
+  }, [view?.matchId, room?.code, room?.phase, mySeatId, view?.stateVersion]);
 
   // A remote human who has returned to the room view still needs a lease
   // heartbeat while the match continues in the authority.
@@ -585,6 +678,31 @@ export function App() {
     };
   }, [lanRoomViewOnly, view, room?.code, room?.phase, mySeatId]);
 
+  // Spectator poll: keep the read-only desk in sync.
+  useEffect(() => {
+    if (!spectator || !view || !room || room.phase !== "match") return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const response = await fetch(
+          matchCurrentPath(room.code, false, { spectate: true }),
+          { credentials: "include", cache: "no-store" },
+        );
+        if (!response.ok || cancelled) return;
+        const body = (await response.json()) as MatchPollBody;
+        if (!cancelled && body.view) applyPollBody(body);
+      } catch {
+        /* ignore */
+      }
+    };
+    void refresh();
+    const id = window.setInterval(() => void refresh(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [spectator, view?.matchId, room?.code, room?.phase]);
+
   async function handleAbsenceDisposition(
     seatId: string,
     action: DispositionAction,
@@ -598,6 +716,7 @@ export function App() {
         setView(null);
         setAbsences([]);
         setPausedForAbsenceSeatId(null);
+        setTurnDeadline(null);
         setRoom(null);
         setScreen("home");
         return;
@@ -630,14 +749,8 @@ export function App() {
         cache: "no-store",
       });
       if (response.ok) {
-        const body = (await response.json()) as {
-          view: SeatView;
-          absences?: SeatAbsenceView[];
-          pausedForAbsenceSeatId?: string | null;
-        };
-        setView(body.view);
-        setAbsences(body.absences ?? result.absences);
-        setPausedForAbsenceSeatId(body.pausedForAbsenceSeatId ?? null);
+        const body = (await response.json()) as MatchPollBody;
+        applyPollBody(body);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "回席失败");
@@ -704,40 +817,46 @@ export function App() {
             void submitDecision(decision, label)
           }
           returnLabel={lanMatch ? "返回房间" : "返回开局"}
-          onReturnToSetup={lanMatch ? returnToLanRoom : returnToLanRoom}
+          onReturnToSetup={returnToLanRoom}
           onRematch={
             lanMatch && mySeatId === "1" ? () => void handleRematch() : undefined
           }
           seatStatusFor={(seatId) => absenceSeatStatus(absences, seatId)}
+          roomCode={room?.code ?? null}
+          turnDeadline={turnDeadline}
+          autoDecision={autoDecision}
+          spectator={spectator}
           absenceSlot={
-            <AbsenceDrawer
-              absences={absences}
-              seatNames={Object.fromEntries(
-                view.publicState.seats.map((seat) => [
-                  seat.seatId,
-                  seat.displayName,
-                ]),
-              )}
-              isHost={lanMatch && mySeatId === "1"}
-              busy={busy}
-              pausedForAbsenceSeatId={pausedForAbsenceSeatId}
-              onDisposition={(seatId, action) =>
-                void handleAbsenceDisposition(seatId, action)
-              }
-              showResume={
-                lanMatch &&
-                mySeatId !== null &&
-                mySeatId !== "1" &&
-                absences.some(
-                  (a) =>
-                    a.seatId === mySeatId &&
-                    (a.phase === "reconnecting" ||
-                      a.phase === "absent" ||
-                      a.phase === "timed_out"),
-                )
-              }
-              onResume={() => void handleResumeSeat()}
-            />
+            spectator ? null : (
+              <AbsenceDrawer
+                absences={absences}
+                seatNames={Object.fromEntries(
+                  view.publicState.seats.map((seat) => [
+                    seat.seatId,
+                    seat.displayName,
+                  ]),
+                )}
+                isHost={lanMatch && mySeatId === "1"}
+                busy={busy}
+                pausedForAbsenceSeatId={pausedForAbsenceSeatId}
+                onDisposition={(seatId, action) =>
+                  void handleAbsenceDisposition(seatId, action)
+                }
+                showResume={
+                  lanMatch &&
+                  mySeatId !== null &&
+                  mySeatId !== "1" &&
+                  absences.some(
+                    (a) =>
+                      a.seatId === mySeatId &&
+                      (a.phase === "reconnecting" ||
+                        a.phase === "absent" ||
+                        a.phase === "timed_out"),
+                  )
+                }
+                onResume={() => void handleResumeSeat()}
+              />
+            )
           }
         />
         {error ? <p className="desk-error">{error}</p> : null}
@@ -766,11 +885,7 @@ export function App() {
 
   if (screen === "host-invite" && room) {
     return (
-      <main className="shell">
-        <header className="top">
-          <p className="eyebrow">房间大厅</p>
-          <h1>政变</h1>
-        </header>
+      <main className="lobby-shell">
         <HostInvitePanel
           room={room}
           seats={lobbySeats}
@@ -783,8 +898,12 @@ export function App() {
           onStart={() => void handleStartRoom()}
           onResumeMatch={() => void resumeLanMatch()}
           onBack={() => setScreen("home")}
+          turnTimeLimitSec={turnTimeLimitSec}
+          onTurnTimeLimitChange={(seconds) =>
+            void handleTurnTimeLimitChange(seconds)
+          }
         />
-        {error ? <p className="error">{error}</p> : null}
+        {error ? <p className="error home-error">{error}</p> : null}
       </main>
     );
   }
@@ -792,11 +911,7 @@ export function App() {
   if (screen === "join") {
     const params = new URLSearchParams(window.location.search);
     return (
-      <main className="shell">
-        <header className="top">
-          <p className="eyebrow">加入房间</p>
-          <h1>政变</h1>
-        </header>
+      <main className="page-console">
         <JoinRoomPage
           busy={busy}
           initialCode={params.get("code") ?? ""}
@@ -805,6 +920,7 @@ export function App() {
           onJoined={(found, origin) => {
             setRoom(found);
             setLobbySeats(found.seats ?? []);
+            setTurnTimeLimitSec(found.turnTimeLimitSec ?? 60);
             setMySeatId(null);
             setError(null);
             setScreen("guest-confirm");
@@ -816,18 +932,14 @@ export function App() {
             });
           }}
         />
-        {error ? <p className="error">{error}</p> : null}
+        {error ? <p className="error home-error">{error}</p> : null}
       </main>
     );
   }
 
   if (screen === "guest-confirm" && room) {
     return (
-      <main className="shell">
-        <header className="top">
-          <p className="eyebrow">加入方</p>
-          <h1>政变</h1>
-        </header>
+      <main className="lobby-shell">
         <GuestRoomConfirm
           room={room}
           seats={lobbySeats}
@@ -838,16 +950,17 @@ export function App() {
           onClaim={(seatId) => void handleClaim(seatId)}
           onRename={() => void handleRename()}
           onResumeMatch={() => void resumeLanMatch()}
+          onSpectate={() => void enterSpectate()}
           onBack={() => setScreen("join")}
         />
         {rematchPrompt()}
-        {error ? <p className="error">{error}</p> : null}
+        {error ? <p className="error home-error">{error}</p> : null}
       </main>
     );
   }
 
   return (
-    <main className="shell">
+    <main className="shell shell-home">
       <HomeEntry
         busy={busy}
         recoveryRooms={recoveryRooms}

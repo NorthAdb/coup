@@ -31,7 +31,24 @@ export type RoomRecord = {
   createdAt: number;
   seats: LobbySeat[];
   matchId: string | null;
+  /** 回合限时（秒）；0 = 不限时。默认 60。 */
+  turnTimeLimitSec: number;
 };
+
+export const DEFAULT_TURN_TIME_LIMIT_SEC = 60;
+
+export const TURN_TIME_LIMIT_CHOICES = [0, 30, 60, 90, 120];
+
+export function normalizeTurnTimeLimit(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_TURN_TIME_LIMIT_SEC;
+  }
+  const whole = Math.trunc(value);
+  if (whole === 0) return 0;
+  if (whole < 0) return DEFAULT_TURN_TIME_LIMIT_SEC;
+  // 1–600 秒任意整数；UI 只提供常用档位。
+  return Math.min(600, whole);
+}
 
 export type PublicLobbySeat = {
   seatId: string;
@@ -83,6 +100,16 @@ export type RoomRegistry = {
           | "seat_not_found"
           | "seat_not_configurable"
           | "room_not_lobby";
+      };
+  /** 更新房间设置（仅大厅/续局阶段）。 */
+  updateSettings(
+    code: string,
+    settings: { turnTimeLimitSec: number },
+  ):
+    | { ok: true; room: RoomRecord }
+    | {
+        ok: false;
+        reason: "room_not_found" | "room_locked" | "invalid_setting";
       };
   beginMatch(
     code: string,
@@ -177,12 +204,16 @@ export function createRoomRegistry(): RoomRegistry {
         createdAt: Date.now(),
         seats: defaultSeats(),
         matchId: null,
+        turnTimeLimitSec: DEFAULT_TURN_TIME_LIMIT_SEC,
       };
       rooms.set(code, room);
       return room;
     },
     restore(room) {
-      rooms.set(room.code, structuredClone(room));
+      const cloned = structuredClone(room);
+      // 旧版持久化房间没有该字段：回填默认值。
+      cloned.turnTimeLimitSec = normalizeTurnTimeLimit(cloned.turnTimeLimitSec);
+      rooms.set(cloned.code, cloned);
     },
     getByCode(code) {
       if (!isValidRoomCode(code)) return null;
@@ -247,6 +278,19 @@ export function createRoomRegistry(): RoomRegistry {
       }
       seat.rematchStatus = null;
       return { ok: true, seat, room };
+    },
+    updateSettings(code, settings) {
+      const room = rooms.get(code);
+      if (!room) return { ok: false, reason: "room_not_found" };
+      if (room.phase === "match") {
+        return { ok: false, reason: "room_locked" };
+      }
+      const limit = normalizeTurnTimeLimit(settings.turnTimeLimitSec);
+      if (limit !== settings.turnTimeLimitSec) {
+        return { ok: false, reason: "invalid_setting" };
+      }
+      room.turnTimeLimitSec = limit;
+      return { ok: true, room };
     },
     beginMatch(code, matchId) {
       const room = rooms.get(code);
@@ -339,6 +383,7 @@ export function roomInvitePayload(input: {
       joinUrl: null,
       candidates,
       seats,
+      turnTimeLimitSec: room.turnTimeLimitSec,
       error: "no_lan_ipv4" as const,
     };
   }
@@ -350,6 +395,7 @@ export function roomInvitePayload(input: {
     joinUrl: buildJoinUrl({ host: lanHost, port, code: room.code }),
     candidates,
     seats,
+    turnTimeLimitSec: room.turnTimeLimitSec,
     error: null,
   };
 }

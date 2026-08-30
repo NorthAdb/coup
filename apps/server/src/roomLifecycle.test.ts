@@ -10,6 +10,7 @@ const room: RoomRecord = {
   createdAt: 1,
   matchId: "match-1",
   seats: [],
+  turnTimeLimitSec: 60,
 };
 
 it("treats a lobby with only the host seat as empty", () => {

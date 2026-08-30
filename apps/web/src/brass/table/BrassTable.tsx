@@ -403,7 +403,7 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
                 capacity={COAL_MARKET_CAPACITY}
                 prices={COAL_MARKET_PRICES}
                 floor={COAL_FLOOR_PRICE}
-                color="#3d3a35"
+                kind="coal"
               />
             </div>
             <div className="brass-market-row">
@@ -413,7 +413,7 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
                 capacity={IRON_MARKET_CAPACITY}
                 prices={IRON_MARKET_PRICES}
                 floor={IRON_FLOOR_PRICE}
-                color="#b05f2c"
+                kind="iron"
               />
             </div>
             <div className="brass-market-hint">买煤需连通商人位；市场空：煤£8 / 铁£6</div>
@@ -673,13 +673,13 @@ function MarketBar({
   capacity,
   prices,
   floor,
-  color,
+  kind,
 }: {
   count: number;
   capacity: number;
   prices: readonly number[];
   floor: number;
-  color: string;
+  kind: "coal" | "iron";
 }) {
   const buyPrice = buyPriceAt(prices, capacity, count, 0, floor);
   const sellPrice = count < capacity ? prices[capacity - 1 - count] : null;
@@ -691,7 +691,7 @@ function MarketBar({
           const price = prices[i];
           return (
             <span key={i} className={`brass-market-slot ${occupied ? "filled" : ""}`} title={`£${price}`}>
-              {occupied ? <span className="brass-market-cube" style={{ background: color }} /> : <span className="brass-market-price">£{price}</span>}
+              {occupied ? <span className={`brass-market-cube brass-market-cube--${kind}`} /> : <span className="brass-market-price">£{price}</span>}
             </span>
           );
         })}

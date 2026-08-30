@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
+import type { CSSProperties, ReactElement } from "react";
 import type { BrassState, IndustryType } from "@coup/brass-domain";
 import { LINKS, linkEndpoints, LOCATIONS, MERCHANTS, TILE_SPECS, merchantSlotsFor, tileSpec } from "@coup/brass-domain";
-import { BOARD_HEIGHT, BOARD_WIDTH, FARM_NODES, MERCHANT_NODES, NODE_POS } from "./brassMap.js";
+import { BOARD_HEIGHT, BOARD_WIDTH, NODE_POS } from "./brassMap.js";
 import { INDUSTRY_COLOR, INDUSTRY_SHORT, locationLabel, merchantBonusLabel, roman } from "../labels.js";
 
 export type BoardMapProps = {
@@ -54,6 +55,321 @@ function linkPointsOf(industry: IndustryType, level: number): number {
   return tileSpec(industry, level).linkPoints;
 }
 
+/* ======================================================================
+   产业徽标（24×24 网格，单色剪影，渲染时缩放）
+   ====================================================================== */
+
+function IndustryGlyph({ industry }: { industry: IndustryType }) {
+  switch (industry) {
+    case "cotton":
+      return (
+        <g>
+          <circle cx={12} cy={6.8} r={2.8} />
+          <circle cx={17.1} cy={10} r={2.8} />
+          <circle cx={15.2} cy={15.9} r={2.8} />
+          <circle cx={8.8} cy={15.9} r={2.8} />
+          <circle cx={6.9} cy={10} r={2.8} />
+          <circle cx={12} cy={12.2} r={3.1} />
+        </g>
+      );
+    case "manufacturer":
+      return (
+        <g>
+          <rect x={4.5} y={6} width={15} height={13.5} rx={1.4} />
+          <path d="M6.2 7.8 17.8 17.7 M17.8 7.8 6.2 17.7" stroke="var(--glyph-brace, #000)" strokeWidth={1.5} fill="none" opacity={0.55} />
+        </g>
+      );
+    case "pottery":
+      return (
+        <g>
+          <path d="M10 3h4v2.1c2.9 1.3 4.4 3.6 4.4 6.5 0 4.4-2.7 7.9-6.4 7.9s-6.4-3.5-6.4-7.9c0-2.9 1.5-5.2 4.4-6.5V3z" />
+          <rect x={8.6} y={20} width={6.8} height={1.7} rx={0.8} />
+        </g>
+      );
+    case "coal":
+      return (
+        <g>
+          <circle cx={8.8} cy={8.8} r={2} />
+          <circle cx={12.3} cy={7.8} r={2.3} />
+          <circle cx={15.7} cy={9} r={1.9} />
+          <path d="M4.4 11h15.2l-2.5 7H6.9l-2.5-7z" />
+          <circle cx={9} cy={19.8} r={1.7} />
+          <circle cx={15} cy={19.8} r={1.7} />
+        </g>
+      );
+    case "iron":
+      return <path d="M5.5 4.5h13v3.4h-4.6v8.2h4.6v3.4h-13v-3.4h4.6V7.9H5.5V4.5z" />;
+    case "brewery":
+      return (
+        <g>
+          <path d="M8.2 4.4c2.5-1 5.1-1 7.6 0l.7 3.6c.5 2.7.5 5.6 0 8.3l-.7 3.5c-2.5 1-5.1 1-7.6 0l-.7-3.5c-.5-2.7-.5-5.6 0-8.3l.7-3.6z" />
+          <path d="M7.3 9.6h9.4 M7.1 14.4h9.8" stroke="var(--glyph-brace, #000)" strokeWidth={1.4} fill="none" opacity={0.5} />
+        </g>
+      );
+  }
+}
+
+/* ======================================================================
+   资源 token：煤立方 / 铁锭 / 啤酒桶（7×7 网格）
+   ====================================================================== */
+
+export function CoalCube({ s = 7 }: { s?: number }) {
+  return (
+    <g transform={`scale(${(s / 7).toFixed(3)})`}>
+      <polygon points="3.5,0.4 6.6,2.1 3.5,3.8 0.4,2.1" fill="#585349" />
+      <polygon points="0.4,2.1 3.5,3.8 3.5,6.9 0.4,5.2" fill="#1d1a15" />
+      <polygon points="6.6,2.1 3.5,3.8 3.5,6.9 6.6,5.2" fill="#332f28" />
+      <polygon points="3.5,0.4 6.6,2.1 3.5,3.8 0.4,2.1" fill="#ffffff" opacity={0.14} />
+    </g>
+  );
+}
+
+export function IronBeam({ s = 7 }: { s?: number }) {
+  return (
+    <g transform={`scale(${(s / 7).toFixed(3)})`}>
+      <polygon points="0.9,2.9 6.1,2.9 7,6.6 0,6.6" fill="#a9531f" />
+      <polygon points="0.9,2.9 6.1,2.9 5.8,4.3 1.2,4.3" fill="#ea9c5d" />
+      <polygon points="6.1,2.9 7,6.6 6.2,6.6 5.8,4.3" fill="#7e3c15" />
+    </g>
+  );
+}
+
+export function BeerBarrel({ s = 7 }: { s?: number }) {
+  return (
+    <g transform={`scale(${(s / 7).toFixed(3)})`}>
+      <rect x={0.8} y={0.7} width={5.4} height={5.8} rx={2.1} fill="#b9863f" />
+      <rect x={0.8} y={2.2} width={5.4} height={0.95} fill="#6e4b1f" />
+      <rect x={0.8} y={4.2} width={5.4} height={0.95} fill="#6e4b1f" />
+      <rect x={1.5} y={1.1} width={1.5} height={1.3} rx={0.65} fill="#dcab61" />
+    </g>
+  );
+}
+
+/** 瓦片产出行：按顺序渲染煤/铁/酒 token。 */
+function ProduceRow({ coal, iron, beer, s = 6.6, gap = 7.4 }: { coal: number; iron: number; beer: number; s?: number; gap?: number }) {
+  const total = coal + iron + beer;
+  if (total === 0) return null;
+  const width = (total - 1) * gap;
+  return (
+    <g transform={`translate(${-width / 2}, 0)`}>
+      {Array.from({ length: coal }, (_, i) => (
+        <g key={`c${i}`} transform={`translate(${i * gap - s / 2 + gap / 2}, ${-s / 2})`}>
+          <CoalCube s={s} />
+        </g>
+      ))}
+      {Array.from({ length: iron }, (_, i) => (
+        <g key={`i${i}`} transform={`translate(${(coal + i) * gap - s / 2 + gap / 2}, ${-s / 2})`}>
+          <IronBeam s={s} />
+        </g>
+      ))}
+      {Array.from({ length: beer }, (_, i) => (
+        <g key={`b${i}`} transform={`translate(${(coal + iron + i) * gap - s / 2 + gap / 2}, ${-s / 2})`}>
+          <BeerBarrel s={s} />
+        </g>
+      ))}
+    </g>
+  );
+}
+
+/* ======================================================================
+   城市天际线（差异化剪影；基线 y=0，画在 ~36×20 内）
+   ====================================================================== */
+
+const SKY_FRONT = "#141009";
+const SKY_WIN = "#d9b64a";
+
+function WinDots({ at }: { at: [number, number][] }) {
+  return (
+    <>
+      {at.map(([x, y], i) => (
+        <rect key={i} x={x} y={y} width={1.6} height={2.1} fill={SKY_WIN} opacity={0.55} />
+      ))}
+    </>
+  );
+}
+
+function SkyMill({ h = 9, n = 3, chimney = true }: { h?: number; n?: number; chimney?: boolean }) {
+  const w = 30;
+  const tooth = w / n;
+  return (
+    <g>
+      {chimney ? (
+        <g>
+          <rect x={w / 2 - 8} y={-h - 6} width={3} height={h + 6} fill={SKY_FRONT} />
+          <circle cx={w / 2 - 6.5} cy={-h - 8.5} r={1.6} fill="#d8ccb0" opacity={0.4} />
+        </g>
+      ) : null}
+      {Array.from({ length: n }, (_, i) => {
+        const x = -w / 2 + i * tooth;
+        return <path key={i} d={`M${x} 0 V${-h + 3.4} L${x + tooth * 0.62} ${-h} V0 Z`} fill={SKY_FRONT} />;
+      })}
+      <WinDots at={[[-w / 2 + 3, -4.5], [-w / 2 + tooth + 3, -4.5], [w / 2 - 14, -4.5]]} />
+    </g>
+  );
+}
+
+function SkyKiln() {
+  return (
+    <g>
+      {[-12.5, 0.5, 13].map((x, i) => {
+        const h = [-11, -13.5, -9][i];
+        const r = 3.6;
+        return <path key={i} d={`M${x - r} 0 V${h + 4} Q${x - r} ${h} ${x} ${h} Q${x + r} ${h} ${x + r} ${h + 4} V0 Z`} fill={SKY_FRONT} />;
+      })}
+      <WinDots at={[[-13.6, -3.5], [12, -3.5]]} />
+    </g>
+  );
+}
+
+function SkyMine() {
+  return (
+    <g>
+      <path d="M-13 0 L-4.5 -12.5 L4 0" stroke={SKY_FRONT} strokeWidth={2.4} fill="none" />
+      <circle cx={-4.5} cy={-14} r={3.4} stroke={SKY_FRONT} strokeWidth={1.5} fill="none" />
+      <path d="M-4.5 -17.4 V-10.6 M-7.6 -14 H-1.4" stroke={SKY_FRONT} strokeWidth={1} />
+      <rect x={6} y={-6.5} width={10} height={6.5} fill={SKY_FRONT} />
+      <WinDots at={[[8.4, -4.6], [12.4, -4.6]]} />
+    </g>
+  );
+}
+
+function SkyFurnace() {
+  return (
+    <g>
+      <path d="M-9 0 L-6.2 -14.5 L6.2 -14.5 L9 0 Z" fill={SKY_FRONT} />
+      <rect x={-7.4} y={-16.6} width={14.8} height={2.4} fill={SKY_FRONT} />
+      <rect x={10} y={-11} width={3.2} height={11} fill={SKY_FRONT} />
+      <WinDots at={[[-2.4, -9.5], [0.8, -9.5], [-2.4, -5], [0.8, -5]]} />
+    </g>
+  );
+}
+
+function SkySpire() {
+  return (
+    <g>
+      <rect x={-13} y={-6} width={15} height={6} fill={SKY_FRONT} />
+      <rect x={2} y={-10} width={8} height={10} fill={SKY_FRONT} />
+      <path d="M2 -10 L6 -19.5 L10 -10 Z" fill={SKY_FRONT} />
+      <path d="M6 -22.4 V-19.2 M4.6 -21 H7.4" stroke={SKY_FRONT} strokeWidth={1.1} />
+      <WinDots at={[[-9.5, -3.8], [-5.5, -3.8], [4.6, -7]]} />
+    </g>
+  );
+}
+
+function SkyCathedral() {
+  return (
+    <g>
+      <rect x={-14} y={-4.5} width={28} height={4.5} fill={SKY_FRONT} />
+      <rect x={-13} y={-11} width={5.4} height={11} fill={SKY_FRONT} />
+      <rect x={7.6} y={-11} width={5.4} height={11} fill={SKY_FRONT} />
+      <path d="M-13 -11 L-10.3 -15.5 L-7.6 -11 Z" fill={SKY_FRONT} />
+      <path d="M7.6 -11 L10.3 -15.5 L13 -11 Z" fill={SKY_FRONT} />
+      <path d="M-3.4 -4.5 L0.2 -18.5 L3.8 -4.5 Z" fill={SKY_FRONT} />
+      <WinDots at={[[-11.2, -8.2], [9.4, -8.2], [-0.8, -8]]} />
+    </g>
+  );
+}
+
+function SkyCastle() {
+  return (
+    <g>
+      <rect x={-14} y={-13} width={7} height={13} fill={SKY_FRONT} />
+      <rect x={7} y={-13} width={7} height={13} fill={SKY_FRONT} />
+      <rect x={-7} y={-6.5} width={14} height={6.5} fill={SKY_FRONT} />
+      {[-14, -11.7, -9.4].map((x) => (
+        <rect key={`l${x}`} x={x} y={-15.2} width={1.6} height={2.2} fill={SKY_FRONT} />
+      ))}
+      {[7, 9.3, 11.6].map((x) => (
+        <rect key={`r${x}`} x={x} y={-15.2} width={1.6} height={2.2} fill={SKY_FRONT} />
+      ))}
+      <WinDots at={[[-11.6, -9.5], [-11.6, -4], [9.6, -9.5], [9.6, -4], [-2.4, -4]]} />
+    </g>
+  );
+}
+
+function SkyHall({ grand = false }: { grand?: boolean }) {
+  return (
+    <g>
+      <rect x={-15} y={-8.5} width={30} height={8.5} fill={SKY_FRONT} />
+      <path d={grand ? "M-15 -8.5 L0 -14.5 L15 -8.5 Z" : "M-15 -8.5 L0 -13.5 L15 -8.5 Z"} fill={SKY_FRONT} />
+      {grand ? <path d="M-3.4 -13.8 A3.4 3.4 0 0 1 3.4 -13.8 Z" fill={SKY_FRONT} /> : null}
+      {[-10, -4.4, 1.2, 6.8].map((x) => (
+        <rect key={x} x={x} y={-6.4} width={2} height={6.4} fill="#3a3227" />
+      ))}
+      <WinDots at={[[12.4, -6.2], [-13.2, -6.2]]} />
+    </g>
+  );
+}
+
+function SkyWharf() {
+  return (
+    <g>
+      <rect x={-14} y={-7.5} width={15} height={7.5} fill={SKY_FRONT} />
+      <path d="M-14 -7.5 L-6.5 -12.8 L1 -7.5 Z" fill={SKY_FRONT} />
+      <path d="M4 0 V-9 L11.5 -11.5 M4 -9 L-0.5 -6.5" stroke={SKY_FRONT} strokeWidth={1.7} fill="none" />
+      <WinDots at={[[-11.8, -5], [-8, -5], [-4.4, -5]]} />
+    </g>
+  );
+}
+
+function SkyBrewhouse() {
+  return (
+    <g>
+      <rect x={-14} y={-6.5} width={12.5} height={6.5} fill={SKY_FRONT} />
+      <path d="M-14 -6.5 L-7.75 -12 L-1.5 -6.5 Z" fill={SKY_FRONT} />
+      <rect x={2.5} y={-15} width={5.4} height={15} rx={1} fill={SKY_FRONT} />
+      <circle cx={11.5} cy={-3.2} r={2.6} fill={SKY_FRONT} />
+      <circle cx={5.2} cy={-17} r={1.5} fill="#d8ccb0" opacity={0.4} />
+      <WinDots at={[[-11.6, -4.2], [-7.4, -4.2]]} />
+    </g>
+  );
+}
+
+function SkyBarn() {
+  return (
+    <g>
+      <rect x={-12} y={-6.5} width={15} height={6.5} fill={SKY_FRONT} />
+      <path d="M-12 -6.5 L-4.5 -12.5 L3 -6.5 Z" fill={SKY_FRONT} />
+      <rect x={7} y={-11} width={5.4} height={11} fill={SKY_FRONT} />
+      <path d="M7 -11 A2.7 2.7 0 0 1 12.4 -11 Z" fill={SKY_FRONT} />
+    </g>
+  );
+}
+
+/** 每城一座剪影，参考真实城市的标志建筑。 */
+const CITY_SKYLINE: Record<string, () => ReactElement> = {
+  belper: () => <SkyMill h={9} n={3} />,
+  derby: () => <SkySpire />,
+  leek: () => <SkyMill h={8} n={2} />,
+  "stoke-on-trent": () => <SkyKiln />,
+  stone: () => <SkyWharf />,
+  uttoxeter: () => <SkySpire />,
+  stafford: () => <SkyHall />,
+  "burton-on-trent": () => <SkyBrewhouse />,
+  cannock: () => <SkyMine />,
+  tamworth: () => <SkyCastle />,
+  walsall: () => <SkyMill h={7} n={3} />,
+  wolverhampton: () => <SkyMill h={10} n={3} />,
+  coalbrookdale: () => <SkyFurnace />,
+  dudley: () => <SkyCastle />,
+  birmingham: () => <SkyHall grand />,
+  nuneaton: () => <SkyMill h={8} n={3} />,
+  coventry: () => <SkyCathedral />,
+  kidderminster: () => <SkyMill h={7} n={2} />,
+  worcester: () => <SkyCathedral />,
+  redditch: () => <SkyFurnace />,
+};
+
+function CitySkyline({ id, farm }: { id: string; farm: boolean }) {
+  const build = farm ? () => <SkyBarn /> : CITY_SKYLINE[id];
+  if (!build) return null;
+  return <g transform="translate(0, -8.5)">{build()}</g>;
+}
+
+/* ======================================================================
+   主组件
+   ====================================================================== */
+
 /** 追踪新落子 / 新翻面，驱动局内动效。 */
 type TileMemo = Map<string, { flipped: boolean }>;
 
@@ -74,7 +390,6 @@ export function BoardMap({
 
   const merchantTileAt = (slotId: string) => state.merchantTiles.find((m) => m.slotId === slotId);
 
-  // 与上一 stateVersion 比对：新瓦片弹入、翻面闪烁。
   const memoRef = useRef<{ version: number; tiles: TileMemo; links: Set<string> }>({
     version: -1,
     tiles: new Map(),
@@ -126,13 +441,6 @@ export function BoardMap({
             values="0 0 0 0 0.32  0 0 0 0 0.26  0 0 0 0 0.16  0 0 0 0.5 0"
           />
         </filter>
-        <filter id="b-glow" x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation="4.5" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
         <linearGradient id="b-plot-face" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#544a3d" />
           <stop offset="100%" stopColor="#39322a" />
@@ -143,14 +451,39 @@ export function BoardMap({
         </linearGradient>
       </defs>
 
-      {/* 版图底：羊皮纸 + 纸纹 + 暗角 + 双框 */}
+      {/* 版图底：羊皮纸 + 纸纹 + 地形晕染 + 暗角 + 双框 */}
       <rect width={BOARD_WIDTH} height={BOARD_HEIGHT} rx={20} fill="url(#b-parchment)" />
+      <ellipse cx={175} cy={430} rx={215} ry={160} fill="#6b7a55" opacity={0.07} />
+      <ellipse cx={965} cy={330} rx={205} ry={145} fill="#7a6b45" opacity={0.06} />
+      <ellipse cx={520} cy={820} rx={260} ry={110} fill="#6b7a55" opacity={0.05} />
       <rect width={BOARD_WIDTH} height={BOARD_HEIGHT} rx={20} filter="url(#b-grain)" opacity={0.28} />
       <rect width={BOARD_WIDTH} height={BOARD_HEIGHT} rx={20} fill="url(#b-vignette)" pointerEvents="none" />
       <rect x={7} y={7} width={BOARD_WIDTH - 14} height={BOARD_HEIGHT - 14} rx={15} fill="none" stroke="#3f3423" strokeWidth={2.5} opacity={0.75} />
       <rect x={13} y={13} width={BOARD_WIDTH - 26} height={BOARD_HEIGHT - 26} rx={11} fill="none" stroke="#a8863c" strokeWidth={1.2} opacity={0.6} />
 
-      {/* 连线（运河水系 + 铁路枕木） */}
+      {/* 角落装饰：罗盘 + 铭牌 */}
+      <g transform="translate(1124, 47)" opacity={0.85}>
+        <circle r={23} fill="#e9dcbc" stroke="#8a795d" strokeWidth={1.4} />
+        <circle r={18.5} fill="none" stroke="#a8863c" strokeWidth={0.7} opacity={0.7} />
+        <polygon points="0,-16 4,0 0,16 -4,0" fill="#a63d2f" opacity={0.85} />
+        <polygon points="-16,0 0,-4 16,0 0,4" fill="#3f3423" opacity={0.85} />
+        <circle r={2.2} fill="#3f3423" />
+        <text y={-26} textAnchor="middle" fontSize={9} fontWeight={800} fill="#5d5142">
+          N
+        </text>
+      </g>
+      <g transform="translate(38, 866)">
+        <rect x={0} y={0} width={186} height={46} rx={8} fill="#f2e7cb" stroke="#3f3423" strokeWidth={1.6} opacity={0.92} />
+        <rect x={4} y={4} width={178} height={38} rx={5} fill="none" stroke="#a8863c" strokeWidth={0.8} opacity={0.8} />
+        <text x={93} y={21} textAnchor="middle" fontSize={14.5} fontWeight={800} fill="#3f3423" letterSpacing={2} fontFamily='"Palatino Linotype", "Songti SC", Georgia, serif'>
+          工业革命 · 伯明翰
+        </text>
+        <text x={93} y={37} textAnchor="middle" fontSize={7.5} fill="#7a6b4c" letterSpacing={2.4}>
+          BRASS : BIRMINGHAM · MIDLAND WORKS
+        </text>
+      </g>
+
+      {/* 连线：运河水系 / 铁路枕木 */}
       {LINKS.map((def, index) => {
         const a = NODE_POS[def.a];
         const b = NODE_POS[def.b];
@@ -175,25 +508,29 @@ export function BoardMap({
           >
             {def.canal ? (
               <>
-                <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#5c7f90" strokeWidth={11} strokeLinecap="round" opacity={0.28} />
-                <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#7fa2b2" strokeWidth={5} strokeLinecap="round" opacity={0.85} />
+                <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#4e7183" strokeWidth={12} strokeLinecap="round" opacity={0.3} />
+                <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#7fa2b2" strokeWidth={6.4} strokeLinecap="round" opacity={0.9} />
+                <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#b7d0d9" strokeWidth={1.7} strokeLinecap="round" strokeDasharray="12 14" opacity={0.65} />
               </>
             ) : null}
             {def.rail ? (
-              <line
-                x1={a.x}
-                y1={a.y}
-                x2={b.x}
-                y2={b.y}
-                stroke="#43351f"
-                strokeWidth={3.4}
-                strokeDasharray="11 7"
-                strokeLinecap="round"
-                opacity={0.8}
-              />
+              <>
+                <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#241c11" strokeWidth={7.4} strokeLinecap="round" opacity={0.9} />
+                <line
+                  x1={a.x}
+                  y1={a.y}
+                  x2={b.x}
+                  y2={b.y}
+                  stroke="#8a6f42"
+                  strokeWidth={7.4}
+                  strokeDasharray="2.4 7.6"
+                  strokeLinecap="butt"
+                  opacity={0.95}
+                />
+              </>
             ) : null}
             {highlighted && !occupied.length ? (
-              <line className="b-ants" x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#e8b83c" strokeWidth={8.5} strokeLinecap="round" strokeDasharray="13 9" opacity={0.95} />
+              <line className="b-ants" x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#e8b83c" strokeWidth={9} strokeLinecap="round" strokeDasharray="13 9" opacity={0.95} />
             ) : null}
             {selected ? (
               <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#a63d2f" strokeWidth={9} strokeLinecap="round" opacity={0.55} />
@@ -201,13 +538,15 @@ export function BoardMap({
             {clickable ? (
               <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={18} strokeLinecap="round" />
             ) : null}
-            {/* 已放置的 Link 板块 */}
+            {/* 已放置的 Link 板块：木梁 + 轨道纹 */}
             {occupied.map((link) => (
               <g key={link.id} transform={`translate(${mid.x},${mid.y}) rotate(${angle})`}>
                 <g className={`b-anim ${newLinkIds.has(link.id) ? "b-pop" : ""}`}>
-                  <rect x={-23} y={-9} width={46} height={18} rx={4.5} fill={playerColor(link.player)} stroke="#241f16" strokeWidth={1.6} />
-                  <rect x={-19} y={-6} width={38} height={6} rx={3} fill="#ffffff" opacity={0.22} />
-                  <circle cx={0} cy={2.5} r={2.4} fill="#e8c96a" stroke="#241f16" strokeWidth={0.7} />
+                  <rect x={-23} y={-9.5} width={46} height={19} rx={4.5} fill={playerColor(link.player)} stroke="#241f16" strokeWidth={1.6} />
+                  <rect x={-19} y={-6.5} width={38} height={5.5} rx={2.6} fill="#ffffff" opacity={0.2} />
+                  <line x1={-19} y1={2.6} x2={19} y2={2.6} stroke="#241f16" strokeWidth={5.4} strokeDasharray="2.2 5.6" opacity={0.32} />
+                  <line x1={-19} y1={2.6} x2={19} y2={2.6} stroke="#f3e7c8" strokeWidth={1.1} opacity={0.6} />
+                  <circle cx={0} cy={-3.4} r={2} fill="#e8c96a" stroke="#241f16" strokeWidth={0.7} />
                 </g>
               </g>
             ))}
@@ -215,7 +554,7 @@ export function BoardMap({
         );
       })}
 
-      {/* 建造地点 */}
+      {/* 建造地点：石板地块 + 城市剪影 + 槽位 */}
       {Object.entries(LOCATIONS).map(([id, def]) => {
         const pos = NODE_POS[id];
         if (!pos) return null;
@@ -227,7 +566,8 @@ export function BoardMap({
         const slotGap = 7;
         const innerW = farm ? 40 : def.slots.length * slotW + (def.slots.length - 1) * slotGap + 18;
         const w = farm ? 52 : Math.max(104, innerW);
-        const h = farm ? 40 : 70;
+        const h = farm ? 50 : 95;
+        const longName = !farm && (id === "stoke-on-trent" || id === "burton-on-trent" || id === "wolverhampton" || id === "coalbrookdale" || id === "kidderminster");
         return (
           <g
             key={id}
@@ -244,13 +584,16 @@ export function BoardMap({
             {selected ? (
               <rect x={-w / 2 - 7} y={-h / 2 - 7} width={w + 14} height={h + 14} rx={13} fill="none" stroke="#a63d2f" strokeWidth={3.2} />
             ) : null}
-            {/* 石板地块 */}
             <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={9} fill="url(#b-plot-face)" stroke="#221c13" strokeWidth={1.8} />
-            <rect x={-w / 2 + 2.5} y={-h / 2 + 2.5} width={w - 5} height={10} rx={6} fill="#ffffff" opacity={0.07} />
+            <rect x={-w / 2 + 2.5} y={-h / 2 + 2.5} width={w - 5} height={11} rx={6} fill="#ffffff" opacity={0.07} />
+            {/* 城市剪影（地名下方） */}
+            <g style={{ pointerEvents: "none" }}>
+              <CitySkyline id={id} farm={farm} />
+            </g>
             <text
-              y={farm ? -h / 2 + 15 : -h / 2 + 16}
+              y={farm ? -h / 2 + 15 : -h / 2 + 15.5}
               textAnchor="middle"
-              fontSize={farm ? 10 : id === "stoke-on-trent" || id === "burton-on-trent" || id === "wolverhampton" || id === "coalbrookdale" || id === "kidderminster" ? 10.5 : 12}
+              fontSize={farm ? 10 : longName ? 10.5 : 12}
               fill="#f3ead6"
               fontWeight={800}
               letterSpacing={farm ? 1 : 1.4}
@@ -265,7 +608,7 @@ export function BoardMap({
                   const total = def.slots.length * slotW + (def.slots.length - 1) * slotGap;
                   const x = -total / 2 + slotIndex * (slotW + slotGap);
                   return (
-                    <g key={slotIndex} transform={`translate(${x}, -6)`}>
+                    <g key={slotIndex} transform={`translate(${x}, 4)`}>
                       <rect x={0} y={0} width={slotW} height={slotW} rx={5} fill="#262019" stroke="#141009" strokeWidth={1} />
                       {tile ? null : (
                         slot.industries.map((ind, i, arr) => {
@@ -305,7 +648,7 @@ export function BoardMap({
               : (() => {
                   const tile = tileAt(id, 0);
                   return tile ? (
-                    <g transform="translate(-13, -10)">
+                    <g transform="translate(-13, -6)">
                       <IndustryTile tile={tile} x={0} y={0} size={26} isNew={newTileIds.has(tile.id)} isFlippedNow={flippedTileIds.has(tile.id)} />
                     </g>
                   ) : null;
@@ -350,7 +693,7 @@ export function BoardMap({
                         {tile.goods.map((g, gi) => (
                           <rect
                             key={g}
-                            x={5 + gi * 7}
+                            x={4.5 + gi * 7}
                             y={h / 2 - 3.5}
                             width={5.5}
                             height={7}
@@ -360,7 +703,11 @@ export function BoardMap({
                             strokeWidth={0.6}
                           />
                         ))}
-                        {tile.beer ? <circle cx={w - 6} cy={5.5} r={3.4} fill="#d08a2e" stroke="#efe6d2" strokeWidth={0.9} /> : null}
+                        {tile.beer ? (
+                          <g transform={`translate(${w - 8.4}, 1.6)`}>
+                            <BeerBarrel s={6.6} />
+                          </g>
+                        ) : null}
                       </>
                     )
                   ) : null}
@@ -374,7 +721,7 @@ export function BoardMap({
   );
 }
 
-/** 产业瓦片：未翻面 = 产业色块 + 等级；翻面 = 褐背 + VP + 连线点。 */
+/** 产业瓦片：未翻面 = 产业色块 + 徽标 + 等级 + 产量 token；翻面 = 褐背 + VP + 连线点。 */
 function IndustryTile({
   tile,
   x,
@@ -394,6 +741,7 @@ function IndustryTile({
   const s = size;
   const vp = vpOf(tile.industry, tile.level);
   const lp = linkPointsOf(tile.industry, tile.level);
+  const glyphScale = 0.46;
   return (
     <g transform={`translate(${x},${y})`} style={{ pointerEvents: "none" }}>
       <g className={`b-anim b-tile ${isNew ? "b-pop" : ""} ${isFlippedNow ? "b-flip" : ""}`}>
@@ -422,25 +770,19 @@ function IndustryTile({
           </>
         ) : (
           <>
-            <text x={5} y={12} fontSize={9} fontWeight={800} fill={face.ink} opacity={0.85}>
-              {INDUSTRY_SHORT[tile.industry]}
-            </text>
+            <g
+              transform={`translate(2.6, 2.4) scale(${glyphScale})`}
+              fill={face.ink}
+              style={{ "--glyph-brace": face.bottom } as CSSProperties}
+            >
+              <IndustryGlyph industry={tile.industry} />
+            </g>
             <text x={s / 2} y={s / 2 + 6.5} textAnchor="middle" fontSize={s * 0.42} fontWeight={800} fill={face.ink}>
               {roman(tile.level)}
             </text>
-            {tile.coal + tile.iron + tile.beer > 0 ? (
-              <g transform={`translate(${s / 2 - ((tile.coal + tile.iron + tile.beer) * 6 - 3) / 2}, ${s - 5})`}>
-                {Array.from({ length: tile.coal }, (_, i) => (
-                  <circle key={`c${i}`} cx={i * 6} cy={0} r={2.3} fill="#191713" stroke="#efe6d2" strokeWidth={0.6} />
-                ))}
-                {Array.from({ length: tile.iron }, (_, i) => (
-                  <circle key={`i${i}`} cx={(tile.coal + i) * 6} cy={0} r={2.3} fill="#c56a32" stroke="#efe6d2" strokeWidth={0.6} />
-                ))}
-                {Array.from({ length: tile.beer }, (_, i) => (
-                  <circle key={`b${i}`} cx={(tile.coal + tile.iron + i) * 6} cy={0} r={2.3} fill="#d08a2e" stroke="#efe6d2" strokeWidth={0.6} />
-                ))}
-              </g>
-            ) : null}
+            <g transform={`translate(${s / 2}, ${s - 4.6})`}>
+              <ProduceRow coal={tile.coal} iron={tile.iron} beer={tile.beer} />
+            </g>
           </>
         )}
       </g>

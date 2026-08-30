@@ -611,11 +611,12 @@ export function BoardMap({
                   const tile = tileAt(id, slotIndex);
                   const total = def.slots.length * slotW + (def.slots.length - 1) * slotGap;
                   const x = -total / 2 + slotIndex * (slotW + slotGap);
+                  const previewHere = Boolean(previewSlot && previewSlot.location === id && previewSlot.slotIndex === slotIndex);
                   return (
                     <g key={slotIndex} transform={`translate(${x}, 4)`}>
                       <rect x={0} y={0} width={slotW} height={slotW} rx={5} fill="#ffffff" opacity={0.38} />
                       <rect x={0.5} y={0.5} width={slotW - 1} height={slotW - 1} rx={5} fill="none" stroke="#7a684a" strokeWidth={1.2} opacity={0.9} />
-                      {tile || (previewSlot && previewSlot.location === id && previewSlot.slotIndex === slotIndex) ? null : (
+                      {tile || previewHere ? null : (
                         slot.industries.length === 1 ? (
                           <g transform={`translate(${slotW / 2 - 6}, ${slotW / 2 - 6}) scale(0.5)`} fill={PLOT_SLOT_GLYPH}>
                             <IndustryGlyph industry={slot.industries[0]} />
@@ -641,10 +642,11 @@ export function BoardMap({
                           isNew={newTileIds.has(tile.id)}
                           isFlippedNow={flippedTileIds.has(tile.id)}
                         />
-                      ) : previewSlot && previewSlot.location === id && previewSlot.slotIndex === slotIndex ? (
-                        <g opacity={0.5} style={{ pointerEvents: "none" }}>
+                      ) : null}
+                      {previewHere ? (
+                        <g opacity={0.55} style={{ pointerEvents: "none" }}>
                           <IndustryTile
-                            tile={{ id: `preview-${id}-${slotIndex}`, industry: previewSlot.industry, level: previewSlot.level, player: myPlayer ?? 0, flipped: false, coal: 0, iron: 0, beer: 0 }}
+                            tile={{ id: `preview-${id}-${slotIndex}`, industry: previewSlot!.industry, level: previewSlot!.level, player: myPlayer ?? 0, flipped: false, coal: 0, iron: 0, beer: 0 }}
                             x={1.5}
                             y={1.5}
                             size={slotW - 3}
@@ -659,11 +661,28 @@ export function BoardMap({
                 })
               : (() => {
                   const tile = tileAt(id, 0);
-                  return tile ? (
-                    <g transform="translate(-13, -6)">
-                      <IndustryTile tile={tile} x={0} y={0} size={26} isNew={newTileIds.has(tile.id)} isFlippedNow={flippedTileIds.has(tile.id)} />
-                    </g>
-                  ) : null;
+                  const previewHere = Boolean(previewSlot && previewSlot.location === id && previewSlot.slotIndex === 0);
+                  return (
+                    <>
+                      {tile ? (
+                        <g transform="translate(-13, -6)">
+                          <IndustryTile tile={tile} x={0} y={0} size={26} isNew={newTileIds.has(tile.id)} isFlippedNow={flippedTileIds.has(tile.id)} />
+                        </g>
+                      ) : null}
+                      {previewHere ? (
+                        <g transform="translate(-13, -6)" opacity={0.55} style={{ pointerEvents: "none" }}>
+                          <IndustryTile
+                            tile={{ id: `preview-${id}-0`, industry: previewSlot!.industry, level: previewSlot!.level, player: myPlayer ?? 0, flipped: false, coal: 0, iron: 0, beer: 0 }}
+                            x={0}
+                            y={0}
+                            size={26}
+                            isNew={false}
+                            isFlippedNow={false}
+                          />
+                        </g>
+                      ) : null}
+                    </>
+                  );
                 })()}
           </g>
         );

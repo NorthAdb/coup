@@ -82,6 +82,8 @@ export function BrassApp() {
         setRoom(invite);
         const me = await fetchMyBrassSeat(code).catch(() => null);
         setMySeatId(me?.seat?.seatId ?? null);
+        // 之前以观战身份进过对局的访客，回席后必须切回玩家轮询（否则看不到手牌）。
+        setSpectator(!me?.seat);
         setScreen("room");
         window.history.replaceState(null, "", `/brass/room/${code}`);
       } catch (e) {
@@ -146,9 +148,6 @@ export function BrassApp() {
         setPausedSeatId(body.pausedForAbsenceSeatId ?? null);
         setTurnDeadline(body.turnDeadline ?? null);
         setAutoDecision(body.autoDecision ?? null);
-        if (body.view?.state.phase && body.view.state.status === "in_progress" && !spectator) {
-          // 保持对局态。
-        }
       } catch (e) {
         const status = (e as { status?: number }).status;
         if (status === 404) {
@@ -194,6 +193,7 @@ export function BrassApp() {
       const invite = await createBrassRoom();
       setRoom(invite);
       setMySeatId("1");
+      setSpectator(false);
       setScreen("room");
       window.history.replaceState(null, "", `/brass/room/${invite.code}`);
     } catch (e) {
@@ -342,6 +342,7 @@ export function BrassApp() {
                       try {
                         const result = await claimBrassSeat(room.code, seat.seatId, displayName);
                         setMySeatId(result.seat.seatId);
+                        setSpectator(false);
                         const invite = await fetchBrassRoom(room.code);
                         setRoom(invite);
                         showToast(`已就座 ${seat.seatId} 号`);
@@ -419,6 +420,7 @@ export function BrassApp() {
                           try {
                             const result = await claimBrassSeat(room.code, s.seatId, displayName);
                             setMySeatId(result.seat.seatId);
+                            setSpectator(false);
                           } catch (e) {
                             showToast(errorText(e));
                           }

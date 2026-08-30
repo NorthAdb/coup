@@ -370,6 +370,7 @@ function applyBuild(state: BrassState, command: Extract<BrassCommand, { type: 'b
     }
   }
 
+  discardCard(state, player, cardId);
   afterActionConsumed(state);
 }
 
@@ -434,6 +435,7 @@ function applyNetwork(state: BrassState, command: Extract<BrassCommand, { type: 
   p.money -= costs + coalCost;
   p.spent += costs + coalCost;
   log(state, 'network', player, { links: placedIds.join(','), era: state.era, money: costs + coalCost });
+  discardCard(state, player, cardId);
   afterActionConsumed(state);
 }
 
@@ -464,6 +466,7 @@ function applyDevelop(state: BrassState, command: Extract<BrassCommand, { type: 
   p.money -= ironCost;
   p.spent += ironCost;
   log(state, 'develop', player, { removed: removed.join(','), iron: command.ironSources.length, money: ironCost });
+  discardCard(state, player, cardId);
   afterActionConsumed(state);
 }
 
@@ -519,6 +522,7 @@ function applySell(state: BrassState, command: Extract<BrassCommand, { type: 'se
     });
   }
 
+  discardCard(state, player, cardId);
   afterActionConsumed(state);
 }
 

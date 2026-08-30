@@ -335,6 +335,28 @@ test('Sell：连通商人+啤酒；翻面进收入；商人啤酒奖励（Glouce
   });
   assert.equal(box.s.players[0].mat.coal.includes(1), false, 'Gloucester 奖励移除面板煤 L1');
   assert.equal(box.s.merchantTiles[2].beer, false);
+  assert.equal(box.s.players[0].hand.includes('ind-pottery#2'), false, 'Sell 也弃牌');
+});
+
+test('每个行动弃 1 张手牌：Network/Build/Develop 都消耗卡牌', () => {
+  const { box, setHand, focus } = rigged(2);
+  focus(0);
+  // Network（场上无板块可放任意线）：弃所用卡。
+  setHand(0, ['ind-pottery#1', 'loc-cannock#1', 'ind-pottery#2']);
+  ok(box, { type: 'network', player: 0, cardId: 'ind-pottery#1', expectedVersion: 0, links: [{ linkIndex: 8, coalSources: [] }] });
+  assert.deepEqual(box.s.players[0].hand, ['loc-cannock#1', 'ind-pottery#2']);
+  assert.deepEqual(box.s.players[0].discard.slice(-1), ['ind-pottery#1']);
+  // Build：弃所用地点卡。
+  focus(0);
+  ok(box, { type: 'build', player: 0, cardId: 'loc-cannock#1', expectedVersion: box.s.stateVersion, industry: 'coal', location: 'cannock', slotIndex: 1, coalSources: [], ironSources: [] });
+  assert.deepEqual(box.s.players[0].hand, ['ind-pottery#2']);
+  assert.deepEqual(box.s.players[0].discard.slice(-1), ['loc-cannock#1']);
+  // Develop：弃所用卡；弃后手牌空 → 回合提前结束并补牌。
+  focus(0);
+  ok(box, { type: 'develop', player: 0, cardId: 'ind-pottery#2', expectedVersion: box.s.stateVersion, industries: ['iron'], ironSources: [{ kind: 'market' }] });
+  assert.deepEqual(box.s.players[0].discard.slice(-1), ['ind-pottery#2']);
+  assert.equal(box.s.currentPlayer, 1, '手牌空 → 回合提前结束');
+  assert.equal(box.s.players[0].hand.length, 8, '回合结束补到 8 张');
 });
 
 test('Loan / Scout / Pass / 并发版本', () => {
@@ -410,9 +432,8 @@ test('全流程：真实命令驱动两个时代（建造→连线→计分→�
   box.s.players[1].hand = ['y1', 'y2', 'y3', 'y4', 'y5', 'y6', 'y7', 'y8'];
   box.s.players[0].money = 60;
   box.s.players[1].money = 60;
-  // 第 1 行动：建制造 L1 于 birmingham（槽 1 专属）——煤需市场，birmingham 连 oxford 才能买；
-  // 先放连线：运河第 1 回合只有 1 行动 → 先连线。
-  ok(box, { type: 'network', player: 0, cardId: 'loc-birmingham#1', expectedVersion: box.s.stateVersion, links: [{ linkIndex: 5, coalSources: [] }] } as never);
+  // 第 1 行动：先连线（弃掉杂卡 x1，保住地点卡供下轮建造）。
+  ok(box, { type: 'network', player: 0, cardId: 'x1', expectedVersion: box.s.stateVersion, links: [{ linkIndex: 5, coalSources: [] }] } as never);
   // 补手牌后继续（引擎自动补到 8）。
   // P1 两个 pass；P0 第二轮：建煤矿 L1（cannock? 用 birmingham iron 槽）→ 直接建铁厂 L1（£5+1煤：市场买，连 oxford ✓）。
   let guard = 0;

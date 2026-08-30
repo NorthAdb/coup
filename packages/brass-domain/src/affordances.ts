@@ -44,7 +44,9 @@ export function buildOptionsForCard(state: BrassState, player: number, cardId: s
   const consider = (location: string, industries: IndustryType[], skipNetworkCheck: boolean) => {
     const locDef = LOCATIONS[location];
     if (!locDef) return;
-    for (const industry of industries) {
+    // 农场酒厂只接受啤酒产业卡/万能产业卡，与 applyBuild 的 farm_needs_brewery_card 校验一致。
+    const inds = locDef.farm && face.kind !== 'wild-industry' ? industries.filter((i) => i === 'brewery') : industries;
+    for (const industry of inds) {
       const stack = state.players[player].mat[industry];
       if (!stack || stack.length === 0) continue;
       const tileLevel = Math.min(...stack);

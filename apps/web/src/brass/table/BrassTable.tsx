@@ -10,6 +10,7 @@ import {
   COAL_MARKET_CAPACITY,
   COAL_MARKET_PRICES,
   developOptions,
+  incomeLevelAt,
   IRON_FLOOR_PRICE,
   IRON_MARKET_CAPACITY,
   IRON_MARKET_PRICES,
@@ -21,6 +22,7 @@ import {
   MERCHANTS,
   networkOptions,
   sellTargets,
+  tileSpec,
 } from "@coup/brass-domain";
 import type { BrassSeatAbsence, BrassView } from "../brassApi.js";
 import { submitBrassCommand } from "../brassApi.js";
@@ -199,6 +201,15 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
     return { info, spot };
   }, [draft, state, myPlayer]);
 
+  // 覆盖目标：无空槽时强制取第一个候选；有空槽时仅在用户勾选后生效。
+  const effectiveOverbuildId = useMemo(() => {
+    if (draft.mode !== "build" || !buildInfo?.spot) return null;
+    const ids = buildInfo.spot.overbuildTileIds;
+    if (ids.length === 0) return null;
+    if (draft.overbuildTileId && ids.includes(draft.overbuildTileId)) return draft.overbuildTileId;
+    return buildInfo.spot.emptySlots.length === 0 ? ids[0] : null;
+  }, [draft, buildInfo]);
+
   const buildCoalCandidates = useMemo(() => {
     if (draft.mode !== "build" || !buildInfo?.spot || buildInfo.spot.costCoal === 0) return [];
     return coalCandidates(state, [draft.location!]);
@@ -257,7 +268,7 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
         industry: spot.industry,
         location: draft.location,
         slotIndex: draft.slotIndex ?? spot.emptySlots[0] ?? 0,
-        overbuildTileId: draft.overbuildTileId ?? undefined,
+        overbuildTileId: (draft.mode === "build" ? effectiveOverbuildId : null) ?? undefined,
         coalSources: draft.coalSources,
         ironSources: draft.ironSources,
       };
@@ -313,16 +324,27 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
     (buildInfo?.spot?.costIron ?? 0) === draft.ironSources.length;
   const canSubmitNetwork =
     draft.mode === "network" &&
-    draft.linkIndexes.length === (state.era === "canal" ? 1 : state.era === "rail" ? Math.min(2, Math.max(1, draft.linkIndexes.length)) : 1) &&
+    (state.era === "canal" ? draft.linkIndexes.length === 1 : draft.linkIndexes.length >= 1 && draft.linkIndexes.length <= 2) &&
     (state.era === "canal" || draft.linkIndexes.every((_, i) => (draft.coalSources[i]?.length ?? 0) === 1)) &&
     (state.era === "canal" || draft.linkIndexes.length !== 2 || draft.beerSource !== null);
   const canSubmitDevelop = draft.mode === "develop" && draft.industries.length >= 1 && draft.ironSources.length === draft.industries.length;
-  const canSubmitSell = draft.mode === "sell" && draft.sales.length >= 1;
+  // 消耗 develop 奖励商人（Gloucester）啤酒的出售必须声明免费研发目标。
+  const canSubmitSell =
+    draft.mode === "sell" &&
+    draft.sales.length >= 1 &&
+    draft.sales.every((s) => {
+      if (!s.beerSources.some((b) => b.kind === "merchant")) return true;
+      const loc = state.merchantTiles.find((m) => m.slotId === s.merchantSlotId)?.location ?? "";
+      if (MERCHANTS[loc]?.bonus.type !== "develop") return true;
+      const stack = s.developIndustry ? state.players[myPlayer ?? 0]?.mat[s.developIndustry] : undefined;
+      return Boolean(stack && stack.length > 0);
+    });
 
   // ----------------------------------------------------------------
   // 渲染
   // ----------------------------------------------------------------
   const deadlineLeft = turnDeadline ? Math.max(0, Math.ceil((turnDeadline.deadlineAt - now) / 1000)) : null;
+  const shortfall = state.phase === "await_shortfall_removal" ? state.shortfall : null;
 
   return (
     <div className="brass-table">
@@ -332,6 +354,7 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
           <span className="brass-era-pill">{state.era === "canal" ? "运河时代" : "铁路时代"}</span>
           <span className="brass-round">第 {state.round} 回合</span>
           <span className="brass-actions-left">剩余行动 {state.actionsLeft}</span>
+          {shortfall ? <span className="brass-era-pill" style={{ background: "#7a3b2e" }}>缺额拆板</span> : null}
           {deadlineLeft !== null ? (
             <span className={`brass-deadline ${deadlineLeft <= 10 ? "urgent" : ""}`}>
               {turnDeadline?.seatId === view.seatId ? "你的倒计时 " : `${turnDeadline?.seatId} 号 `}
@@ -361,7 +384,12 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
             selectedLinkIndex={draft.mode === "network" ? (draft.linkIndexes[draft.linkIndexes.length - 1] ?? null) : null}
             previewSlot={
               draft.mode === "build" && draft.location && buildInfo?.spot
-                ? { location: draft.location, slotIndex: draft.slotIndex ?? buildInfo.spot.emptySlots[0] ?? 0, industry: buildInfo.spot.industry, level: buildInfo.spot.tileLevel }
+                ? {
+                    location: draft.location,
+                    slotIndex: overbuildSlotIndex(state, buildInfo.spot, effectiveOverbuildId),
+                    industry: buildInfo.spot.industry,
+                    level: buildInfo.spot.tileLevel,
+                  }
                 : null
             }
             onLocationClick={(loc) => {
@@ -434,6 +462,17 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
 
       {/* 行动区 */}
       <footer className="brass-actionbar">
+        {shortfall ? (
+          <ShortfallPanel
+            state={state}
+            myPlayer={myPlayer}
+            submitting={submitting}
+            onRemove={(tileId) =>
+              submit({ type: "shortfall_removal", player: myPlayer ?? 0, tileId, expectedVersion: state.stateVersion })
+            }
+          />
+        ) : (
+        <>
         <div className="brass-hand">
           {hand.map((cardId) => {
             const isSelected =
@@ -465,6 +504,13 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
                       const cardIds = has ? d.cardIds.filter((c) => c !== cardId) : [...d.cardIds, cardId].slice(0, 3);
                       return { ...d, cardIds };
                     });
+                  } else if (draft.mode === "build") {
+                    // 切换建造卡后旧地点/产业多半不再合法：换卡时重置建造目标。
+                    setDraft(
+                      draft.cardId === cardId
+                        ? { ...draft, cardId }
+                        : { mode: "build", cardId, location: null, industry: null, slotIndex: null, overbuildTileId: null, coalSources: [], ironSources: [] },
+                    );
                   } else if (draft.mode !== "idle") {
                     setDraft({ ...draft, cardId });
                   } else {
@@ -527,8 +573,10 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
           <BuildDraft
             draft={draft}
             state={state}
+            myPlayer={myPlayer ?? 0}
             spot={buildInfo?.spot ?? null}
             spots={buildInfo?.info.spots ?? []}
+            effectiveOverbuildId={effectiveOverbuildId}
             coalCandidates={buildCoalCandidates}
             ironCandidates={buildIronCandidates}
             onPatch={patchDraft}
@@ -610,7 +658,51 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
             </button>
           </div>
         ) : null}
+        </>
+        )}
       </footer>
+    </div>
+  );
+}
+
+/** 缺额拆板：仅缺额玩家可操作（拆板块得半价，直至补足；无板块则扣 VP 结算）。 */
+function ShortfallPanel({
+  state,
+  myPlayer,
+  submitting,
+  onRemove,
+}: {
+  state: BrassState;
+  myPlayer: number | null;
+  submitting: boolean;
+  onRemove: (tileId: string) => void;
+}) {
+  const sf = state.shortfall;
+  if (!sf) return null;
+  const mine = sf.player === myPlayer;
+  const tiles = state.placedTiles.filter((t) => t.player === sf.player);
+  return (
+    <div className="brass-draft">
+      {mine ? (
+        <>
+          <span className="brass-draft-warn">
+            收入缺额 £{sf.amount}：点击拆除一块场上板块换取半价，直到足以补足缺额
+          </span>
+          <div className="brass-sell-targets">
+            {tiles.map((t) => (
+              <button key={t.id} type="button" className="brass-mat-btn" disabled={submitting} onClick={() => onRemove(t.id)}>
+                {INDUSTRY_LABEL[t.industry]} {roman(t.level)} @ {locationLabel(t.location)} · 拆得 £
+                {Math.floor(tileSpec(t.industry, t.level).costMoney / 2)}
+              </button>
+            ))}
+          </div>
+          {tiles.length === 0 ? <span className="brass-draft-hint">已无板块可拆，将按 VP 扣减结算</span> : null}
+        </>
+      ) : (
+        <span className="brass-draft-hint">
+          {sf.player + 1} 号玩家无法支付收入缺额 £{sf.amount}，正在拆除板块抵债…请稍候
+        </span>
+      )}
     </div>
   );
 }
@@ -764,7 +856,7 @@ function PlayersPanel({
               </span>
               <span className="stat">
                 <i>收入</i>
-                <b>{incomeLevelOf(p.incomeSpace)}</b>
+                <b>{incomeLevelAt(p.incomeSpace)}</b>
               </span>
               <span className="stat">
                 <i>分数</i>
@@ -785,14 +877,6 @@ function PlayersPanel({
       })}
     </div>
   );
-}
-
-function incomeLevelOf(space: number): number {
-  if (space <= 10) return space - 10;
-  if (space <= 30) return 1 + Math.floor((space - 11) / 2);
-  if (space <= 60) return 11 + Math.floor((space - 31) / 3);
-  if (space <= 96) return 21 + Math.floor((space - 61) / 4);
-  return 30;
 }
 
 function MatSummary({ mat }: { mat: Record<IndustryType, number[]> }) {
@@ -817,10 +901,11 @@ function MatSummary({ mat }: { mat: Record<IndustryType, number[]> }) {
 function LogPanel({ state, myPlayer }: { state: BrassState; myPlayer: number | null }) {
   const listRef = useRef<HTMLDivElement>(null);
   const entries = state.log.slice(-60);
+  const lastSeq = entries.length > 0 ? entries[entries.length - 1].seq : 0;
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [entries.length]);
+  }, [lastSeq]);
   return (
     <div className="brass-panel brass-log">
       <h3>对局日志</h3>
@@ -839,11 +924,25 @@ function LogPanel({ state, myPlayer }: { state: BrassState; myPlayer: number | n
   );
 }
 
+function overbuildSlotIndex(
+  state: BrassState,
+  spot: { emptySlots: number[]; overbuildTileIds: string[] },
+  overbuildTileId: string | null,
+): number {
+  if (overbuildTileId) {
+    const tile = state.placedTiles.find((t) => t.id === overbuildTileId);
+    if (tile) return tile.slotIndex;
+  }
+  return spot.emptySlots[0] ?? 0;
+}
+
 function BuildDraft({
   draft,
   state,
+  myPlayer,
   spot,
   spots,
+  effectiveOverbuildId,
   coalCandidates: coalCands,
   ironCandidates: ironCands,
   onPatch,
@@ -853,8 +952,10 @@ function BuildDraft({
 }: {
   draft: Extract<Draft, { mode: "build" }>;
   state: BrassState;
+  myPlayer: number;
   spot: ReturnType<typeof buildOptionsForCard>["spots"][number] | null;
   spots: ReturnType<typeof buildOptionsForCard>["spots"];
+  effectiveOverbuildId: string | null;
   coalCandidates: ReturnType<typeof coalCandidates>;
   ironCandidates: ReturnType<typeof ironCandidates>;
   onPatch: (partial: Partial<Extract<Draft, { mode: "build" }>>) => void;
@@ -863,6 +964,11 @@ function BuildDraft({
   submitting: boolean;
 }) {
   const industries = Array.from(new Set(spots.filter((s) => s.location === draft.location).map((s) => s.industry)));
+  const overbuildLabel = (tileId: string): string => {
+    const t = state.placedTiles.find((x) => x.id === tileId);
+    if (!t) return tileId;
+    return `${t.player === myPlayer ? "自己的" : "对手的"} ${INDUSTRY_LABEL[t.industry]} ${roman(t.level)}`;
+  };
   return (
     <div className="brass-draft">
       <span className="brass-draft-step">1. 点击地图上的高亮地点</span>
@@ -891,6 +997,30 @@ function BuildDraft({
                 {spot.costIron > 0 ? ` + ${spot.costIron}铁` : ""}
                 {spot.overbuildTileIds.length > 0 && spot.emptySlots.length === 0 ? " · 覆盖" : ""}
               </span>
+              {spot.overbuildTileIds.length > 0 ? (
+                spot.emptySlots.length === 0 ? (
+                  <label className="brass-inline">
+                    覆盖目标
+                    <select value={effectiveOverbuildId ?? ""} onChange={(e) => onPatch({ overbuildTileId: e.target.value })}>
+                      {spot.overbuildTileIds.map((tileId) => (
+                        <option key={tileId} value={tileId}>
+                          {overbuildLabel(tileId)}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="brass-draft-detail">无空槽，将覆盖所选瓦片</span>
+                  </label>
+                ) : (
+                  <label className="brass-inline">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(effectiveOverbuildId)}
+                      onChange={(e) => onPatch({ overbuildTileId: e.target.checked ? spot.overbuildTileIds[0] : null })}
+                    />
+                    覆盖 {overbuildLabel(spot.overbuildTileIds[0])}
+                  </label>
+                )
+              ) : null}
               {spot.costCoal > 0 ? (
                 coalCands.length > 1 ? (
                   <CoalPicker
@@ -1190,6 +1320,26 @@ function SellDraft({
   const targets = sellTargets(state, myPlayer);
   const soldTileIds = new Set(draft.sales.map((s) => s.tileId));
   const available = targets.filter((t) => !soldTileIds.has(t.tileId));
+  const merchantLocation = (slotId: string): string => state.merchantTiles.find((m) => m.slotId === slotId)?.location ?? "";
+  const isDevelopMerchant = (slotId: string): boolean => MERCHANTS[merchantLocation(slotId)]?.bonus.type === "develop";
+  const developEligible = (): IndustryType[] =>
+    (Object.keys(state.players[myPlayer]?.mat ?? {}) as IndustryType[]).filter((ind) => {
+      const stack = state.players[myPlayer]?.mat[ind];
+      if (!stack || stack.length === 0) return false;
+      return !tileSpec(ind, Math.min(...stack)).lightbulb;
+    });
+  // 用到 develop 奖励商人（Gloucester）的啤酒时补齐/清除免费研发目标。
+  const withDevelop = (sale: SaleDraft): SaleDraft => {
+    const usesMerchantBeer = sale.beerSources.some((b) => b.kind === "merchant");
+    if (!usesMerchantBeer || !isDevelopMerchant(sale.merchantSlotId)) return { ...sale, developIndustry: undefined };
+    const eligible = developEligible();
+    if (eligible.length === 0) return sale;
+    return { ...sale, developIndustry: sale.developIndustry && eligible.includes(sale.developIndustry) ? sale.developIndustry : eligible[0] };
+  };
+  const beerAvailable = (t: (typeof targets)[number], slotId: string): boolean => {
+    const cands = beerCandidates(state, myPlayer, t.beersToSell, { soldTileLocation: t.location, merchantSlotId: slotId });
+    return cands.reduce((sum, c) => sum + c.available, 0) >= t.beersToSell;
+  };
   return (
     <div className="brass-draft brass-sell-draft">
       <span className="brass-draft-step">选择要出售的瓦片（连通商人位 + 消耗啤酒；可多块）</span>
@@ -1203,10 +1353,10 @@ function SellDraft({
               const m = t.merchants[0];
               const beer = greedyBeer(state, myPlayer, t.beersToSell, { soldTileLocation: t.location, merchantSlotId: m.slotId });
               onPatch({
-                sales: [...draft.sales, { tileId: t.tileId, merchantSlotId: m.slotId, beerSources: beer }],
+                sales: [...draft.sales, withDevelop({ tileId: t.tileId, merchantSlotId: m.slotId, beerSources: beer })],
               });
             }}
-            disabled={t.beersToSell > 0 && !t.merchants.some((m) => beerCandidates(state, myPlayer, t.beersToSell, { soldTileLocation: t.location, merchantSlotId: m.slotId }).length >= t.beersToSell)}
+            disabled={t.beersToSell > 0 && !t.merchants.some((m) => beerAvailable(t, m.slotId))}
           >
             {INDUSTRY_LABEL[t.industry]} {roman(t.level)} @ {locationLabel(t.location)} · 需{t.beersToSell}啤酒 · 收入+{t.incomeOnFlip}
           </button>
@@ -1226,7 +1376,7 @@ function SellDraft({
               onChange={(e) => {
                 const merchantSlotId = e.target.value;
                 const beer = greedyBeer(state, myPlayer, target?.beersToSell ?? 0, { soldTileLocation: tile?.location, merchantSlotId });
-                onPatch({ sales: draft.sales.map((s, i) => (i === si ? { ...s, merchantSlotId, beerSources: beer } : s)) });
+                onPatch({ sales: draft.sales.map((s, i) => (i === si ? withDevelop({ ...s, merchantSlotId, beerSources: beer }) : s)) });
               }}
             >
               {(target?.merchants ?? []).map((m) => (
@@ -1244,10 +1394,39 @@ function SellDraft({
                 merchantSlotId={sale.merchantSlotId}
                 value={src}
                 onChange={(next) =>
-                  onPatch({ sales: draft.sales.map((s, i) => (i === si ? { ...s, beerSources: s.beerSources.map((x, xi) => (xi === bi ? next : x)) } : s)) })
+                  onPatch({
+                    sales: draft.sales.map((s, i) =>
+                      i === si ? withDevelop({ ...s, beerSources: s.beerSources.map((x, xi) => (xi === bi ? next : x)) }) : s,
+                    ),
+                  })
                 }
               />
             ))}
+            {sale.beerSources.some((b) => b.kind === "merchant") && isDevelopMerchant(sale.merchantSlotId) ? (
+              (() => {
+                const eligible = developEligible();
+                if (eligible.length === 0) {
+                  return <span className="brass-draft-warn">Gloucester 商人啤酒须免费研发，但面板已无可研发板块</span>;
+                }
+                return (
+                  <select
+                    value={sale.developIndustry ?? eligible[0]}
+                    onChange={(e) =>
+                      onPatch({ sales: draft.sales.map((s, i) => (i === si ? { ...s, developIndustry: e.target.value as IndustryType } : s)) })
+                    }
+                  >
+                    {eligible.map((ind) => {
+                      const lowest = Math.min(...(state.players[myPlayer]?.mat[ind] ?? [0]));
+                      return (
+                        <option key={ind} value={ind}>
+                          免费研发：{INDUSTRY_LABEL[ind]} {roman(lowest)}
+                        </option>
+                      );
+                    })}
+                  </select>
+                );
+              })()
+            ) : null}
             <button
               type="button"
               className="brass-ghost-btn"

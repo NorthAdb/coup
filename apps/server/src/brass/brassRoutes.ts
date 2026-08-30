@@ -584,8 +584,8 @@ export function registerBrassRoutes(app: FastifyInstance, deps: BrassDeps): Bras
     const currentRun = room.matchId != null ? store.getRun(room.matchId) : null;
     const rematchAllowed =
       room.phase === "match" && currentRun !== null && currentRun.runStatus !== "in_progress";
-    // 大厅开局：剩余空位自动关闭（brass 2-4 人即可开局）。
-    if (room.phase === "lobby") {
+    // 大厅开局：剩余空位自动关闭（brass 2-4 人即可开局）；人数不足时不动座位，让门禁报错。
+    if (room.phase === "lobby" && effectiveLobbySeats(room).length >= 2) {
       for (const seat of room.seats) {
         if (seat.kind === "open") {
           registry.configureSeat(room.code, seat.seatId, { kind: "closed" });

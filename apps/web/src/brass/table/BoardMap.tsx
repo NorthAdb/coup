@@ -47,6 +47,7 @@ export function BoardMap({
     <svg
       className="brass-board"
       viewBox={`0 0 ${BOARD_WIDTH} ${BOARD_HEIGHT}`}
+      preserveAspectRatio="xMidYMid meet"
       role="img"
       aria-label="伯明翰版图"
     >
@@ -74,7 +75,14 @@ export function BoardMap({
           ? { x: (a.x + via.x) / 2, y: (a.y + via.y) / 2 }
           : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
         return (
-          <g key={def.id} onClick={clickable ? () => onLinkClick?.(index) : undefined} className={clickable ? "brass-link clickable" : "brass-link"}>
+          <g
+            key={def.id}
+            data-link={index}
+            role={clickable ? "button" : undefined}
+            aria-label={clickable ? `铺线 ${def.id}` : undefined}
+            onClick={clickable ? () => onLinkClick?.(index) : undefined}
+            className={clickable ? "brass-link clickable" : "brass-link"}
+          >
             {/* 运河：实线暖蓝 */}
             {def.canal ? (
               <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#5a7d8c" strokeWidth={highlighted ? 9 : 5} strokeLinecap="round" opacity={0.55} />
@@ -119,10 +127,13 @@ export function BoardMap({
         const selected = selectedLocation === id;
         const clickable = Boolean(onLocationClick && highlighted);
         const w = farm ? 46 : def.slots.length >= 4 ? 128 : def.slots.length >= 3 ? 104 : 88;
-        const h = farm ? 30 : 56;
+        const h = farm ? 34 : 56;
         return (
           <g
             key={id}
+            data-loc={id}
+            role={clickable ? "button" : undefined}
+            aria-label={clickable ? `建造于 ${locationLabel(id)}` : undefined}
             transform={`translate(${pos.x},${pos.y})`}
             onClick={clickable ? () => onLocationClick?.(id) : undefined}
             className={clickable ? "brass-loc clickable" : "brass-loc"}
@@ -131,7 +142,7 @@ export function BoardMap({
             {selected ? <rect x={-w / 2 - 6} y={-h / 2 - 6} width={w + 12} height={h + 12} rx={12} fill="none" stroke="#a63d2f" strokeWidth={3} /> : null}
             <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={8} fill={farm ? "#e6d9bc" : "#f6efdd"} stroke="#8a795d" strokeWidth={1.6} />
             <rect x={-w / 2} y={-h / 2} width={w} height={16} rx={8} fill="#6b5a41" />
-            <text y={farm ? 0 : -4} textAnchor="middle" fontSize={farm ? 9 : 11} fill="#f3ead6" fontWeight={700}>
+            <text y={farm ? -3 : -16} textAnchor="middle" fontSize={farm ? 8.5 : 11} fill="#f3ead6" fontWeight={700}>
               {locationLabel(id)}
             </text>
             {/* 槽位 */}

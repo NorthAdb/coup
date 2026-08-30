@@ -37,6 +37,9 @@ function initialScreen(): { screen: Screen; code: string | null } {
   const path = window.location.pathname;
   const params = new URLSearchParams(window.location.search);
   const code = params.get("code");
+  // 深链：/brass/room/:code、/brass/play/:code（刷新后恢复房间）。
+  const pathMatch = path.match(/^\/brass\/(?:room|play)\/(\d{4})/);
+  if (pathMatch) return { screen: "home", code: pathMatch[1] };
   if (path === "/brass/join" || (path === "/brass" && code)) {
     return { screen: "home", code };
   }

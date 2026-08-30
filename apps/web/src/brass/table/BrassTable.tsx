@@ -645,8 +645,7 @@ function PlayersPanel({
           <div key={i} className={`brass-player-row ${isTurn ? "turn" : ""} ${absence && absence.phase !== "present" ? "absent" : ""}`}>
             <span className="brass-player-dot" style={{ background: playerColor(i) }} />
             <span className="brass-player-name">
-              {name}
-              {i === myPlayer ? "（你）" : ""}
+              {i === myPlayer && name.includes("你") ? name : `${name}${i === myPlayer ? "（你）" : ""}`}
               {isTurn ? " ▸" : ""}
               {absence && absence.phase !== "present" ? " ⚠离席" : ""}
             </span>
@@ -754,17 +753,25 @@ function BuildDraft({
                 {spot.costIron > 0 ? ` + ${spot.costIron}铁` : ""}
                 {spot.overbuildTileIds.length > 0 && spot.emptySlots.length === 0 ? " · 覆盖" : ""}
               </span>
-              {coalCands.length > 1 ? (
-                <CoalPicker
-                  count={spot.costCoal}
-                  candidates={coalCands}
-                  sources={draft.coalSources}
-                  state={state}
-                  onChange={(sources) => onPatch({ coalSources: sources })}
-                />
+              {spot.costCoal > 0 ? (
+                coalCands.length > 1 ? (
+                  <CoalPicker
+                    count={spot.costCoal}
+                    candidates={coalCands}
+                    sources={draft.coalSources}
+                    state={state}
+                    onChange={(sources) => onPatch({ coalSources: sources })}
+                  />
+                ) : (
+                  <span className="brass-draft-warn">无可用煤源：需连通未翻面煤矿，或连通商人位从市场购买</span>
+                )
               ) : null}
-              {ironCands.length > 1 ? (
-                <IronPicker count={spot.costIron} candidates={ironCands} sources={draft.ironSources} state={state} onChange={(sources) => onPatch({ ironSources: sources })} />
+              {spot.costIron > 0 ? (
+                ironCands.length > 1 ? (
+                  <IronPicker count={spot.costIron} candidates={ironCands} sources={draft.ironSources} state={state} onChange={(sources) => onPatch({ ironSources: sources })} />
+                ) : (
+                  <span className="brass-draft-warn">无可用铁源（场上有未翻面铁厂时必须用铁厂）</span>
+                )
               ) : null}
               <button type="button" className="brass-primary-btn" disabled={!canSubmit || submitting} onClick={onSubmit}>
                 确认建造

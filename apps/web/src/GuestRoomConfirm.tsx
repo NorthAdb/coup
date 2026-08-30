@@ -58,7 +58,7 @@ export function GuestRoomConfirm({
                 ? "房主正在组织下一局，确认加入即可保留原座位。"
                 : "挑一个亮着的空位入座；开局由房主决定。"}
           </p>
-          {room.phase === "match" && onResumeMatch ? (
+          {room.phase === "match" && mySeatId && onResumeMatch ? (
             <button
               type="button"
               className="start-btn"

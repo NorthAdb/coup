@@ -1337,55 +1337,55 @@ export function MatchDesk({
             </div>
           </div>
 
-          <section className="player-zone" aria-label="手牌与行动">
-            <div className="player-identity">
-              <SeatAvatar
-                name={localSeat?.displayName ?? "你"}
-                tintClass={seatTintClass(
-                  view.publicState.seats.findIndex(
-                    (seat) => seat.seatId === view.seatId,
-                  ),
-                )}
-                eliminated={Boolean(localSeat?.eliminated)}
-              />
-              <div className="player-identity-text">
-                <strong>{localSeat?.displayName ?? "你"}</strong>
-                <span className="player-coins">
-                  <span className="coin-icon" aria-hidden="true">
-                    <svg viewBox="0 0 16 16">
-                      <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" strokeWidth="1.6" />
-                      <circle cx="8" cy="8" r="3.4" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.7" />
-                    </svg>
+          {!spectator ? (
+            <section className="player-zone" aria-label="手牌与行动">
+              <div className="player-identity">
+                <SeatAvatar
+                  name={localSeat?.displayName ?? "你"}
+                  tintClass={seatTintClass(
+                    view.publicState.seats.findIndex(
+                      (seat) => seat.seatId === view.seatId,
+                    ),
+                  )}
+                  eliminated={Boolean(localSeat?.eliminated)}
+                />
+                <div className="player-identity-text">
+                  <strong>{localSeat?.displayName ?? "你"}</strong>
+                  <span className="player-coins">
+                    <span className="coin-icon" aria-hidden="true">
+                      <svg viewBox="0 0 16 16">
+                        <circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                        <circle cx="8" cy="8" r="3.4" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.7" />
+                      </svg>
+                    </span>
+                    {localSeat?.coins ?? 0}
                   </span>
-                  {localSeat?.coins ?? 0}
-                </span>
+                </div>
               </div>
-            </div>
 
-            <div className="hand" aria-label="你的隐藏牌">
-              {view.privateState.hiddenCharacters.length === 0 ? (
-                <p className="hand-empty">影响力已耗尽</p>
-              ) : (
-                view.privateState.hiddenCharacters.map((character, index) => (
-                  <div
-                    key={`${character}-${index}`}
-                    className="role-card"
-                    style={{
-                      ["--role-deep" as string]: ROLE_VISUAL[character].deep,
-                      ["--role-lite" as string]: ROLE_VISUAL[character].lite,
-                    }}
-                  >
-                    <CharacterCardFace
-                      character={character}
-                      name={CHARACTER_LABEL[character]}
-                      ability={ROLE_HINTS[character]}
-                    />
-                  </div>
-                ))
-              )}
-            </div>
+              <div className="hand" aria-label="你的隐藏牌">
+                {view.privateState.hiddenCharacters.length === 0 ? (
+                  <p className="hand-empty">影响力已耗尽</p>
+                ) : (
+                  view.privateState.hiddenCharacters.map((character, index) => (
+                    <div
+                      key={`${character}-${index}`}
+                      className="role-card"
+                      style={{
+                        ["--role-deep" as string]: ROLE_VISUAL[character].deep,
+                        ["--role-lite" as string]: ROLE_VISUAL[character].lite,
+                      }}
+                    >
+                      <CharacterCardFace
+                        character={character}
+                        name={CHARACTER_LABEL[character]}
+                        ability={ROLE_HINTS[character]}
+                      />
+                    </div>
+                  ))
+                )}
+              </div>
 
-            {!spectator ? (
               <div className="action-zone">
                 <div className="action-label">
                   <span>
@@ -1486,8 +1486,8 @@ export function MatchDesk({
                   </button>
                 </div>
               </div>
-            ) : null}
-          </section>
+            </section>
+          ) : null}
         </section>
 
         <aside className="event-rail" aria-label="对局记录">

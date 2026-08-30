@@ -3,7 +3,7 @@ import type { CSSProperties, ReactElement } from "react";
 import type { BrassState, IndustryType } from "@coup/brass-domain";
 import { LINKS, linkEndpoints, LOCATIONS, MERCHANTS, TILE_SPECS, merchantSlotsFor, tileSpec } from "@coup/brass-domain";
 import { BOARD_HEIGHT, BOARD_WIDTH, NODE_POS } from "./brassMap.js";
-import { INDUSTRY_COLOR, INDUSTRY_SHORT, locationLabel, merchantBonusLabel, roman } from "../labels.js";
+import { INDUSTRY_COLOR, locationLabel, merchantBonusLabel, roman } from "../labels.js";
 
 export type BoardMapProps = {
   state: BrassState;
@@ -37,16 +37,6 @@ const INDUSTRY_TILE: Record<IndustryType, { top: string; bottom: string; ink: st
 };
 
 const FLIPPED_TILE = { top: "#a5906a", bottom: "#73603e", ink: "#2e2412" };
-
-/** 空槽位产业字色（深底上可读的亮色版本；煤用浅灰避免看不见）。 */
-const INDUSTRY_SLOT_INK: Record<IndustryType, string> = {
-  cotton: "#e8b06a",
-  manufacturer: "#b79ad4",
-  pottery: "#6cc4b2",
-  coal: "#b9b2a4",
-  iron: "#e08a4e",
-  brewery: "#d8b273",
-};
 
 function vpOf(industry: IndustryType, level: number): number {
   const spec = TILE_SPECS.find((s) => s.industry === industry && s.level === level);
@@ -177,8 +167,12 @@ function ProduceRow({ coal, iron, beer, s = 6.6, gap = 7.4 }: { coal: number; ir
    城市天际线（差异化剪影；基线 y=0，画在 ~36×20 内）
    ====================================================================== */
 
-const SKY_FRONT = "#141009";
-const SKY_WIN = "#d9b64a";
+const SKY_FRONT = "#7c6446";
+const SKY_WIN = "#8a6a2f";
+
+/** 浅色地块（实体版风）：纸面 + 墨线。 */
+const PLOT_INK = "#3a2f1e";
+const PLOT_SLOT_GLYPH = "#6b5636";
 
 function WinDots({ at }: { at: [number, number][] }) {
   return (
@@ -198,7 +192,7 @@ function SkyMill({ h = 9, n = 3, chimney = true }: { h?: number; n?: number; chi
       {chimney ? (
         <g>
           <rect x={w / 2 - 8} y={-h - 6} width={3} height={h + 6} fill={SKY_FRONT} />
-          <circle cx={w / 2 - 6.5} cy={-h - 8.5} r={1.6} fill="#d8ccb0" opacity={0.4} />
+          <circle cx={w / 2 - 6.5} cy={-h - 8.5} r={1.6} fill="#b9a67e" opacity={0.6} />
         </g>
       ) : null}
       {Array.from({ length: n }, (_, i) => {
@@ -296,7 +290,7 @@ function SkyHall({ grand = false }: { grand?: boolean }) {
       <path d={grand ? "M-15 -8.5 L0 -14.5 L15 -8.5 Z" : "M-15 -8.5 L0 -13.5 L15 -8.5 Z"} fill={SKY_FRONT} />
       {grand ? <path d="M-3.4 -13.8 A3.4 3.4 0 0 1 3.4 -13.8 Z" fill={SKY_FRONT} /> : null}
       {[-10, -4.4, 1.2, 6.8].map((x) => (
-        <rect key={x} x={x} y={-6.4} width={2} height={6.4} fill="#3a3227" />
+        <rect key={x} x={x} y={-6.4} width={2} height={6.4} fill="#ece0c2" />
       ))}
       <WinDots at={[[12.4, -6.2], [-13.2, -6.2]]} />
     </g>
@@ -321,7 +315,7 @@ function SkyBrewhouse() {
       <path d="M-14 -6.5 L-7.75 -12 L-1.5 -6.5 Z" fill={SKY_FRONT} />
       <rect x={2.5} y={-15} width={5.4} height={15} rx={1} fill={SKY_FRONT} />
       <circle cx={11.5} cy={-3.2} r={2.6} fill={SKY_FRONT} />
-      <circle cx={5.2} cy={-17} r={1.5} fill="#d8ccb0" opacity={0.4} />
+      <circle cx={5.2} cy={-17} r={1.5} fill="#b9a67e" opacity={0.6} />
       <WinDots at={[[-11.6, -4.2], [-7.4, -4.2]]} />
     </g>
   );
@@ -445,8 +439,8 @@ export function BoardMap({
           />
         </filter>
         <linearGradient id="b-plot-face" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#544a3d" />
-          <stop offset="100%" stopColor="#39322a" />
+          <stop offset="0%" stopColor="#f4ecd6" />
+          <stop offset="100%" stopColor="#e7dabb" />
         </linearGradient>
         <linearGradient id="b-merchant-face" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#5c6c50" />
@@ -594,19 +588,17 @@ export function BoardMap({
             {selected ? (
               <rect x={-w / 2 - 7} y={-h / 2 - 7} width={w + 14} height={h + 14} rx={13} fill="none" stroke="#a63d2f" strokeWidth={3.2} />
             ) : null}
-            <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={9} fill="url(#b-plot-face)" stroke="#221c13" strokeWidth={1.8} />
-            <rect x={-w / 2 + 2.5} y={-h / 2 + 2.5} width={w - 5} height={11} rx={6} fill="#ffffff" opacity={0.07} />
-            {/* 地名分区底带：让名字自成一层，不与剪影/槽位挤在一起 */}
-            <rect x={-w / 2 + 3.5} y={-h / 2 + 3.5} width={w - 7} height={18.5} rx={6} fill="#100c07" opacity={0.32} style={{ pointerEvents: "none" }} />
-            {/* 城市剪影（地名下方） */}
-            <g style={{ pointerEvents: "none" }}>
+            <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={9} fill="url(#b-plot-face)" stroke="#4a3b28" strokeWidth={2} />
+            <rect x={-w / 2 + 3} y={-h / 2 + 3} width={w - 6} height={h - 6} rx={6.5} fill="none" stroke="#8a7355" strokeWidth={0.8} opacity={0.7} style={{ pointerEvents: "none" }} />
+            {/* 城市剪影（雕版水印风） */}
+            <g style={{ pointerEvents: "none" }} opacity={0.85}>
               <CitySkyline id={id} farm={farm} />
             </g>
             <text
-              y={farm ? -h / 2 + 15 : -h / 2 + 15.5}
+              y={farm ? -h / 2 + 15 : -h / 2 + 16.5}
               textAnchor="middle"
               fontSize={farm ? 10 : longName ? 10.5 : 12}
-              fill="#f3ead6"
+              fill={PLOT_INK}
               fontWeight={800}
               letterSpacing={farm ? 1 : 1.4}
               style={{ pointerEvents: "none" }}
@@ -621,29 +613,24 @@ export function BoardMap({
                   const x = -total / 2 + slotIndex * (slotW + slotGap);
                   return (
                     <g key={slotIndex} transform={`translate(${x}, 4)`}>
-                      <rect x={0} y={0} width={slotW} height={slotW} rx={5} fill="#262019" stroke="#141009" strokeWidth={1} />
-                      {tile ? null : (
-                        slot.industries.map((ind, i, arr) => {
-                          const count = arr.length;
-                          const cx = slotW / 2 + (i - (count - 1) / 2) * 13;
-                          return (
-                            <text
+                      <rect x={0} y={0} width={slotW} height={slotW} rx={5} fill="#ffffff" opacity={0.38} />
+                      <rect x={0.5} y={0.5} width={slotW - 1} height={slotW - 1} rx={5} fill="none" stroke="#7a684a" strokeWidth={1.2} opacity={0.9} />
+                      {tile || (previewSlot && previewSlot.location === id && previewSlot.slotIndex === slotIndex) ? null : (
+                        slot.industries.length === 1 ? (
+                          <g transform={`translate(${slotW / 2 - 6}, ${slotW / 2 - 6}) scale(0.5)`} fill={PLOT_SLOT_GLYPH}>
+                            <IndustryGlyph industry={slot.industries[0]} />
+                          </g>
+                        ) : (
+                          slot.industries.map((ind, i) => (
+                            <g
                               key={ind}
-                              x={cx}
-                              y={slotW / 2 + 4.5}
-                              textAnchor="middle"
-                              fontSize={count === 1 ? 14 : 11.5}
-                              fontWeight={700}
-                              fill={INDUSTRY_SLOT_INK[ind]}
-                              fillOpacity={0.92}
-                              stroke="#0f0c07"
-                              strokeWidth={0.4}
-                              paintOrder="stroke"
+                              transform={`translate(${slotW / 2 + (i - (slot.industries.length - 1) / 2) * 12 - 5}, ${slotW / 2 - 5}) scale(0.42)`}
+                              fill={PLOT_SLOT_GLYPH}
                             >
-                              {INDUSTRY_SHORT[ind]}
-                            </text>
-                          );
-                        })
+                              <IndustryGlyph industry={ind} />
+                            </g>
+                          ))
+                        )
                       )}
                       {tile ? (
                         <IndustryTile
@@ -664,7 +651,7 @@ export function BoardMap({
                             isNew={false}
                             isFlippedNow={false}
                           />
-                          <rect x={1} y={1} width={slotW - 2} height={slotW - 2} rx={5} fill="none" stroke="#f3ead6" strokeWidth={1.4} strokeDasharray="4 3" />
+                          <rect x={1} y={1} width={slotW - 2} height={slotW - 2} rx={5} fill="none" stroke={PLOT_INK} strokeWidth={1.4} strokeDasharray="4 3" />
                         </g>
                       ) : null}
                     </g>

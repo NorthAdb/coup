@@ -38,7 +38,7 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 ### 迭代纪律（用户预期的工作方式）
 
 - 每轮改动：本地浏览器实测 → `npm test` + `npm run typecheck` 全绿 → 中文提交信息（写清动机）→ 部署 → 线上复验 → 中文汇报。
-- 测试规模基线：全仓 283 项（domain 23 / brass-domain 21 / splendor-domain 18 / server 115 / web-desk 32 / web 8 / server-local 62 / web-local 4），总数变化时更新 README。
+- 测试规模基线：全仓 296 项（domain 23 / brass-domain 21 / splendor-domain 18 / server 115 / web-desk 32 / web 21 / server-local 62 / web-local 4），总数变化时更新 README。
 
 ### 公网安全与房间回收语义（2026-09 上线审计沉淀，决策记录见 `docs/adr/0012`）
 
@@ -58,9 +58,17 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 - 前端传输统一走 `apps/web/src/platform/roomApi.ts`；`lanRoom.ts`/`brassApi.ts` 只留文案映射与类型。被 node `--experimental-strip-types` 测试链路引用的文件，import 说明符要用 `.ts` 后缀（vite/tsc 均兼容）。
 - coup 旧路径 `/api/rooms…`、`/api/room-recovery` 原样保留（响应多了 `game` 字段，向后兼容）；brass 走 `/api/brass/rooms…`，恢复清单键是 `items`（coup 是 `rooms`），由 `GameModule.recoveryListKey` 区分。
 
+### 卡坦岛视觉原型（2026-09，`/catan`，spec 见 `.scratch/catan/spec.md`）
+
+- 第一阶段纯前端 Mock：`apps/web/src/catan/`（引擎 `mock/game.ts` 纯函数 + `table/` UI），**未接 GameModule/后端**；路由在 `main.tsx`，门户第四张卡在 `Portal.tsx` + `brass.css` 尾部。服务端零改动（not-found 已回退 index.html）。
+- 深链：`/catan/play` 快速开局；`/catan/play#demo-win` 直接触发终局结算（走查用）。
+- 坑：SVG 里 CSS transform 会覆盖 attribute transform——需要动画的棋子（道路/建筑/飘卡）必须有内层包裹元素做 CSS 动画；交互热点不能被 DOM 末尾的全屏透明矩形遮挡（SVG 命中按绘制顺序）。
+- 引擎坑：`respondTrade` 验资失败也必须清 `pendingTrade`（否则提议永久挂起）；开局预置路的远端点与自家村庄相邻，永不满足建村距离——先修路才出建村位，是实体规则不是 bug。
+- 测试：catan 引擎 13 项随 `@coup/web` 跑（web 21 项），全仓基线 296。
+
 ### 已知事实与坑
 
-- 入口路由：`/` 门户、`/brass` 伯明翰、`/splendor` 璀璨宝石、`/coup` 与 `/join` 政变（`apps/web/src/main.tsx` 的 `route()`）。
+- 入口路由：`/` 门户、`/brass` 伯明翰、`/splendor` 璀璨宝石、`/catan` 卡坦岛（Mock 原型）、`/coup` 与 `/join` 政变（`apps/web/src/main.tsx` 的 `route()`）。
 - 本地 Brass/ splendor 房间上限各 10 个；满了用 node:sqlite 清库：`DELETE FROM brass_runs; DELETE FROM brass_rooms;`（splendor 对应 `splendor_runs`/`splendor_rooms`；注意：清库会毁掉进行中的本地对局）。无人问津的房间自 2026-09 起会在约 30 分钟后自动回收（ADR-0012），等一等也能腾出名额。
 - Brass 持久化为逐命令提交（`brassStore.commitCommand`）；**旧 brassRoutes 曾漏传 persistence 导致决策不落库、重启回滚**（2026-09 随平台化修复，brassRoomApi.test 锁定回归）——新游戏适配器务必在 `submitDecision` 里接 `options.store`。
 - 前端 spectator 标记在回席/建房/就座时必须复位（`BrassApp`），否则前观战者回到对局看不到手牌。

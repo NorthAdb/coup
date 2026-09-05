@@ -1484,3 +1484,58 @@
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-9px); }
 }
+
+/* ---------------- 门户 · 卡坦岛卡片（2026-09 新增第四款游戏） ---------------- */
+
+.game-card--catan {
+  border-color: rgba(163, 197, 190, 0.24);
+}
+
+.game-card--catan .game-card-cta {
+  color: #9fd0c4;
+}
+
+.game-card--catan:hover {
+  border-color: rgba(159, 208, 196, 0.6);
+}
+
+.game-card-art--catan .art-hex {
+  position: absolute;
+  width: 54px;
+  height: 60px;
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  box-shadow: inset 0 0 0 2px rgba(244, 232, 200, 0.25);
+}
+
+.game-card-art--catan .art-hex--forest {
+  left: 12%;
+  bottom: 16%;
+  background: linear-gradient(160deg, #5b8a4a, #2c4a29);
+  transform: rotate(-7deg);
+}
+
+.game-card-art--catan .art-hex--wheat {
+  left: 38%;
+  bottom: 30%;
+  background: linear-gradient(160deg, #e5c765, #a98432);
+  z-index: 1;
+}
+
+.game-card-art--catan .art-hex--ore {
+  left: 64%;
+  bottom: 14%;
+  background: linear-gradient(160deg, #a9a49b, #67635c);
+  transform: rotate(7deg);
+}
+
+.game-card-art--catan .art-hex-sail {
+  position: absolute;
+  right: 12%;
+  top: 20%;
+  width: 0;
+  height: 0;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-bottom: 30px solid rgba(242, 232, 208, 0.9);
+  transform: rotate(16deg);
+}

@@ -1,0 +1,623 @@
+/* ==========================================================================
+   卡坦岛 —— 棋子与卡牌：地形 Token / 道路 / 村庄 / 城市 / 强盗 / 港口 /
+   资源图标 / 资源卡 / 发展卡 / 骰子 / 建造确认气泡 / 交互层
+   SVG 内的 px = viewBox 用户单位（布局单位：六边形外接圆半径 = 1）。
+   ========================================================================== */
+
+/* ---------------- 数字 Token ---------------- */
+
+.ct-token-num {
+  font-family: var(--ct-serif);
+  font-size: 0.42px;
+  font-weight: 700;
+  fill: #42351d;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  paint-order: stroke;
+  stroke: rgba(255, 248, 230, 0.55);
+  stroke-width: 0.02;
+}
+
+.ct-token-num.is-red {
+  fill: #a34432;
+}
+
+.ct-token {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: filter 0.4s;
+}
+
+.ct-token.is-hot {
+  animation: ct-token-hot 2.2s ease-out both;
+}
+
+@keyframes ct-token-hot {
+  0% {
+    transform: scale(1);
+    filter: none;
+  }
+  14% {
+    transform: scale(1.16);
+    filter: drop-shadow(0 0 0.3px rgba(255, 226, 150, 0.95));
+  }
+  30% {
+    transform: scale(1.08);
+  }
+  45% {
+    transform: scale(1.12);
+    filter: drop-shadow(0 0 0.22px rgba(255, 226, 150, 0.8));
+  }
+  100% {
+    transform: scale(1);
+    filter: none;
+  }
+}
+
+/* ---------------- 地块与交互提示 ---------------- */
+
+.ct-tile {
+  transition: filter 0.4s;
+}
+
+.ct-tile.is-hot {
+  filter: brightness(1.1) saturate(1.06);
+}
+
+.ct-board-svg.is-interactive {
+  cursor: pointer;
+}
+
+.ct-tile.is-selectable {
+  cursor: pointer;
+}
+
+.ct-tile.is-selectable:hover .ct-tile-hint {
+  stroke: rgba(255, 240, 200, 0.95);
+  fill: rgba(255, 240, 200, 0.14);
+}
+
+.ct-tile-hint {
+  animation: ct-ants 5.5s linear infinite;
+}
+
+@keyframes ct-ants {
+  to {
+    stroke-dashoffset: -2.7;
+  }
+}
+
+.ct-hot-vertex circle:first-child {
+  animation: ct-vertex-pulse 1.9s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes ct-vertex-pulse {
+  0%,
+  100% {
+    opacity: 0.62;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.14);
+  }
+}
+
+.ct-hot-vertex {
+  cursor: pointer;
+}
+
+.ct-hot-road {
+  cursor: pointer;
+}
+
+.ct-hot-road line:first-child {
+  animation: ct-ants 3.6s linear infinite;
+}
+
+/* ---------------- 棋子：道路 / 村庄 / 城市 / 强盗 ---------------- */
+
+.ct-road,
+.ct-piece {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.ct-road.is-ghost,
+.ct-piece.is-ghost {
+  opacity: 0.5;
+}
+
+.ct-road.is-fresh,
+.ct-piece.is-fresh {
+  animation: ct-drop-in 0.6s cubic-bezier(0.2, 1.15, 0.4, 1) both;
+}
+
+@keyframes ct-drop-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-0.55px) scale(0.72);
+  }
+  68% {
+    opacity: 1;
+    transform: translateY(0.03px) scale(1.05);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.ct-robber {
+  filter: drop-shadow(0 0.02px 0.06px rgba(0, 0, 0, 0.6));
+  animation: ct-robber-settle 0.55s cubic-bezier(0.2, 1.1, 0.4, 1) both;
+}
+
+@keyframes ct-robber-settle {
+  0% {
+    opacity: 0;
+    transform: translate(var(--rx, 0), -0.7px);
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* ---------------- 港口 ---------------- */
+
+.ct-harbor {
+  pointer-events: none;
+}
+
+.ct-harbor .ct-harbor-ratio {
+  font-family: var(--ct-serif);
+  font-size: 0.17px;
+  font-weight: 700;
+  fill: #42351d;
+}
+
+.ct-harbor .ct-harbor-any {
+  font-family: var(--ct-serif);
+  font-size: 0.12px;
+  fill: #57452e;
+}
+
+/* 拥有的港口：轻微点亮 */
+.ct-harbor.is-active circle:nth-child(9) {
+  filter: drop-shadow(0 0 0.16px rgba(255, 226, 150, 0.9));
+}
+
+/* ---------------- 产出飘卡 ---------------- */
+
+.ct-floatchip {
+  animation: ct-float-up 1.65s cubic-bezier(0.25, 0.6, 0.3, 1) both;
+}
+
+@keyframes ct-float-up {
+  0% {
+    opacity: 0;
+    transform: translateY(0.18px);
+  }
+  16% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-1.35px);
+  }
+}
+
+.ct-floatchip-n {
+  font-family: var(--ct-serif);
+  font-size: 0.3px;
+  font-weight: 700;
+  fill: #f6ecd2;
+  paint-order: stroke;
+  stroke: rgba(30, 20, 8, 0.85);
+  stroke-width: 0.05;
+}
+
+/* ---------------- 建造确认气泡 ---------------- */
+
+.ct-confirm {
+  filter: drop-shadow(0 0.06px 0.18px rgba(0, 0, 0, 0.5));
+  animation: ct-pop-in 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+@keyframes ct-pop-in {
+  from {
+    opacity: 0;
+    transform: translate(var(--tx, 0), 0.12px);
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.ct-confirm-card {
+  fill: #f2e8d0;
+  stroke: #a98544;
+  stroke-width: 0.035;
+}
+
+.ct-confirm-title {
+  font-family: var(--ct-serif);
+  font-size: 0.21px;
+  font-weight: 700;
+  fill: #2a2016;
+}
+
+.ct-confirm-cost {
+  font-family: var(--ct-sans);
+  font-size: 0.155px;
+  fill: #57452e;
+}
+
+.ct-confirm-cost.is-poor {
+  fill: #a34432;
+}
+
+.ct-confirm-btn {
+  cursor: pointer;
+}
+
+.ct-confirm-btn rect {
+  fill: rgba(90, 70, 40, 0.14);
+  stroke: rgba(90, 70, 40, 0.4);
+  stroke-width: 0.02;
+}
+
+.ct-confirm-btn text {
+  font-family: var(--ct-sans);
+  font-size: 0.15px;
+  fill: #42351d;
+  dominant-baseline: middle;
+}
+
+.ct-confirm-btn .is-go {
+  fill: #d9b470;
+  stroke: #8a6a34;
+}
+
+.ct-confirm-btn .is-disabled {
+  fill: rgba(90, 70, 40, 0.1);
+  opacity: 0.6;
+}
+
+.ct-confirm-btn .is-no {
+  fill: rgba(163, 68, 50, 0.14);
+  stroke: rgba(163, 68, 50, 0.5);
+}
+
+/* ---------------- 罗盘 ---------------- */
+
+.ct-compass {
+  opacity: 0.85;
+}
+
+/* ---------------- 资源图标（HTML） ---------------- */
+
+.ct-ricon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: inset 0 0 0 1.5px rgba(42, 32, 22, 0.35), 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.ct-ricon svg {
+  width: 72%;
+  height: 72%;
+}
+
+.ct-ricon--sm {
+  width: 20px;
+  height: 20px;
+}
+
+.ct-ricon--md {
+  width: 26px;
+  height: 26px;
+}
+
+.ct-ricon--lg {
+  width: 34px;
+  height: 34px;
+}
+
+.ct-ricon--wood {
+  background: radial-gradient(circle at 34% 30%, #7fa05a, #54763c 58%, #37522a);
+}
+
+.ct-ricon--brick {
+  background: radial-gradient(circle at 34% 30%, #c98a5e, #a55c3a 58%, #7e4128);
+}
+
+.ct-ricon--wool {
+  background: radial-gradient(circle at 34% 30%, #f6f3e8, #cfc9b4 62%, #a49d86);
+}
+
+.ct-ricon--wheat {
+  background: radial-gradient(circle at 34% 30%, #eccf6f, #d0a94a 58%, #a37f2c);
+}
+
+.ct-ricon--ore {
+  background: radial-gradient(circle at 34% 30%, #9aa3ad, #6f7883 58%, #4b525c);
+}
+
+.ct-costlist {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.ct-cost {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--ct-sans);
+  font-size: 12px;
+  color: rgba(242, 232, 208, 0.85);
+}
+
+/* ---------------- 卡牌 ---------------- */
+
+.ct-card {
+  position: relative;
+  width: 74px;
+  height: 104px;
+  border-radius: 9px;
+  background:
+    linear-gradient(176deg, #f6efdd 0%, #ecdfc0 70%, #dccca6 100%);
+  border: 1px solid rgba(112, 86, 44, 0.55);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 252, 240, 0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 7px 6px 6px;
+  gap: 4px;
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.22s;
+}
+
+.ct-card-art {
+  width: 46px;
+  height: 46px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 2px rgba(42, 32, 22, 0.25);
+  flex: none;
+}
+
+.ct-card-art svg {
+  width: 74%;
+  height: 74%;
+}
+
+.ct-card--wood .ct-card-art {
+  background: radial-gradient(circle at 36% 30%, #6f9250, #41602f 70%);
+}
+
+.ct-card--brick .ct-card-art {
+  background: radial-gradient(circle at 36% 30%, #bb7850, #8f4c2e 70%);
+}
+
+.ct-card--wool .ct-card-art {
+  background: radial-gradient(circle at 36% 30%, #cfd8b8, #93a06c 70%);
+}
+
+.ct-card--wheat .ct-card-art {
+  background: radial-gradient(circle at 36% 30%, #e2c15c, #ad8530 70%);
+}
+
+.ct-card--ore .ct-card-art {
+  background: radial-gradient(circle at 36% 30%, #8d97a2, #565e68 70%);
+}
+
+.ct-card-name {
+  font-family: var(--ct-serif);
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-indent: 0.14em;
+  color: #42351d;
+}
+
+.ct-card-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  background: linear-gradient(178deg, #d9b470, #a67f3c);
+  color: #241708;
+  font-family: var(--ct-sans);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 248, 230, 0.5);
+}
+
+/* 发展卡 */
+.ct-card--devback {
+  background:
+    radial-gradient(circle at 50% 34%, rgba(238, 217, 164, 0.16), transparent 46%),
+    linear-gradient(176deg, #24422c 0%, #17301d 62%, #102314 100%);
+  border-color: rgba(201, 163, 92, 0.5);
+  align-items: center;
+  justify-content: center;
+}
+
+.ct-card-seal {
+  font-size: 24px;
+  color: rgba(238, 217, 164, 0.8);
+}
+
+.ct-card--devback .ct-card-name {
+  color: rgba(242, 232, 208, 0.75);
+  font-size: 11.5px;
+}
+
+.ct-card--dev {
+  justify-content: center;
+  gap: 7px;
+}
+
+.ct-card-glyph {
+  width: 40px;
+  height: 40px;
+  color: #6b5636;
+}
+
+.ct-card-glyph svg {
+  width: 100%;
+  height: 100%;
+}
+
+.ct-card--dev-knight .ct-card-glyph {
+  color: #7a4a38;
+}
+
+.ct-card--dev-vp .ct-card-glyph {
+  color: #a3813a;
+}
+
+.ct-card--dev-roadBuilding .ct-card-glyph {
+  color: #54663e;
+}
+
+.ct-card--dev-yearOfPlenty .ct-card-glyph {
+  color: #a37f2c;
+}
+
+.ct-card--dev-monopoly .ct-card-glyph {
+  color: #4b525c;
+}
+
+/* ---------------- 骰子 ---------------- */
+
+.ct-dice {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  background: linear-gradient(150deg, #faf6ea, #e7ddc4 78%, #d6c8a4);
+  box-shadow:
+    inset 0 2px 3px rgba(255, 255, 255, 0.9),
+    inset 0 -3px 5px rgba(120, 100, 60, 0.4),
+    0 4px 9px rgba(0, 0, 0, 0.5);
+  flex: none;
+}
+
+.ct-dice--red {
+  background: linear-gradient(150deg, #e8cfc2, #d4a893 78%, #bd8871);
+}
+
+.ct-dice-pip {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 36% 30%, #55504a, #26221d 72%);
+  transform: translate(-50%, -50%);
+}
+
+.ct-dice--red .ct-dice-pip {
+  background: radial-gradient(circle at 36% 30%, #6e3526, #33120a 72%);
+}
+
+.ct-dice-pip[data-pip="-1,-1"],
+.ct-dice-pip[data-pip="1,-1"] {
+  top: 25%;
+}
+
+.ct-dice-pip[data-pip="-1,0"],
+.ct-dice-pip[data-pip="1,0"] {
+  top: 50%;
+}
+
+.ct-dice-pip[data-pip="-1,1"],
+.ct-dice-pip[data-pip="1,1"] {
+  top: 75%;
+}
+
+.ct-dice-pip[data-pip="0,0"] {
+  top: 50%;
+}
+
+.ct-dice-pip[data-pip$=",-1"] {
+  left: 25%;
+}
+
+.ct-dice-pip[data-pip$=",1"] {
+  left: 75%;
+}
+
+.ct-dice-pip[data-pip="0,0"] {
+  left: 50%;
+}
+
+.ct-dice-pip[data-pip="-1,-1"] {
+  left: 25%;
+}
+
+.ct-dice-pip[data-pip="1,-1"] {
+  left: 75%;
+}
+
+.ct-dice-pip[data-pip="-1,0"],
+.ct-dice-pip[data-pip="-1,1"] {
+  left: 25%;
+}
+
+.ct-dice-pip[data-pip="1,0"],
+.ct-dice-pip[data-pip="1,1"] {
+  left: 75%;
+}
+
+.ct-dice.is-rolling {
+  animation: ct-dice-roll 0.78s ease both;
+}
+
+@keyframes ct-dice-roll {
+  0% {
+    transform: rotate(0) translateY(0);
+  }
+  22% {
+    transform: rotate(-24deg) translateY(-7px);
+  }
+  46% {
+    transform: rotate(19deg) translateY(-3px);
+  }
+  68% {
+    transform: rotate(-12deg) translateY(-5px);
+  }
+  86% {
+    transform: rotate(7deg) translateY(-1px);
+  }
+  100% {
+    transform: rotate(0) translateY(0);
+  }
+}
+
+/* 尊重系统减弱动态偏好：动画退化为简单淡入 */
+@media (prefers-reduced-motion: reduce) {
+  .ct-token.is-hot,
+  .ct-road.is-fresh,
+  .ct-piece.is-fresh,
+  .ct-robber,
+  .ct-floatchip,
+  .ct-confirm,
+  .ct-dice.is-rolling,
+  .ct-tile-hint,
+  .ct-hot-vertex circle:first-child,
+  .ct-hot-road line:first-child {
+    animation: none;
+  }
+}

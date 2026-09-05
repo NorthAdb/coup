@@ -4,11 +4,15 @@ import { App } from "./App.js";
 import { Portal } from "./portal/Portal.js";
 import { BrassApp } from "./brass/BrassApp.js";
 import { SplendorApp } from "./splendor/SplendorApp.js";
+import { CatanApp } from "./catan/CatanApp.js";
 import "./styles.css";
 import "./brass/brass.css";
 import "./splendor/splendor.css";
 import "./splendor/splendor-pieces.css";
 import "./splendor/splendor-table.css";
+import "./catan/catan.css";
+import "./catan/catan-pieces.css";
+import "./catan/catan-table.css";
 
 const path = window.location.pathname;
 
@@ -16,6 +20,7 @@ function route() {
   if (path === "/" || path === "/index.html") return <Portal />;
   if (path.startsWith("/brass")) return <BrassApp />;
   if (path.startsWith("/splendor")) return <SplendorApp />;
+  if (path.startsWith("/catan")) return <CatanApp />;
   // coup 全部既有路径（/join、/coup、遗留根路径）保持原行为。
   return <App />;
 }
@@ -29,7 +34,9 @@ document.title =
       ? "工业革命 · 伯明翰"
       : path.startsWith("/splendor")
         ? "璀璨宝石"
-        : "政变";
+        : path.startsWith("/catan")
+          ? "卡坦岛"
+          : "政变";
 
 const root = document.getElementById("root");
 if (!root) {

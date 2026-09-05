@@ -1,6 +1,6 @@
 # Midland Works · 线上桌游工坊
 
-一个跑在云服务器上的多游戏联机平台：React 19 + Fastify 5 + SQLite，TypeScript monorepo，单进程全栈。现收录三款桌游，共用一套平台核心（ADR-0010）——与账号无关的联机基础设施：4 位房间号门禁（按 IP 限速）、心跳离席状态机、只读观战、增量轮询、回合限时与超时代打、服务器重启逐房恢复；新游戏按 `GameModule` 接缝接入，不再从头搭房间栈（见 `docs/platform/adding-a-game.md`）。
+一个跑在云服务器上的多游戏联机平台：React 19 + Fastify 5 + SQLite，TypeScript monorepo，单进程全栈。现收录三款可联机桌游与一款高保真视觉原型（《卡坦岛》，Mock 对局未接后端），共用一套平台核心（ADR-0010）——与账号无关的联机基础设施：4 位房间号门禁（按 IP 限速）、心跳离席状态机、只读观战、增量轮询、回合限时与超时代打、服务器重启逐房恢复；新游戏按 `GameModule` 接缝接入，不再从头搭房间栈（见 `docs/platform/adding-a-game.md`）。
 
 门户首页 `/` 选择游戏，各游戏入口独立、视觉独立、规则引擎独立。
 
@@ -63,6 +63,20 @@
 
 ---
 
+## 《卡坦岛》Catan（视觉原型，入口 `/catan`）
+
+3–4 人经典资源经营桌游的**高保真 Web UI 原型**——第一阶段只做界面、交互与 Mock 对局状态，暂未接后端与多人同步。
+
+**视觉方向**（Premium Board Game × Natural World × Modern Digital Tabletop）：深胡桃木桌 + 深绿丝绒台面围合中央海图；老海图式海域（圆角图框、铜线饰线、经纬网格、罗盘、波纹）；六边形地块按地形分层上色并配 SVG 实体插画（林树/羊群/麦束/山岩/砖垛/沙丘）；黄铜木纹数字 Token（6/8 朱红、概率点数、命中点亮）；木质道路 / 立体村庄 / 双塔城市棋子按玩家低饱和主题色着色；9 座港口（码头栈桥 + 帆船 + 比率圆牌）；纸张质感资源手牌（重叠悬浮）与发展卡牌堆；实体骰子盘。
+
+**交互与 Mock 对局**：掷骰 → Token 点亮 → 产出飘卡 → 手牌更新的完整反馈链；建造向导（建造菜单 → 地图可建位呼吸高亮 → 确认气泡含成本与资源不足提示 → 落子弹入）；非法位置给地图内联提示而非仅禁用按钮；玩家/港口银行双通道交易（收到提议走轻量浮层，不遮地图）；掷 7 强盗迁址 + 受害者选择；骑士/道路建设/丰收/垄断发展卡效果；AI 三家自动入座、掷骰、建造成、发起交易；10 分仪式感胜利结算（明细 + 席位名次 + 金尘）。桌面端优先，窄屏重排玩家区并折叠交易为浮层。
+
+**Mock 说明**：纯前端状态（`apps/web/src/catan/`），引擎为无 IO 纯函数（棋盘生成种子确定、6/8 不相邻、蛇形预置落位），AI 启发式不追求棋力；深链 `/catan/play` 快速开局、`/catan/play#demo-win` 演示终局。正式联机化按 `docs/platform/adding-a-game.md` 走 GameModule 接缝。
+
+质量：13 项引擎单测（棋盘构成与 token 规则、开局预置、骰子生产、建造合法性与花费、交易全流程、航海比率、强盗、发展卡、最长道路、胜利判定）。
+
+---
+
 ## 仓库结构
 
 | 路径 | 内容 |
@@ -87,7 +101,7 @@ npm install
 
 # 联机版（构建全部工作区）
 npm run build
-npm run start        # 构建 web 后启动 server（默认 8787）；门户 / ，政变 /coup ，伯明翰 /brass，璀璨宝石 /splendor
+npm run start        # 构建 web 后启动 server（默认 8787）；门户 / ，政变 /coup ，伯明翰 /brass，璀璨宝石 /splendor，卡坦岛 /catan
 
 # 本机版（仅本机使用）
 npm run start:local  # 政变 Agent 对战，loopback 随机端口并自动打开浏览器
@@ -115,11 +129,11 @@ npm run start:local  # 政变 Agent 对战，loopback 随机端口并自动打�
 ## 测试
 
 ```bash
-npm test        # 全部工作区测试（283 项：domain 23 / brass-domain 21 / splendor-domain 18 / server 115 / web-desk 32 / web 8 / server-local 62 / web-local 4）
+npm test        # 全部工作区测试（296 项：domain 23 / brass-domain 21 / splendor-domain 18 / server 115 / web-desk 32 / web 21 / server-local 62 / web-local 4）
 npm run typecheck
 ```
 
-三款游戏的规则内核与对局编排（含续局确认、离席、增量轮询、观战投影等 API 级集成测试）有较完整的测试覆盖；`packages/brass-domain` 另有多种子随机完整对局模糊测试。
+三款联机游戏的规则内核与对局编排（含续局确认、离席、增量轮询、观战投影等 API 级集成测试）有较完整的测试覆盖；`packages/brass-domain` 另有多种子随机完整对局模糊测试；卡坦岛 Mock 引擎有 13 项纯函数单测（随 `@coup/web` 跑）。
 
 ## 技术栈
 

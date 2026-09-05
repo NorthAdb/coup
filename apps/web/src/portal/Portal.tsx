@@ -20,7 +20,7 @@ export function Portal() {
           <em>开工。</em>
         </h1>
         <p className="portal-lede">
-          三款可联机的经典桌游，浏览器直接开玩。创建房间、分享四位房号、实时同步对局。
+          四款可联机的经典桌游，浏览器直接开玩。创建房间、分享四位房号、实时同步对局。
         </p>
 
         <div className="portal-games">
@@ -75,6 +75,24 @@ export function Portal() {
               <span className="art-gem art-gem--emerald" />
               <span className="art-gem art-gem--sapphire" />
               <span className="art-gem art-gem--diamond" />
+            </div>
+          </a>
+
+          <a className="game-card game-card--catan" href="/catan">
+            <div className="game-card-plate">
+              <span className="game-card-kicker">3–4 人 · 探索经营</span>
+              <h2>卡坦岛</h2>
+              <h3>CATAN</h3>
+              <p>伐木烧砖、牧羊种麦。修路筑村、以物易物，在骰子的潮汐里率先建起十座荣光。</p>
+              <span className="game-card-cta">
+                登上小岛 <i>→</i>
+              </span>
+            </div>
+            <div className="game-card-art game-card-art--catan" aria-hidden="true">
+              <span className="art-hex art-hex--forest" />
+              <span className="art-hex art-hex--wheat" />
+              <span className="art-hex art-hex--ore" />
+              <span className="art-hex-sail" />
             </div>
           </a>
         </div>

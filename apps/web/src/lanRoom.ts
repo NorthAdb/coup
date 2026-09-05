@@ -1,11 +1,17 @@
 import type { SeatView } from "@coup/protocol";
+import {
+  createRoomClient,
+  ensureSession,
+  type ApiError,
+  type LobbySeatLike,
+} from "./platform/roomApi.ts";
 
-export type LobbySeat = {
-  seatId: string;
-  kind: "local_human" | "open" | "remote_human" | "closed";
-  displayName: string | null;
-  rematchStatus?: "awaiting" | "confirmed" | "left" | null;
-};
+/** Coup 房间客户端（ADR-0010）：传输与端点来自平台层，此处只做文案映射。 */
+const coup = createRoomClient("");
+
+export { ensureSession };
+
+export type LobbySeat = LobbySeatLike;
 
 export type RoomInvite = {
   code: string;
@@ -45,51 +51,7 @@ export function matchCurrentPath(
   decision = false,
   query?: { since?: number; spectate?: boolean },
 ): string {
-  if (!code) throw new Error("room code is required");
-  const params = new URLSearchParams();
-  if (query?.since != null) params.set("since", String(query.since));
-  if (query?.spectate) params.set("spectate", "1");
-  const qs = params.toString();
-  return `/api/rooms/${code}/matches/current${decision ? "/decision" : ""}${qs ? `?${qs}` : ""}`;
-}
-
-let csrfToken: string | null = null;
-
-export async function ensureSession(origin = ""): Promise<string> {
-  const base = origin || "";
-  const response = await fetch(`${base}/api/session`, {
-    credentials: "include",
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? "无法建立会话");
-  }
-  const body = (await response.json()) as { csrfToken: string };
-  csrfToken = body.csrfToken;
-  return csrfToken;
-}
-
-async function authedFetch(
-  url: string,
-  init: RequestInit = {},
-): Promise<Response> {
-  if (!csrfToken) {
-    const absolute = url.startsWith("http") ? new URL(url).origin : "";
-    await ensureSession(absolute);
-  }
-  const headers = new Headers(init.headers);
-  if (csrfToken) headers.set("x-csrf-token", csrfToken);
-  if (init.body && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
-  }
-  return fetch(url, {
-    ...init,
-    credentials: "include",
-    headers,
-  });
+  return coup.matchCurrentPath(code, decision, query);
 }
 
 export async function copyText(text: string): Promise<boolean> {
@@ -121,11 +83,10 @@ export async function copyText(text: string): Promise<boolean> {
   return copied;
 }
 
-async function waitForHostMode(attempts = 20): Promise<void> {
-  for (let i = 0; i < attempts; i += 1) {
+async function waitForHostMode(): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
       const response = await fetch("/api/hosting", { cache: "no-store" });
-      if (!response.ok) continue;
       const body = (await response.json()) as { bindMode?: string };
       if (body.bindMode === "host") return;
     } catch {
@@ -138,26 +99,22 @@ async function waitForHostMode(attempts = 20): Promise<void> {
 
 export async function createRoomOnCurrentOrigin(): Promise<RoomInvite> {
   await ensureSession();
-  const created = await authedFetch("/api/rooms", { method: "POST" });
-  if (!created.ok) {
-    const body = (await created.json().catch(() => null)) as {
-      error?: string;
-      message?: string;
-    } | null;
-    if (body?.error === "no_lan_ipv4") {
+  try {
+    return (await coup.createRoom()) as RoomInvite;
+  } catch (error) {
+    const code = (error as ApiError).code;
+    const message = (error as ApiError).message;
+    if (code === "no_lan_ipv4") {
       throw new Error("未检测到可用 IPv4，无法生成房间");
     }
-    if (body?.error === "need_host_mode") {
+    if (code === "need_host_mode") {
       throw new Error("仍未进入主机模式，请重试创建房间");
     }
-    if (body?.error === "recovery_pending_abandon") {
-      throw new Error(
-        body.message ?? "无法恢复上一房间：须先放弃并作废旧房后才能创建新房",
-      );
+    if (code === "recovery_pending_abandon") {
+      throw new Error(message ?? "无法恢复上一房间：须先放弃并作废旧房后才能创建新房");
     }
-    throw new Error(body?.error ?? "无法创建房间");
+    throw new Error(message ?? "无法创建房间");
   }
-  return (await created.json()) as RoomInvite;
 }
 
 export async function enterHostModeAndCreateRoom(): Promise<RoomInvite> {
@@ -187,24 +144,19 @@ export type RoomRecoveryItem = {
 export type RoomRecovery = { rooms: RoomRecoveryItem[] };
 
 export async function fetchRoomRecovery(): Promise<RoomRecovery> {
-  const response = await fetch("/api/room-recovery", { cache: "no-store" });
-  if (!response.ok) {
+  try {
+    return (await coup.fetchRecovery()) as RoomRecovery;
+  } catch {
     throw new Error("无法读取房间恢复状态");
   }
-  return (await response.json()) as RoomRecovery;
 }
 
 export async function abandonFailedRoomRecovery(roomCode: string): Promise<void> {
   await ensureSession();
-  const response = await authedFetch("/api/room-recovery/abandon", {
-    method: "POST",
-    body: JSON.stringify({ roomCode }),
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? "放弃旧房间失败");
+  try {
+    await coup.abandonRecovery("", roomCode);
+  } catch (error) {
+    throw new Error((error as ApiError).message ?? "放弃旧房间失败");
   }
 }
 
@@ -212,37 +164,29 @@ export async function fetchRoom(
   origin: string,
   code: string,
 ): Promise<RoomInvite> {
-  const response = await fetch(`${origin}/api/rooms/${code}`, {
-    credentials: "include",
-    cache: "no-store",
-  });
-  if (response.status === 404) {
-    throw new Error("房间号不正确，或房主还没开房");
-  }
-  if (response.status === 429) {
-    throw new Error("尝试太频繁，请稍后再试");
-  }
-  if (!response.ok) {
+  try {
+    return (await coup.fetchRoom(origin, code)) as RoomInvite;
+  } catch (error) {
+    const apiError = error as ApiError;
+    if (apiError.status === 404) {
+      throw new Error("房间号不正确，或房主还没开房");
+    }
+    if (apiError.status === 429) {
+      throw new Error("尝试太频繁，请稍后再试");
+    }
     throw new Error("无法查询房间");
   }
-  return (await response.json()) as RoomInvite;
 }
 
 export async function fetchMySeat(
   origin: string,
   code: string,
 ): Promise<{ seat: LobbySeat | null; seats: LobbySeat[] }> {
-  const response = await fetch(`${origin}/api/rooms/${code}/me`, {
-    credentials: "include",
-    cache: "no-store",
-  });
-  if (!response.ok) {
+  try {
+    return await coup.fetchMySeat(origin, code);
+  } catch {
     throw new Error("无法确认座位凭证");
   }
-  return (await response.json()) as {
-    seat: LobbySeat | null;
-    seats: LobbySeat[];
-  };
 }
 
 export async function claimSeat(
@@ -251,24 +195,14 @@ export async function claimSeat(
   seatId: string,
   displayName: string,
 ): Promise<{ seat: LobbySeat; seats: LobbySeat[] }> {
-  await ensureSession(origin);
-  const response = await authedFetch(
-    `${origin}/api/rooms/${code}/seats/${seatId}/claim`,
-    {
-      method: "POST",
-      body: JSON.stringify({ displayName }),
-    },
-  );
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    if (body?.error === "seat_not_open") {
+  try {
+    return await coup.claimSeat(origin, code, seatId, displayName);
+  } catch (error) {
+    if ((error as ApiError).code === "seat_not_open") {
       throw new Error("该座位不可占或已被占用");
     }
-    throw new Error(body?.error ?? "占座失败");
+    throw new Error((error as ApiError).message ?? "占座失败");
   }
-  return (await response.json()) as { seat: LobbySeat; seats: LobbySeat[] };
 }
 
 export async function renameSeat(
@@ -277,18 +211,11 @@ export async function renameSeat(
   seatId: string,
   displayName: string,
 ): Promise<{ seat: LobbySeat; seats: LobbySeat[] }> {
-  await ensureSession(origin);
-  const response = await authedFetch(
-    `${origin}/api/rooms/${code}/seats/${seatId}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({ displayName }),
-    },
-  );
-  if (!response.ok) {
+  try {
+    return await coup.renameSeat(origin, code, seatId, displayName);
+  } catch {
     throw new Error("无法修改显示名");
   }
-  return (await response.json()) as { seat: LobbySeat; seats: LobbySeat[] };
 }
 
 export async function configureLobbySeat(
@@ -296,21 +223,11 @@ export async function configureLobbySeat(
   seatId: string,
   payload: { kind: "open" } | { kind: "closed" },
 ): Promise<{ seat: LobbySeat; seats: LobbySeat[] }> {
-  await ensureSession();
-  const response = await authedFetch(
-    `/api/rooms/${code}/seats/${seatId}/config`,
-    {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    },
-  );
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? "无法配置座位");
+  try {
+    return await coup.configureSeat("", code, seatId, payload);
+  } catch (error) {
+    throw new Error((error as ApiError).message ?? "无法配置座位");
   }
-  return (await response.json()) as { seat: LobbySeat; seats: LobbySeat[] };
 }
 
 export async function startRoomMatch(code: string): Promise<{
@@ -318,75 +235,51 @@ export async function startRoomMatch(code: string): Promise<{
   matchId: string;
   phase: string;
 }> {
-  await ensureSession();
-  const response = await authedFetch(`/api/rooms/${code}/start`, {
-    method: "POST",
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-      hint?: string;
-    } | null;
-    throw new Error(body?.hint ?? body?.error ?? "无法开局");
+  try {
+    return (await coup.start("", code)) as {
+      view: SeatView;
+      matchId: string;
+      phase: string;
+    };
+  } catch (error) {
+    const apiError = error as ApiError & { hint?: string };
+    throw new Error(apiError.message ?? "无法开局");
   }
-  return (await response.json()) as {
-    view: SeatView;
-    matchId: string;
-    phase: string;
-  };
 }
 
 export async function enterRoomRematch(
   code: string,
 ): Promise<{ code: string; phase: string; seats: LobbySeat[]; matchId: string | null }> {
-  await ensureSession();
-  const response = await authedFetch(`/api/rooms/${code}/rematch`, {
-    method: "POST",
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? "无法进入续局等待");
+  try {
+    return (await coup.enterRematch("", code)) as {
+      code: string;
+      phase: string;
+      seats: LobbySeat[];
+      matchId: string | null;
+    };
+  } catch (error) {
+    throw new Error((error as ApiError).message ?? "无法进入续局等待");
   }
-  return (await response.json()) as {
-    code: string;
-    phase: string;
-    seats: LobbySeat[];
-    matchId: string | null;
-  };
 }
 
 export async function confirmRoomRematch(
   code: string,
 ): Promise<{ seat: LobbySeat; seats: LobbySeat[] }> {
-  await ensureSession();
-  const response = await authedFetch(`/api/rooms/${code}/rematch/join`, {
-    method: "POST",
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? "加入对局失败");
+  try {
+    return (await coup.confirmRematch("", code)) as { seat: LobbySeat; seats: LobbySeat[] };
+  } catch {
+    throw new Error("加入对局失败");
   }
-  return (await response.json()) as { seat: LobbySeat; seats: LobbySeat[] };
 }
 
 export async function declineRoomRematch(
   code: string,
 ): Promise<{ seats: LobbySeat[] }> {
-  await ensureSession();
-  const response = await authedFetch(`/api/rooms/${code}/rematch/leave`, {
-    method: "POST",
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? "离开对局失败");
+  try {
+    return (await coup.declineRematch("", code)) as { seats: LobbySeat[] };
+  } catch {
+    throw new Error("离开对局失败");
   }
-  return (await response.json()) as { seats: LobbySeat[] };
 }
 
 export function lobbyStartBlockHint(
@@ -437,18 +330,12 @@ export async function updateRoomSettings(
   code: string,
   settings: { turnTimeLimitSec: number },
 ): Promise<{ turnTimeLimitSec: number }> {
-  await ensureSession();
-  const response = await authedFetch(`/api/rooms/${code}/settings`, {
-    method: "PATCH",
-    body: JSON.stringify(settings),
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? "无法保存房间设置");
+  try {
+    const result = await coup.updateSettings("", code, settings);
+    return { turnTimeLimitSec: result.turnTimeLimitSec };
+  } catch {
+    throw new Error("无法保存房间设置");
   }
-  return (await response.json()) as { turnTimeLimitSec: number };
 }
 
 export type SeatAbsenceView = {
@@ -461,37 +348,25 @@ export type SeatAbsenceView = {
 export async function postRoomHeartbeat(
   code: string,
 ): Promise<{ absences: SeatAbsenceView[] }> {
-  await ensureSession();
-  const response = await authedFetch(`/api/rooms/${code}/heartbeat`, {
-    method: "POST",
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? "心跳失败");
+  try {
+    return (await coup.heartbeat("", code)) as { absences: SeatAbsenceView[] };
+  } catch {
+    throw new Error("心跳失败");
   }
-  return (await response.json()) as { absences: SeatAbsenceView[] };
 }
 
 export async function resumeRoomSeat(code: string): Promise<{
   resumed: boolean;
   absences: SeatAbsenceView[];
 }> {
-  await ensureSession();
-  const response = await authedFetch(`/api/rooms/${code}/resume-seat`, {
-    method: "POST",
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? "回席失败");
+  try {
+    return (await coup.resumeSeat("", code)) as {
+      resumed: boolean;
+      absences: SeatAbsenceView[];
+    };
+  } catch {
+    throw new Error("回席失败");
   }
-  return (await response.json()) as {
-    resumed: boolean;
-    absences: SeatAbsenceView[];
-  };
 }
 
 export type DispositionAction =
@@ -504,19 +379,9 @@ export async function postSeatDisposition(
   seatId: string,
   action: DispositionAction,
 ): Promise<Record<string, unknown>> {
-  await ensureSession();
-  const response = await authedFetch(
-    `/api/rooms/${code}/seats/${seatId}/disposition`,
-    {
-      method: "POST",
-      body: JSON.stringify({ action }),
-    },
-  );
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? "处置失败");
+  try {
+    return await coup.disposition("", code, seatId, action);
+  } catch {
+    throw new Error("处置失败");
   }
-  return (await response.json()) as Record<string, unknown>;
 }

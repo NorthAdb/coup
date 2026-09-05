@@ -648,6 +648,7 @@ describe("host restart room recovery", () => {
         code: "migration:corrupt",
         status: "failed",
         reason: "corrupt",
+        game: "coup",
         phase: null,
         matchId: null,
         seats: [],

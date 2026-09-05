@@ -245,7 +245,7 @@ export function BrassApp() {
             }}
             onConfirm={async () => {
               try {
-                await confirmBrassRematch(room.code, mySeatId ?? "");
+                await confirmBrassRematch(room.code);
                 showToast("已确认续局");
               } catch (e) {
                 showToast(errorText(e));

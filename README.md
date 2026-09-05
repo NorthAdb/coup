@@ -1,6 +1,6 @@
 # Midland Works · 线上桌游工坊
 
-一个跑在云服务器上的多游戏联机平台：React 19 + Fastify 5 + SQLite，TypeScript monorepo，单进程全栈。现收录两款桌游，共用一套与账号无关的联机基础设施——4 位房间号门禁（按 IP 限速）、心跳离席状态机、只读观战、增量轮询、回合限时与超时代打、服务器重启逐房恢复。
+一个跑在云服务器上的多游戏联机平台：React 19 + Fastify 5 + SQLite，TypeScript monorepo，单进程全栈。现收录两款桌游，共用一套平台核心（ADR-0010）——与账号无关的联机基础设施：4 位房间号门禁（按 IP 限速）、心跳离席状态机、只读观战、增量轮询、回合限时与超时代打、服务器重启逐房恢复；新游戏按 `GameModule` 接缝接入，不再从头搭房间栈（见 `docs/platform/adding-a-game.md`）。
 
 门户首页 `/` 选择游戏，各游戏入口独立、视觉独立、规则引擎独立。
 
@@ -37,7 +37,7 @@
 
 规则数据经**三源交叉验证**：官方规则书 PDF、ikegami/tts_brass（官方扫描 TTS 脚本）、npow/BrassBirmingham，逐表核对（详见 `.scratch/brass-birmingham/spec.md`，冲突裁决记录在案）。
 
-**平行房间栈** `apps/server/src/brass/`：`/api/brass/rooms/*` 全套路由，复用会话/CSRF 守卫、心跳离席状态机与跨游戏共享的 4 位房间码池（`docs/adr/0009`）；独立 SQLite 表（`brass_rooms`/`brass_runs`），支持重启恢复、观战、增量轮询与超时代打。
+**接入方式**：`apps/server/src/brass/brassModule.ts` 是一个 `GameModule` 适配器，挂载在平台通用房间栈上（ADR-0010）；`/api/brass/rooms/*` 与 coup 共用同一份编排实现，复用会话/CSRF 守卫、心跳离席状态机与跨游戏共享的 4 位房间码池（`docs/adr/0009`）；独立 SQLite 表（`brass_rooms`/`brass_runs`），支持重启恢复、观战、增量轮询与超时代打。
 
 **视觉与交互**（黄铜/羊皮纸主题）：
 
@@ -54,10 +54,14 @@
 | 路径 | 内容 |
 |---|---|
 | `apps/web` + `apps/server` | 联机版前端与后端（两款游戏共用门户、会话、房间基础设施） |
+| `apps/server/src/platform/` | **平台核心**：`GameModule` 接缝 + 通用房间/对局栈（ADR-0010），新游戏零重写接入 |
+| `apps/server/src/games/` · `apps/server/src/brass/` | 各游戏的平台适配器（GameModule 实现，约 200 行/款） |
+| `apps/web/src/platform/` | **前端平台核心**：会话/CSRF 传输 + `createRoomClient(prefix)` 房间端点工厂 |
 | `apps/web-local` + `apps/server-local` | 《政变》本机版（人类 vs 本机 Agent，仅 loopback） |
 | `packages/domain` / `packages/protocol` / `packages/web-desk` | 《政变》共享层：规则引擎、协议类型、策划桌 UI |
 | `packages/brass-domain` | 《伯明翰》纯函数规则引擎（无 IO，可直接单测/模糊测试） |
-| `docs/adr/` | 决策记录（0001–0009） |
+| `docs/adr/` | 决策记录（0001–0010） |
+| `docs/platform/adding-a-game.md` | 新游戏接入指南（GameModule 清单） |
 | `.scratch/<feature>/spec.md` | 各特性完整规格（issue tracker 用法见 `docs/agents/issue-tracker.md`） |
 
 ## 快速开始
@@ -97,7 +101,7 @@ npm run start:local  # 政变 Agent 对战，loopback 随机端口并自动打�
 ## 测试
 
 ```bash
-npm test        # 全部工作区测试（241 项：domain 23 / brass-domain 21 / server 91 / web-desk 32 / web 8 / server-local 62 / web-local 4）
+npm test        # 全部工作区测试（248 项：domain 23 / brass-domain 21 / server 98 / web-desk 32 / web 8 / server-local 62 / web-local 4）
 npm run typecheck
 ```
 

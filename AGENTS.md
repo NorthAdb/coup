@@ -30,7 +30,8 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 ### 部署
 
 - 服务器地址、密钥路径与完整命令见 `.scratch/deploy-notes.local.md`（gitignored，含敏感信息，勿提交）。
-- 流程：`git archive HEAD` 打包 → scp 到服务器解压 → 服务器 `npm run build` → `systemctl restart coup`。
+- 流程：`git archive HEAD` 打包 → scp 到服务器解压 → 服务器 `npm install`（仅当新增/改动 workspace 包或依赖时必须，普通版本可跳过）→ `npm run build` → `systemctl restart coup`。
+- 坑：`.gitignore` 的 `data/` 曾误伤 `packages/*/src/data/`（brass 牌表长期未入库，线上靠旧残留文件侥幸构建）；已根锚定为 `/data/`（2026-09 修复，ADR-0011 有记）。
 - 线上验证：`systemctl is-active coup`；curl 首页看引用的 bundle 名。bundle 哈希可能因 CRLF/LF 与本地不一致，**用内容标记**（在 bundle 里 grep 新功能文案）判断新旧，不要比对哈希相等。
 
 ### 迭代纪律（用户预期的工作方式）

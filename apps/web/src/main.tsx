@@ -15,6 +15,15 @@ function route() {
   return <App />;
 }
 
+// 标签页标题按页面区隔：门户/大厅用「大厅」，各游戏用各自的名字；
+// 进入房间后由各 App 细化（如「政变 · 房间 NNNN」）。
+document.title =
+  path === "/" || path === "/index.html"
+    ? "大厅"
+    : path.startsWith("/brass")
+      ? "工业革命 · 伯明翰"
+      : "政变";
+
 const root = document.getElementById("root");
 if (!root) {
   throw new Error("Missing #root");

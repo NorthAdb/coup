@@ -68,6 +68,13 @@ export function BrassApp() {
     window.setTimeout(() => setError((cur) => (cur === message ? null : cur)), 4000);
   }, []);
 
+  // 浏览器标签页标题跟随状态（与 coup App.tsx 同款模式）。
+  useEffect(() => {
+    document.title = room
+      ? `工业革命 · 伯明翰 · 房间 ${room.code}`
+      : "工业革命 · 伯明翰";
+  }, [room]);
+
   useEffect(() => {
     fetchBrassRecovery()
       .then((body) => setRecoveryItems(body.items.filter((i) => i.status === "failed")))

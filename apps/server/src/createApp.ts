@@ -26,6 +26,8 @@ import {
 } from "./games/coupModule.js";
 import { brassGameStore, brassModule } from "./brass/brassModule.js";
 import { openBrassStore } from "./brass/brassStore.js";
+import { splendorGameStore, splendorModule } from "./splendor/splendorModule.js";
+import { openSplendorStore } from "./splendor/splendorStore.js";
 import { createSeatPresenceTracker, type SeatPresenceTracker } from "./seatPresenceTracker.js";
 
 export type BindMode = "local" | "host";
@@ -82,6 +84,7 @@ export async function createApp(options: CreateAppOptions) {
   const store = options.store ?? openMatchStore(dbPath);
   const roomStore = options.roomStore ?? openRoomStore(dbPath);
   const brassStore = openBrassStore(dbPath);
+  const splendorStore = openSplendorStore(dbPath);
   // 旧库迁移：把无 room_code 的历史 run 归位到其房间（须在栈恢复房间前执行）。
   store.migrateLegacyRuns(roomStore.loadRooms().rooms);
   const sessions = options.sessions ?? createSessionStore();
@@ -227,11 +230,26 @@ export async function createApp(options: CreateAppOptions) {
     hostingAvailable: options.hosting != null,
     now,
   });
+  createGameRoomStack(app, {
+    module: splendorModule,
+    store: splendorGameStore(splendorStore),
+    roomPersistence: {
+      saveRoom: (room) => splendorStore.saveSplendorRoom(room),
+      clearRoom: (code) => splendorStore.clearSplendorRoom(code),
+      loadRooms: () => splendorStore.loadSplendorRooms(),
+    },
+    requireSession,
+    appendSetCookie,
+    getHostContext,
+    hostingAvailable: options.hosting != null,
+    now,
+  });
 
   app.addHook("onClose", async () => {
     store.close();
     roomStore.close();
     brassStore.close();
+    splendorStore.close();
   });
 
   app.get("/api/session", async (request, reply) => {

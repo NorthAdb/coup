@@ -1,5 +1,5 @@
 /**
- * 门户首页：双游戏选择。工业时代暗色主题（brass 专属视觉体系，与 coup 样式隔离）。
+ * 门户首页：三款游戏选择。工业时代暗色主题（brass 专属视觉体系，与 coup 样式隔离）。
  */
 
 export function Portal() {
@@ -20,7 +20,7 @@ export function Portal() {
           <em>开工。</em>
         </h1>
         <p className="portal-lede">
-          两款可联机的经典桌游，浏览器直接开玩。创建房间、分享四位房号、实时同步对局。
+          三款可联机的经典桌游，浏览器直接开玩。创建房间、分享四位房号、实时同步对局。
         </p>
 
         <div className="portal-games">
@@ -57,6 +57,24 @@ export function Portal() {
               <span className="art-card art-card--1" />
               <span className="art-card art-card--2" />
               <span className="art-card art-card--3" />
+            </div>
+          </a>
+
+          <a className="game-card game-card--splendor" href="/splendor">
+            <div className="game-card-plate">
+              <span className="game-card-kicker">2–4 人 · 宝石经营</span>
+              <h2>璀璨宝石</h2>
+              <h3>SPLENDOR</h3>
+              <p>文艺复兴的宝石商道。开采原石、招揽贵族，率先集齐 15 点声望折桂。</p>
+              <span className="game-card-cta">
+                进入珠宝行 <i>→</i>
+              </span>
+            </div>
+            <div className="game-card-art game-card-art--splendor" aria-hidden="true">
+              <span className="art-gem art-gem--ruby" />
+              <span className="art-gem art-gem--emerald" />
+              <span className="art-gem art-gem--sapphire" />
+              <span className="art-gem art-gem--diamond" />
             </div>
           </a>
         </div>

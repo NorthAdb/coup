@@ -1,6 +1,6 @@
 # Midland Works · 线上桌游工坊
 
-一个跑在云服务器上的多游戏联机平台：React 19 + Fastify 5 + SQLite，TypeScript monorepo，单进程全栈。现收录两款桌游，共用一套平台核心（ADR-0010）——与账号无关的联机基础设施：4 位房间号门禁（按 IP 限速）、心跳离席状态机、只读观战、增量轮询、回合限时与超时代打、服务器重启逐房恢复；新游戏按 `GameModule` 接缝接入，不再从头搭房间栈（见 `docs/platform/adding-a-game.md`）。
+一个跑在云服务器上的多游戏联机平台：React 19 + Fastify 5 + SQLite，TypeScript monorepo，单进程全栈。现收录三款桌游，共用一套平台核心（ADR-0010）——与账号无关的联机基础设施：4 位房间号门禁（按 IP 限速）、心跳离席状态机、只读观战、增量轮询、回合限时与超时代打、服务器重启逐房恢复；新游戏按 `GameModule` 接缝接入，不再从头搭房间栈（见 `docs/platform/adding-a-game.md`）。
 
 门户首页 `/` 选择游戏，各游戏入口独立、视觉独立、规则引擎独立。
 
@@ -49,18 +49,32 @@
 
 ---
 
+## 《璀璨宝石》Splendor
+
+2–4 人的文艺复兴宝石经营桌游，入口 `/splendor`。
+
+**规则引擎** `packages/splendor-domain`（纯函数、无 IO）：官方基础版全量 90 张发展卡（40/30/20 三级）与 10 张贵族（5 张 4+4 + 5 张 3+3+3），牌表经两个独立开源数据集交叉核对完全一致（bouk/splendimax ≡ seal256/splendor）；2/3/4 人对应的宝石供给（4/5/7 枚/色）与贵族张数（人数+1）；拿三散/两同色、预留（明牌立即同级补位 + 盲留牌库顶）、购买（加成抵扣 + 黄金补差）、10 枚筹码上限即时弃牌、贵族自动造访与多选一、15 分后打完当前轮再结算、平局比已购卡数。
+
+**接入方式**：`apps/server/src/splendor/splendorModule.ts` 是一个 `GameModule` 适配器，挂载在平台通用房间栈上（ADR-0010）；`/api/splendor/rooms/*` 与 coup/brass 共用同一份编排实现；独立 SQLite 表（`splendor_rooms`/`splendor_runs`），支持重启恢复、观战、增量轮询与超时代打（弃牌/选贵族/拿宝石/买牌的最小破坏决策）。
+
+**视觉与交互**（文艺复兴珠宝主题）：深胡桃木桌面 + 深绿丝绒台面 + 黄铜金细饰；切面宝石筹码（radial+conic 双层高光）；三级卡牌质感递进（L3 金框重饰）；贵族金框肖像（SVG 王冠剪影 + 中文译名）；悬停卡牌浮起并呈现购买/预留操作与宝石缺口高亮；点选供应区宝石（三散或同色两枚）配确认条；超限弃牌步进器；贵族多选面板；对局纪事中文日志；终局月桂折桂结算（含席位名次表与续局确认）。
+
+质量：18 项规则单测（设置确定性、行动校验、弃牌、贵族、终局轮转与平局、自动代打、投影裁剪）+ 6 项 API 集成测试（含重启恢复回归）。
+
+---
+
 ## 仓库结构
 
 | 路径 | 内容 |
 |---|---|
 | `apps/web` + `apps/server` | 联机版前端与后端（两款游戏共用门户、会话、房间基础设施） |
 | `apps/server/src/platform/` | **平台核心**：`GameModule` 接缝 + 通用房间/对局栈（ADR-0010），新游戏零重写接入 |
-| `apps/server/src/games/` · `apps/server/src/brass/` | 各游戏的平台适配器（GameModule 实现，约 200 行/款） |
+| `apps/server/src/games/` · `apps/server/src/brass/` · `apps/server/src/splendor/` | 各游戏的平台适配器（GameModule 实现，约 200 行/款） |
 | `apps/web/src/platform/` | **前端平台核心**：会话/CSRF 传输 + `createRoomClient(prefix)` 房间端点工厂 |
 | `apps/web-local` + `apps/server-local` | 《政变》本机版（人类 vs 本机 Agent，仅 loopback） |
 | `packages/domain` / `packages/protocol` / `packages/web-desk` | 《政变》共享层：规则引擎、协议类型、策划桌 UI |
-| `packages/brass-domain` | 《伯明翰》纯函数规则引擎（无 IO，可直接单测/模糊测试） |
-| `docs/adr/` | 决策记录（0001–0010） |
+| `packages/brass-domain` / `packages/splendor-domain` | 《伯明翰》/《璀璨宝石》纯函数规则引擎（无 IO，可直接单测） |
+| `docs/adr/` | 决策记录（0001–0011） |
 | `docs/platform/adding-a-game.md` | 新游戏接入指南（GameModule 清单） |
 | `.scratch/<feature>/spec.md` | 各特性完整规格（issue tracker 用法见 `docs/agents/issue-tracker.md`） |
 
@@ -73,7 +87,7 @@ npm install
 
 # 联机版（构建全部工作区）
 npm run build
-npm run start        # 构建 web 后启动 server（默认 8787）；门户 / ，政变 /coup ，伯明翰 /brass
+npm run start        # 构建 web 后启动 server（默认 8787）；门户 / ，政变 /coup ，伯明翰 /brass，璀璨宝石 /splendor
 
 # 本机版（仅本机使用）
 npm run start:local  # 政变 Agent 对战，loopback 随机端口并自动打开浏览器
@@ -101,11 +115,11 @@ npm run start:local  # 政变 Agent 对战，loopback 随机端口并自动打�
 ## 测试
 
 ```bash
-npm test        # 全部工作区测试（248 项：domain 23 / brass-domain 21 / server 98 / web-desk 32 / web 8 / server-local 62 / web-local 4）
+npm test        # 全部工作区测试（272 项：domain 23 / brass-domain 21 / splendor-domain 18 / server 104 / web-desk 32 / web 8 / server-local 62 / web-local 4）
 npm run typecheck
 ```
 
-两款游戏的规则内核与对局编排（含续局确认、离席、增量轮询、观战投影等 API 级集成测试）有较完整的测试覆盖；`packages/brass-domain` 另有多种子随机完整对局模糊测试。
+三款游戏的规则内核与对局编排（含续局确认、离席、增量轮询、观战投影等 API 级集成测试）有较完整的测试覆盖；`packages/brass-domain` 另有多种子随机完整对局模糊测试。
 
 ## 技术栈
 

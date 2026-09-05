@@ -12,14 +12,13 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 
 ## 项目记忆（跨会话备忘）
 
-新会话直接引用本节，无需重新摸索。规则类改动先对照 `.scratch/brass-birmingham/spec.md` 与规则书 `.scratch/brass-birmingham/research/brass-rules.txt`。
+新会话直接引用本节，无需重新摸索。规则类改动先对照 `.scratch/brass-birmingham/spec.md` 与规则书 `.scratch/brass-birmingham/research/brass-rules.txt`（brass）；splendor 以官方规则书为准（牌表交叉核对记录见 `docs/adr/0011`）。
 
 ### 本地开发与验证循环
 
 - 改码后先 `npm run build`（全工作区），再起本地服务器：`COUP_BIND_MODE=host COUP_PORT=8787 COUP_OPEN_BROWSER=0 node apps/server/dist/main.js`（用后台任务方式，不要 shell `&`）。
 - 服务器重启后浏览器必须硬导航（先 about:blank 再进目标 URL），否则拿到旧页面/旧 bundle。
 - **跑 `npm test` 前必须停掉本地服务器**（startServer 测试要占 8787 端口）。测试套件全部用临时 DB，不会污染 `~/.coup/coup.sqlite`。
-- 本地 Brass 房间上限 10 个；满了用 node:sqlite 清库：`DELETE FROM brass_runs; DELETE FROM brass_rooms;`（注意：清库会毁掉进行中的本地对局）。
 - 浏览器手动验证时 60 秒回合计时器会不断"自动代打"吃掉回合：开局前把限时设为不限时；或在页面上下文里用 fetch 直接 POST 决策——先 `GET /api/session` 拿 CSRF，`POST .../matches/current/decision` 带 `x-csrf-token` 头，遇 `version_mismatch` 就重取版本重试。
 
 ### 机器人对局测试
@@ -37,18 +36,19 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 ### 迭代纪律（用户预期的工作方式）
 
 - 每轮改动：本地浏览器实测 → `npm test` + `npm run typecheck` 全绿 → 中文提交信息（写清动机）→ 部署 → 线上复验 → 中文汇报。
-- 测试规模基线：全仓 248 项（domain 23 / brass-domain 21 / server 98 / web-desk 32 / web 8 / server-local 62 / web-local 4），总数变化时更新 README。
+- 测试规模基线：全仓 272 项（domain 23 / brass-domain 21 / splendor-domain 18 / server 104 / web-desk 32 / web 8 / server-local 62 / web-local 4），总数变化时更新 README。
 
 ### 平台层（ADR-0010，2026-09 落地）
 
-- **改游戏规则**去 `packages/domain` / `packages/brass-domain`；**改联机编排**去 `apps/server/src/platform/gameRoomStack.ts`（一款实现，两游戏共用）；两者之间只经 `platform/gameModule.ts` 的 `GameModule` 接缝，不要在栈里写游戏语义。
+- **改游戏规则**去 `packages/domain` / `packages/brass-domain` / `packages/splendor-domain`；**改联机编排**去 `apps/server/src/platform/gameRoomStack.ts`（一款实现，两游戏共用）；两者之间只经 `platform/gameModule.ts` 的 `GameModule` 接缝，不要在栈里写游戏语义。新游戏接入清单：`docs/platform/adding-a-game.md`；splendor 接入记录：`docs/adr/0011`。
 - 新游戏接入清单：`docs/platform/adding-a-game.md`。核心步骤 = GameModule 适配器（约 200 行，参考 `apps/server/src/brass/brassModule.ts`）+ createApp 一行挂载 + 前端 `createRoomClient(prefix)` 薄壳 + API 集成测试（参考 `brassRoomApi.test.ts`）。
 - 前端传输统一走 `apps/web/src/platform/roomApi.ts`；`lanRoom.ts`/`brassApi.ts` 只留文案映射与类型。被 node `--experimental-strip-types` 测试链路引用的文件，import 说明符要用 `.ts` 后缀（vite/tsc 均兼容）。
 - coup 旧路径 `/api/rooms…`、`/api/room-recovery` 原样保留（响应多了 `game` 字段，向后兼容）；brass 走 `/api/brass/rooms…`，恢复清单键是 `items`（coup 是 `rooms`），由 `GameModule.recoveryListKey` 区分。
 
 ### 已知事实与坑
 
-- 入口路由：`/` 门户、`/brass` 伯明翰、`/coup` 与 `/join` 政变（`apps/web/src/main.tsx` 的 `route()`）。
+- 入口路由：`/` 门户、`/brass` 伯明翰、`/splendor` 璀璨宝石、`/coup` 与 `/join` 政变（`apps/web/src/main.tsx` 的 `route()`）。
+- 本地 Brass/ splendor 房间上限各 10 个；满了用 node:sqlite 清库：`DELETE FROM brass_runs; DELETE FROM brass_rooms;`（splendor 对应 `splendor_runs`/`splendor_rooms`；注意：清库会毁掉进行中的本地对局）。
 - Brass 持久化为逐命令提交（`brassStore.commitCommand`）；**旧 brassRoutes 曾漏传 persistence 导致决策不落库、重启回滚**（2026-09 随平台化修复，brassRoomApi.test 锁定回归）——新游戏适配器务必在 `submitDecision` 里接 `options.store`。
 - 前端 spectator 标记在回席/建房/就座时必须复位（`BrassApp`），否则前观战者回到对局看不到手牌。
 - Brass 续局 join/leave 按座位凭证路由（`/rematch/join` 无 seatId 段，与 coup 一致）；旧实现路径不一致导致线上续局无法确认，已修并有回归测试。

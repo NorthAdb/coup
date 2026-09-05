@@ -1404,3 +1404,83 @@
 .brass-rules-body b {
   color: var(--b-rust);
 }
+
+/* ---------------- 门户 · 璀璨宝石卡片 ---------------- */
+
+.game-card--splendor {
+  background:
+    radial-gradient(420px 300px at 85% 20%, rgba(176, 48, 72, 0.20), transparent 65%),
+    radial-gradient(420px 300px at 70% 90%, rgba(31, 138, 85, 0.16), transparent 65%),
+    linear-gradient(160deg, rgba(58, 48, 30, 0.55), rgba(29, 25, 17, 0.9));
+}
+
+.game-card--splendor .game-card-cta {
+  background: linear-gradient(120deg, #f0d9a6, #cfa653);
+  color: #2e2007;
+}
+
+.game-card-art--splendor {
+  background: radial-gradient(320px 260px at 80% 34%, rgba(220, 174, 68, 0.16), transparent 70%);
+}
+
+.art-gem {
+  position: absolute;
+  border-radius: 50%;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.5));
+}
+
+.art-gem::after {
+  content: "";
+  position: absolute;
+  left: 18%;
+  top: 12%;
+  width: 34%;
+  height: 24%;
+  border-radius: 50%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0));
+}
+
+.art-gem--ruby {
+  width: 92px;
+  height: 92px;
+  right: 30px;
+  top: 30px;
+  background: radial-gradient(circle at 32% 27%, #ec8b98 0%, #b03048 46%, #5c1220 100%);
+  border: 3px solid rgba(240, 217, 166, 0.75);
+  animation: gem-float 7s ease-in-out infinite;
+}
+
+.art-gem--emerald {
+  width: 64px;
+  height: 64px;
+  right: 128px;
+  top: 96px;
+  background: radial-gradient(circle at 32% 27%, #79d8a2 0%, #1f8a55 46%, #0c4629 100%);
+  border: 3px solid rgba(240, 217, 166, 0.75);
+  animation: gem-float 8.5s ease-in-out infinite 0.6s;
+}
+
+.art-gem--sapphire {
+  width: 54px;
+  height: 54px;
+  right: 40px;
+  top: 150px;
+  background: radial-gradient(circle at 32% 27%, #8cc0ee 0%, #2a6db5 46%, #16395f 100%);
+  border: 3px solid rgba(240, 217, 166, 0.75);
+  animation: gem-float 9.5s ease-in-out infinite 1.2s;
+}
+
+.art-gem--diamond {
+  width: 40px;
+  height: 40px;
+  right: 146px;
+  top: 30px;
+  background: radial-gradient(circle at 32% 27%, #ffffff 0%, #e3e9ec 46%, #a8b8c2 100%);
+  border: 3px solid rgba(240, 217, 166, 0.75);
+  animation: gem-float 10s ease-in-out infinite 1.8s;
+}
+
+@keyframes gem-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9px); }
+}

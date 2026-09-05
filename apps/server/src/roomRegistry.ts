@@ -83,6 +83,16 @@ export type RoomRegistry = {
         ok: false;
         reason: "room_not_found" | "seat_not_found" | "seat_not_human";
       };
+  /** 客人主动让出已占座位：座位转开放占座，凭证作废。 */
+  releaseSeat(
+    code: string,
+    seatId: string,
+  ):
+    | { ok: true; seat: LobbySeat; room: RoomRecord }
+    | {
+        ok: false;
+        reason: "room_not_found" | "seat_not_found" | "seat_not_remote";
+      };
   findSeatByCredential(
     code: string,
     credentialHash: string,
@@ -271,6 +281,21 @@ export function createRoomRegistry(options?: CreateRoomRegistryOptions): RoomReg
       return (
         room.seats.find((s) => s.credentialHash === credentialHash) ?? null
       );
+    },
+    releaseSeat(code, seatId) {
+      const room = rooms.get(code);
+      if (!room) return { ok: false, reason: "room_not_found" };
+      const seat = room.seats.find((s) => s.seatId === seatId);
+      if (!seat) return { ok: false, reason: "seat_not_found" };
+      // 只有远程客人能自己让座；房主座位（本地）不适用。
+      if (seat.kind !== "remote_human") {
+        return { ok: false, reason: "seat_not_remote" };
+      }
+      seat.kind = "open";
+      seat.displayName = null;
+      seat.credentialHash = null;
+      seat.rematchStatus = null;
+      return { ok: true, seat, room };
     },
     configureSeat(code, seatId, input) {
       const room = rooms.get(code);

@@ -37,7 +37,7 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 ### 迭代纪律（用户预期的工作方式）
 
 - 每轮改动：本地浏览器实测 → `npm test` + `npm run typecheck` 全绿 → 中文提交信息（写清动机）→ 部署 → 线上复验 → 中文汇报。
-- 测试规模基线：全仓 279 项（domain 23 / brass-domain 21 / splendor-domain 18 / server 111 / web-desk 32 / web 8 / server-local 62 / web-local 4），总数变化时更新 README。
+- 测试规模基线：全仓 283 项（domain 23 / brass-domain 21 / splendor-domain 18 / server 115 / web-desk 32 / web 8 / server-local 62 / web-local 4），总数变化时更新 README。
 
 ### 公网安全与房间回收语义（2026-09 上线审计沉淀）
 
@@ -47,6 +47,8 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 - 回席/心跳必须 `ensureTurnTimer` 补武装回合计时器（缺席暂停会拆计时器）；不能用 `armTurnTimer` 无条件重置 deadline（等于无限顺延）。回归：turnTimerApi.test「re-arms after resume」。
 - 会话存储有上限（`MAX_SESSIONS=10000`，FIFO 驱逐）；brass/splendor 房号查询限速已开（与 coup 一致，10 次未命中/分钟 → 429）。
 - 三端大厅轮询 404 会提示「房间已解散或已被回收」并退回首页（coup/brass/splendor App）。
+- 客人主动让座：`POST …/rooms/:code/seats/leave`（平台栈端点，凭证即身份，仅大厅阶段、仅远程座位）；三端大厅自己的座位卡上有「让出座位」按钮。
+- 座位凭证 Cookie 已持久化（`SEAT_COOKIE_MAX_AGE_SEC` 30 天， issuance 点统一带 Max-Age）：浏览器重启后仍可回席；会话 Cookie 仍为会话级（无状态，丢失自动重建）。
 
 ### 平台层（ADR-0010，2026-09 落地）
 

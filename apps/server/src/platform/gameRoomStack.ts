@@ -26,6 +26,7 @@ import {
 } from "../roomLifecycle.js";
 import {
   SEAT_COOKIE,
+  SEAT_COOKIE_MAX_AGE_SEC,
   hashToken,
   issueSeatToken,
   parseCookies,
@@ -580,7 +581,10 @@ export function createGameRoomStack<M extends StackMatch<any>>(
     const issued = issueSeatToken();
     if (hostSeat) hostSeat.credentialHash = issued.hash;
     persistActiveRoom();
-    deps.appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
+    deps.appendSetCookie(
+      reply,
+      serializeCookie(SEAT_COOKIE, issued.token, { maxAgeSec: SEAT_COOKIE_MAX_AGE_SEC }),
+    );
     return reply.send(module.invitePayload(room, host));
   });
 
@@ -606,7 +610,10 @@ export function createGameRoomStack<M extends StackMatch<any>>(
         return reply.code(409).send({ error: "seat_not_open" });
       }
       persistActiveRoom();
-      deps.appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
+      deps.appendSetCookie(
+      reply,
+      serializeCookie(SEAT_COOKIE, issued.token, { maxAgeSec: SEAT_COOKIE_MAX_AGE_SEC }),
+    );
       return reply.send({
         seat: {
           seatId: result.seat.seatId,
@@ -615,6 +622,37 @@ export function createGameRoomStack<M extends StackMatch<any>>(
           rematchStatus: result.seat.rematchStatus,
         },
         seats: publicSeats(result.room),
+      });
+    },
+  );
+
+  // 客人主动让座：仅大厅阶段、仅远程座位（凭证即身份，无需 seatId 段）。
+  // 对局中离开走「离席/房主处置」，不在此端点语义内。
+  app.post<{ Params: { code: string } }>(
+    `${roomsBase}/:code/seats/leave`,
+    async (request, reply) => {
+      if (!deps.requireSession(request, reply)) return;
+      const room = registry.getByCode(request.params.code);
+      if (!room) return reply.code(404).send({ error: "room_not_found" });
+      const cookies = parseCookies(typeof request.headers.cookie === "string" ? request.headers.cookie : undefined);
+      const seatToken = cookies[SEAT_COOKIE];
+      const holder = seatToken ? registry.findSeatByCredential(room.code, hashToken(seatToken)) : null;
+      if (!holder || holder.kind !== "remote_human") {
+        return reply.code(403).send({ error: "seat_credential_required" });
+      }
+      if (room.phase !== "lobby") {
+        return reply.code(409).send({ error: "room_not_lobby" });
+      }
+      const released = registry.releaseSeat(room.code, holder.seatId);
+      if (!released.ok) {
+        return reply.code(409).send({ error: released.reason });
+      }
+      presence.clearSeat(room.code, holder.seatId);
+      persistActiveRoom();
+      return reply.send({
+        released: true,
+        seatId: holder.seatId,
+        seats: publicSeats(released.room),
       });
     },
   );
@@ -872,7 +910,10 @@ export function createGameRoomStack<M extends StackMatch<any>>(
     const rotated = registry.rotateSeatCredential(room.code, holder.seatId, issued.hash);
     if (!rotated.ok) return reply.code(409).send({ error: rotated.reason });
     persistActiveRoom();
-    deps.appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
+    deps.appendSetCookie(
+      reply,
+      serializeCookie(SEAT_COOKIE, issued.token, { maxAgeSec: SEAT_COOKIE_MAX_AGE_SEC }),
+    );
     presence.resume(room.code, holder.seatId);
     presence.noteHeartbeat(room.code, holder.seatId, now());
     // 回席后若该座位仍欠决策且计时器已被缺席暂停拆除，重新倒计时。
@@ -1135,7 +1176,10 @@ export function createGameRoomStack<M extends StackMatch<any>>(
       return reply.code(409).send({ error: rotated.reason });
     }
     persistActiveRoom();
-    deps.appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
+    deps.appendSetCookie(
+      reply,
+      serializeCookie(SEAT_COOKIE, issued.token, { maxAgeSec: SEAT_COOKIE_MAX_AGE_SEC }),
+    );
     return reply.send({
       seat: {
         seatId: rotated.seat.seatId,

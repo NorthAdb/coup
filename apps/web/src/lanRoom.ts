@@ -205,6 +205,24 @@ export async function claimSeat(
   }
 }
 
+export async function leaveSeat(origin: string, code: string): Promise<void> {
+  try {
+    await coup.leaveSeat(origin, code);
+  } catch (error) {
+    const errCode = (error as ApiError).code;
+    if (errCode === "room_not_lobby") {
+      throw new Error("对局已开始，无法让出座位");
+    }
+    if (errCode === "seat_credential_required") {
+      throw new Error("没有可让出的座位凭证");
+    }
+    if (errCode === "seat_not_remote") {
+      throw new Error("该座位不是你的");
+    }
+    throw new Error((error as ApiError).message ?? "让座失败");
+  }
+}
+
 export async function renameSeat(
   origin: string,
   code: string,

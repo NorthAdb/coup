@@ -12,6 +12,7 @@ import {
   fetchBrassRecovery,
   fetchBrassRoom,
   fetchMyBrassSeat,
+  leaveBrassSeat,
   brassMatchUrl,
   postBrassDisposition,
   postBrassHeartbeat,
@@ -370,6 +371,26 @@ export function BrassApp() {
                 ) : null}
                 {mySeatId === seat.seatId && seat.kind === "remote_human" ? (
                   <span className="brass-hint">（你）</span>
+                ) : null}
+                {mySeatId === seat.seatId && seat.kind === "remote_human" && room.phase === "lobby" ? (
+                  <button
+                    type="button"
+                    className="brass-ghost-btn"
+                    onClick={async () => {
+                      try {
+                        await leaveBrassSeat(room.code);
+                        setRoom(null);
+                        setMySeatId(null);
+                        setScreen("home");
+                        window.history.replaceState(null, "", "/brass");
+                        showToast("已让出座位，可以随时重新入座");
+                      } catch (e) {
+                        showToast(errorText(e));
+                      }
+                    }}
+                  >
+                    让出座位
+                  </button>
                 ) : null}
               </div>
             ))}

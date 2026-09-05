@@ -75,6 +75,10 @@ export function claimSplendorSeat(code: string, seatId: string, displayName: str
   return splendor.claimSeat("", code, seatId, displayName);
 }
 
+export function leaveSplendorSeat(code: string) {
+  return splendor.leaveSeat("", code) as Promise<{ released: boolean; seatId: string; seats: SplendorLobbySeat[] }>;
+}
+
 export function renameSplendorSeat(code: string, seatId: string, displayName: string) {
   return splendor.renameSeat("", code, seatId, displayName);
 }

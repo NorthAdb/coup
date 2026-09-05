@@ -7,6 +7,7 @@ import {
   createSplendorRoom,
   enterSplendorRematch,
   fetchMySplendorSeat,
+  leaveSplendorSeat,
   fetchSplendorMatch,
   fetchSplendorPresence,
   fetchSplendorRecovery,
@@ -377,6 +378,26 @@ export function SplendorApp() {
                 ) : null}
                 {mySeatId === seat.seatId && seat.kind === "remote_human" ? (
                   <span className="spl-hint">（你）</span>
+                ) : null}
+                {mySeatId === seat.seatId && seat.kind === "remote_human" && room.phase === "lobby" ? (
+                  <button
+                    type="button"
+                    className="spl-btn spl-btn--ghost spl-btn--sm"
+                    onClick={async () => {
+                      try {
+                        await leaveSplendorSeat(room.code);
+                        setRoom(null);
+                        setMySeatId(null);
+                        setScreen("home");
+                        window.history.replaceState(null, "", "/splendor");
+                        showToast("已让出座位，可以随时重新入座");
+                      } catch (e) {
+                        showToast(errorText(e));
+                      }
+                    }}
+                  >
+                    让出座位
+                  </button>
                 ) : null}
               </div>
             ))}

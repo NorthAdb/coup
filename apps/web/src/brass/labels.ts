@@ -209,6 +209,8 @@ export function errorText(error: unknown): string {
     need_host_mode: "请房主先创建房间",
     room_capacity_reached: "房间已满",
     room_not_lobby: "房间不在大厅阶段",
+    seat_credential_required: "需要座位凭证，请先就座",
+    seat_not_remote: "该座位不是你的",
     open_seats_remain: "还有未就座的空位",
     too_few_seats: "至少需要 2 名玩家",
     seats_not_confirmed: "还有玩家未确认续局",

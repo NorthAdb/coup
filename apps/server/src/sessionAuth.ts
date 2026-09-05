@@ -4,6 +4,14 @@ export const SESSION_COOKIE = "coup_session";
 export const SEAT_COOKIE = "coup_seat";
 export const CSRF_HEADER = "x-csrf-token";
 
+/**
+ * 座位凭证 Cookie 的持久期（30 天）。它是对局/回席的唯一凭证，
+ * 会话级 Cookie 在浏览器重启后丢失，客人将被锁在自己已占的座位外
+ * （座位仍标记 remote_human，只能等房主手动重开）。持久化 + HttpOnly +
+ * SameSite=Strict + 服务端只存哈希 + 回席轮换，是重连凭证的标准形态。
+ */
+export const SEAT_COOKIE_MAX_AGE_SEC = 30 * 24 * 60 * 60;
+
 export type SessionRecord = {
   id: string;
   csrfToken: string;
@@ -73,10 +81,12 @@ export function parseCookies(
 export function serializeCookie(
   name: string,
   value: string,
-  options?: { path?: string },
+  options?: { path?: string; maxAgeSec?: number },
 ): string {
   const path = options?.path ?? "/";
-  return `${name}=${value}; Path=${path}; HttpOnly; SameSite=Strict`;
+  const maxAge =
+    options?.maxAgeSec !== undefined ? `; Max-Age=${options.maxAgeSec}` : "";
+  return `${name}=${value}; Path=${path}${maxAge}; HttpOnly; SameSite=Strict`;
 }
 
 export function hashToken(token: string): string {

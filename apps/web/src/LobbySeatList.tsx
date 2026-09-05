@@ -9,6 +9,8 @@ type LobbySeatListProps = {
   busy: boolean;
   /** When set, open seats show a claim control. */
   onClaim?: (seatId: string) => void;
+  /** Guest-only: release my own claimed seat back to open (lobby phase). */
+  onLeave?: () => void;
   /** Host-only: configure seats 2–6. */
   onConfigure?: (seatId: string, config: HostSeatConfig) => void;
   displayNameDraft: string;
@@ -22,6 +24,7 @@ export function LobbySeatList({
   mySeatId,
   busy,
   onClaim,
+  onLeave,
   onConfigure,
   displayNameDraft,
   onDisplayNameDraftChange,
@@ -80,6 +83,16 @@ export function LobbySeatList({
                     onClick={() => onClaim?.(seat.seatId)}
                   >
                     入座
+                  </button>
+                ) : null}
+                {mine && seat.kind === "remote_human" && onLeave ? (
+                  <button
+                    type="button"
+                    className="mini-toggle"
+                    disabled={busy}
+                    onClick={onLeave}
+                  >
+                    让出座位
                   </button>
                 ) : null}
                 {configurable && onConfigure ? (

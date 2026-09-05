@@ -11,6 +11,7 @@ type GuestRoomConfirmProps = {
   onDisplayNameDraftChange: (value: string) => void;
   onClaim: (seatId: string) => void;
   onRename: () => void;
+  onLeaveSeat?: () => void;
   onResumeMatch?: () => void;
   onSpectate?: () => void;
   onBack: () => void;
@@ -25,6 +26,7 @@ export function GuestRoomConfirm({
   onDisplayNameDraftChange,
   onClaim,
   onRename,
+  onLeaveSeat,
   onResumeMatch,
   onSpectate,
   onBack,
@@ -102,6 +104,7 @@ export function GuestRoomConfirm({
             mySeatId={mySeatId}
             busy={busy}
             onClaim={room.phase === "match" ? undefined : onClaim}
+            onLeave={room.phase === "lobby" ? onLeaveSeat : undefined}
             displayNameDraft={displayNameDraft}
             onDisplayNameDraftChange={onDisplayNameDraftChange}
             onRename={onRename}

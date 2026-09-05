@@ -136,6 +136,8 @@ export type RoomClient = {
     seatId: string,
     displayName: string,
   ): Promise<{ seat: LobbySeatLike; seats: LobbySeatLike[] }>;
+  /** 客人主动让出大厅座位（凭证即身份）。 */
+  leaveSeat(origin: string, code: string): Promise<{ released: boolean; seatId: string; seats: LobbySeatLike[] }>;
   renameSeat(
     origin: string,
     code: string,
@@ -196,6 +198,9 @@ export function createRoomClient(prefix: string): RoomClient {
     },
     async claimSeat(origin, code, seatId, displayName) {
       return sendJson("POST", path(origin, `/rooms/${code}/seats/${seatId}/claim`), { displayName });
+    },
+    async leaveSeat(origin, code) {
+      return sendJson("POST", path(origin, `/rooms/${code}/seats/leave`));
     },
     async renameSeat(origin, code, seatId, displayName) {
       return sendJson("PATCH", path(origin, `/rooms/${code}/seats/${seatId}`), { displayName });

@@ -73,6 +73,8 @@ const ERROR_TEXT: Record<string, string> = {
   need_host_mode: "服务器未进入主机模式",
   seat_not_open: "该座位已被占用或关闭",
   seat_credential_required: "需要座位凭证，请先就座",
+  room_not_lobby: "房间不在大厅阶段",
+  seat_not_remote: "该座位不是你的",
   seat_credential_mismatch: "座位凭证不匹配",
   seat_absent: "你当前处于离席状态，等待回席",
   no_active_match: "当前没有进行中的对局",

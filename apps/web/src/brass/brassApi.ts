@@ -75,6 +75,10 @@ export function claimBrassSeat(code: string, seatId: string, displayName: string
   return brass.claimSeat("", code, seatId, displayName);
 }
 
+export function leaveBrassSeat(code: string) {
+  return brass.leaveSeat("", code) as Promise<{ released: boolean; seatId: string; seats: BrassLobbySeat[] }>;
+}
+
 export function renameBrassSeat(code: string, seatId: string, displayName: string) {
   return brass.renameSeat("", code, seatId, displayName);
 }

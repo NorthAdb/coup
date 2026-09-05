@@ -17,6 +17,7 @@ import {
   enterRoomRematch,
   fetchMySeat,
   fetchRoom,
+  leaveSeat,
   fetchRoomRecovery,
   loadPlayerName,
   matchCurrentPath,
@@ -517,6 +518,24 @@ export function App() {
     }
   }
 
+  async function handleLeaveSeat() {
+    if (!room) return;
+    setBusy(true);
+    try {
+      await leaveSeat(window.location.origin, room.code);
+      setRoom(null);
+      setMySeatId(null);
+      setLobbySeats([]);
+      setView(null);
+      setScreen("home");
+      setError("已让出座位，可以随时重新入座");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "让座失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function refreshLobby(origin: string, code: string) {
     try {
       const found = await fetchRoom(origin, code);
@@ -962,6 +981,7 @@ export function App() {
           onDisplayNameDraftChange={setDisplayNameDraft}
           onClaim={(seatId) => void handleClaim(seatId)}
           onRename={() => void handleRename()}
+          onLeaveSeat={() => void handleLeaveSeat()}
           onResumeMatch={() => void resumeLanMatch()}
           onSpectate={() => void enterSpectate()}
           onBack={() => setScreen("join")}

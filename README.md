@@ -115,7 +115,7 @@ npm run start:local  # 政变 Agent 对战，loopback 随机端口并自动打�
 ## 测试
 
 ```bash
-npm test        # 全部工作区测试（279 项：domain 23 / brass-domain 21 / splendor-domain 18 / server 111 / web-desk 32 / web 8 / server-local 62 / web-local 4）
+npm test        # 全部工作区测试（283 项：domain 23 / brass-domain 21 / splendor-domain 18 / server 115 / web-desk 32 / web 8 / server-local 62 / web-local 4）
 npm run typecheck
 ```
 

@@ -7,7 +7,7 @@ generated/
 .env
 .env.*
 !.env.example
-data/
+/data/
 .scratch/brass-birmingham/research/
 .scratch/brass-birmingham/lobbybot.mjs
 .scratch/brass-birmingham/bot.mjs

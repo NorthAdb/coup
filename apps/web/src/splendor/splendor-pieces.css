@@ -47,7 +47,7 @@
 
 .spl-noble {
   position: relative;
-  width: 128px;
+  width: 116px;
   background:
     var(--spl-noise),
     linear-gradient(160deg, #f0e7cf 0%, #e3d5b4 58%, #d5c39c 100%);
@@ -93,7 +93,7 @@
   place-items: center;
 }
 
-.spl-noble-crest { width: 52px; height: 58px; display: block; }
+.spl-noble-crest { width: 46px; height: 51px; display: block; }
 
 .spl-noble-name {
   font-size: 11px;

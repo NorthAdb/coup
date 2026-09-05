@@ -370,6 +370,9 @@ export function BrassTable({ view, roomCode, absences, turnDeadline, autoDecisio
           <button type="button" className="brass-ghost-btn" onClick={() => setShowLog((v) => !v)}>
             {showLog ? "收起日志" : "查看日志"}
           </button>
+          <a className="brass-ghost-btn" href="/brass">
+            离开桌面
+          </a>
         </div>
       </header>
 

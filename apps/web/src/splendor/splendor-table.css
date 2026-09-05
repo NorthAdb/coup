@@ -11,7 +11,8 @@
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr) 286px;
   gap: 14px;
-  padding: 12px 18px 12px;
+  padding: 8px 18px 10px;
+  min-height: 0;
   max-width: 1560px;
   width: 100%;
   margin: 0 auto;
@@ -29,10 +30,12 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   border: 1px solid var(--spl-line);
   border-radius: 20px;
-  padding: 16px 20px 18px;
+  padding: 10px 16px 12px;
+  min-height: 0;
+  overflow-y: auto;
   background:
     var(--spl-noise),
     radial-gradient(120% 90% at 50% 30%, var(--spl-velvet-1) 0%, var(--spl-velvet-0) 58%, var(--spl-velvet-2) 100%);
@@ -80,6 +83,7 @@
   display: flex;
   align-items: stretch;
   gap: 14px;
+  flex: none;
 }
 
 .spl-level-deck {
@@ -101,13 +105,13 @@
 
 .spl-cardwrap {
   position: relative;
-  width: 82px;
+  width: 72px;
   border-radius: 8px;
   transition: transform 0.17s ease;
 }
 
-.spl-level-row[data-level="3"] .spl-cardwrap { width: 96px; }
-.spl-level-row[data-level="2"] .spl-cardwrap { width: 89px; }
+.spl-level-row[data-level="3"] .spl-cardwrap { width: 84px; }
+.spl-level-row[data-level="2"] .spl-cardwrap { width: 78px; }
 
 .spl-cardwrap.is-empty .spl-card-empty {
   aspect-ratio: 5 / 7;
@@ -135,7 +139,7 @@
   justify-content: center;
   gap: 26px;
   flex-wrap: wrap;
-  padding: 4px 0 2px;
+  padding: 2px 0 0;
 }
 
 .spl-pool-slot {
@@ -420,7 +424,7 @@
   align-items: center;
   gap: 24px;
   flex-wrap: wrap;
-  padding: 9px 26px 11px;
+  padding: 6px 26px 8px;
   border-top: 1px solid var(--spl-line);
   background:
     var(--spl-noise),
@@ -469,7 +473,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 40px;
+  min-height: 34px;
 }
 
 .spl-stack {
@@ -512,7 +516,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 62px;
+  min-height: 54px;
 }
 
 .spl-minicard-wrap { position: relative; width: 62px; flex: none; }

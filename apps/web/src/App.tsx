@@ -189,9 +189,9 @@ export function App() {
           setLobbySeats(invite.seats ?? []);
           setTurnTimeLimitSec(invite.turnTimeLimitSec ?? 60);
           setMySeatId("1");
-          setDisplayNameDraft(
-            invite.seats?.find((s) => s.seatId === "1")?.displayName ?? "你",
-          );
+          const hostName = invite.seats?.find((s) => s.seatId === "1")?.displayName;
+          // 服务器默认名「你」不是真名字：留空配合 placeholder，避免误导。
+          setDisplayNameDraft(hostName && hostName !== "你" ? hostName : loadPlayerName() || "");
           setScreen("host-invite");
         } catch (err) {
           const message = err instanceof Error ? err.message : "创建房间失败";
@@ -247,9 +247,8 @@ export function App() {
       setLobbySeats(invite.seats ?? []);
       setTurnTimeLimitSec(invite.turnTimeLimitSec ?? 60);
       setMySeatId("1");
-      setDisplayNameDraft(
-        invite.seats?.find((s) => s.seatId === "1")?.displayName ?? "你",
-      );
+      const hostName = invite.seats?.find((s) => s.seatId === "1")?.displayName;
+      setDisplayNameDraft(hostName && hostName !== "你" ? hostName : loadPlayerName() || "");
       setScreen("host-invite");
     } catch (err) {
       const message = err instanceof Error ? err.message : "创建房间失败";

@@ -296,6 +296,15 @@
   border-color: var(--ct-brass);
 }
 
+/* 对局桌面由 CatanTable 的 .ct-game 撑满视口；此时外层 .ct-app 退化为纯容器，
+   不再注入内边距/居中（否则 100vh + 64px padding 造成页面滚动）。 */
+.ct-app:has(> .ct-game) {
+  height: 100dvh;
+  padding: 0;
+  overflow: hidden;
+  justify-content: initial;
+}
+
 /* ---------------- 创建房间 ---------------- */
 
 .ct-create,

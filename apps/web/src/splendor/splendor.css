@@ -42,7 +42,6 @@
 /* ---------------- 应用底座：深胡桃木桌面 ---------------- */
 
 .spl-app {
-  min-height: 100vh;
   color: var(--spl-ivory);
   font-family: var(--spl-serif);
   background:
@@ -69,6 +68,12 @@
     rgba(0, 0, 0, 0.05) 55px 57px
   );
   mix-blend-mode: overlay;
+}
+
+/* 对局桌：固定视口壳，主舞台内部滚动兜底；房间/大厅仍可整页滚动。 */
+.spl-app:has(> .spl-table) {
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .spl-loading {
@@ -286,7 +291,7 @@
 .spl-gem--xs { width: 15px; height: 15px; }
 .spl-gem--sm { width: 24px; height: 24px; }
 .spl-gem--md { width: 34px; height: 34px; }
-.spl-gem--lg { width: 44px; height: 44px; }
+.spl-gem--lg { width: 40px; height: 40px; }
 
 .spl-gem-facet {
   position: absolute;

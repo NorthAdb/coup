@@ -60,7 +60,7 @@ export function LobbySeatList({
               </span>
               <span className="lobby-seat-name">
                 {seat.displayName ?? `座位 ${seat.seatId}`}
-                {mine ? "（你）" : ""}
+                {mine && seat.displayName !== "你" ? "（你）" : ""}
               </span>
               <span className="lobby-seat-kind">
                 {seatKindLabel(seat.kind)}
@@ -149,6 +149,7 @@ export function LobbySeatList({
               value={displayNameDraft}
               disabled={busy}
               maxLength={12}
+              placeholder="起一个桌上的名字"
               onChange={(event) => onDisplayNameDraftChange(event.target.value)}
             />
             {onRename ? (

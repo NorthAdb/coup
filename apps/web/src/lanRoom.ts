@@ -318,10 +318,11 @@ export function lobbyStartBlockHint(
   if (open.length > 0) {
     return `还有 ${open.length} 个空位：等朋友加入，或点座位上的「关闭」腾出局。`;
   }
+  // 有效座位口径与服务器 evaluateLobbyStartGates 一致：AI 队友也算已就座。
   const effective = seats.filter(
-    (s) => s.kind === "local_human" || s.kind === "remote_human",
+    (s) => s.kind === "local_human" || s.kind === "remote_human" || s.kind === "bot",
   );
-  if (effective.length < 2) return "至少还需 1 名玩家入座才能开局。";
+  if (effective.length < 2) return "至少还需 1 名玩家或 AI 入座才能开局。";
   if (effective.length > 6) return "有效座位至多 6 人。";
   return null;
 }

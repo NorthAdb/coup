@@ -66,8 +66,12 @@ export function HostInvitePanel({
   const inRematch = room.phase === "rematch";
   const gate = inMatch ? null : lobbyStartBlockHint(seats, room.phase);
   const canStart = gate === null;
+  // 就座计数与开局口径一致：AI 队友也是有效座位。
   const occupiedCount = seats.filter(
-    (seat) => seat.kind === "local_human" || seat.kind === "remote_human",
+    (seat) =>
+      seat.kind === "local_human" ||
+      seat.kind === "remote_human" ||
+      seat.kind === "bot",
   ).length;
   const joinUrl =
     room.joinUrl ?? `${window.location.origin}/join?code=${room.code}`;

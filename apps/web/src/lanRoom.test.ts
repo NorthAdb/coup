@@ -36,7 +36,20 @@ describe("lobbyStartBlockHint", () => {
         { seatId: "2", kind: "closed" },
       ]),
     );
-    assert.equal(hint, "至少还需 1 名玩家入座才能开局。");
+    assert.equal(hint, "至少还需 1 名玩家或 AI 入座才能开局。");
+  });
+
+  it("allows start with host plus AI teammates (bot seats count)", () => {
+    const hint = lobbyStartBlockHint(
+      seats([
+        { seatId: "1", kind: "local_human" },
+        { seatId: "2", kind: "bot" },
+        { seatId: "3", kind: "bot" },
+        { seatId: "4", kind: "closed" },
+      ]),
+    );
+    // 与服务器 evaluateLobbyStartGates 口径一致：AI 队友是有效座位。
+    assert.equal(hint, null);
   });
 
   it("allows start with two humans and no open seats", () => {

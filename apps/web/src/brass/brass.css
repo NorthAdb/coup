@@ -21,283 +21,9 @@
   --b-font-body: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
 
-/* ---------------- 门户 ---------------- */
-
-.portal {
-  min-height: 100vh;
-  background:
-    radial-gradient(1200px 500px at 75% -10%, rgba(201, 162, 39, 0.16), transparent 60%),
-    radial-gradient(900px 600px at 10% 110%, rgba(166, 61, 47, 0.12), transparent 55%),
-    linear-gradient(180deg, #17140f 0%, #211c14 55%, #17130d 100%);
-  color: #efe6d2;
-  font-family: var(--b-font-body);
-  position: relative;
-  overflow-x: hidden;
-}
-
-.portal-glow {
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(2px 2px at 12% 30%, rgba(227, 194, 92, 0.5), transparent),
-    radial-gradient(1.5px 1.5px at 40% 70%, rgba(227, 194, 92, 0.35), transparent),
-    radial-gradient(2px 2px at 80% 45%, rgba(227, 194, 92, 0.4), transparent),
-    radial-gradient(1.5px 1.5px at 65% 15%, rgba(227, 194, 92, 0.3), transparent);
-  pointer-events: none;
-}
-
-.portal-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 34px clamp(24px, 6vw, 90px) 0;
-  letter-spacing: 0.12em;
-}
-
-.portal-brand {
-  font-family: var(--b-font-display);
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--b-brass-bright);
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.portal-brand-mark {
-  display: inline-grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border: 1px solid rgba(201, 162, 39, 0.55);
-  border-radius: 50%;
-  font-size: 17px;
-  color: var(--b-brass-bright);
-  animation: gear-spin 14s linear infinite;
-}
-
-@keyframes gear-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.portal-sub {
-  font-size: 13px;
-  color: rgba(239, 230, 210, 0.55);
-}
-
-.portal-main {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: clamp(48px, 9vh, 96px) clamp(24px, 6vw, 90px) 60px;
-}
-
-.portal-title {
-  font-family: var(--b-font-display);
-  font-size: clamp(40px, 7vw, 68px);
-  line-height: 1.08;
-  margin: 0 0 14px;
-  font-weight: 700;
-}
-
-.portal-title em {
-  font-style: normal;
-  color: var(--b-brass-bright);
-  border-bottom: 3px solid rgba(201, 162, 39, 0.5);
-}
-
-.portal-lede {
-  font-size: 16px;
-  color: rgba(239, 230, 210, 0.62);
-  max-width: 560px;
-  line-height: 1.8;
-  margin: 0 0 48px;
-}
-
-.portal-games {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 26px;
-}
-
-.game-card {
-  position: relative;
-  display: block;
-  border-radius: 20px;
-  overflow: hidden;
-  min-height: 320px;
-  text-decoration: none;
-  color: inherit;
-  border: 1px solid rgba(201, 162, 39, 0.22);
-  background: linear-gradient(160deg, rgba(58, 48, 30, 0.55), rgba(29, 25, 17, 0.9));
-  box-shadow: var(--b-shadow);
-  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.35s, box-shadow 0.35s;
-}
-
-.game-card:hover {
-  transform: translateY(-6px);
-  border-color: rgba(227, 194, 92, 0.6);
-  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.5);
-}
-
-.game-card-plate {
-  position: relative;
-  z-index: 2;
-  padding: 30px 32px;
-}
-
-.game-card-kicker {
-  font-size: 12px;
-  letter-spacing: 0.28em;
-  text-transform: uppercase;
-  color: rgba(227, 194, 92, 0.8);
-}
-
-.game-card h2 {
-  font-family: var(--b-font-display);
-  font-size: 34px;
-  margin: 14px 0 2px;
-  color: #f6efdd;
-}
-
-.game-card h3 {
-  font-family: var(--b-font-display);
-  font-size: 22px;
-  margin: 0 0 14px;
-  color: var(--b-brass-bright);
-  letter-spacing: 0.14em;
-}
-
-.game-card p {
-  font-size: 14px;
-  line-height: 1.9;
-  color: rgba(239, 230, 210, 0.6);
-  max-width: 400px;
-  min-height: 84px;
-  margin: 0 0 18px;
-}
-
-.game-card-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--b-ink);
-  background: linear-gradient(120deg, var(--b-brass-bright), var(--b-brass));
-  padding: 10px 20px;
-  border-radius: 999px;
-  transition: gap 0.25s;
-}
-
-.game-card:hover .game-card-cta {
-  gap: 14px;
-}
-
-.game-card--coup .game-card-cta {
-  background: linear-gradient(120deg, #e8ddc8, #c9b98f);
-}
-
-.game-card-art {
-  position: absolute;
-  inset: 0 0 auto auto;
-  width: 55%;
-  height: 100%;
-  z-index: 1;
-  pointer-events: none;
-  background: radial-gradient(320px 240px at 80% 30%, rgba(201, 162, 39, 0.18), transparent 70%);
-}
-
-.art-gear {
-  position: absolute;
-  border: 6px dashed rgba(201, 162, 39, 0.35);
-  border-radius: 50%;
-}
-
-.art-gear--big {
-  width: 200px;
-  height: 200px;
-  right: -40px;
-  top: 30px;
-  animation: gear-spin 26s linear infinite;
-}
-
-.art-gear--small {
-  width: 90px;
-  height: 90px;
-  right: 140px;
-  bottom: 60px;
-  border-width: 4px;
-  animation: gear-spin 16s linear infinite reverse;
-}
-
-.art-smoke {
-  position: absolute;
-  right: 60px;
-  top: 20px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: rgba(239, 230, 210, 0.18);
-  filter: blur(2px);
-  animation: smoke 5s ease-in-out infinite;
-}
-
-@keyframes smoke {
-  0%, 100% {
-    transform: translateY(0) scale(1);
-    opacity: 0.4;
-  }
-  50% {
-    transform: translateY(-30px) scale(1.6);
-    opacity: 0.15;
-  }
-}
-
-.game-card-art--coup {
-  background: radial-gradient(320px 240px at 80% 30%, rgba(166, 61, 47, 0.22), transparent 70%);
-}
-
-.art-card {
-  position: absolute;
-  width: 74px;
-  height: 104px;
-  border-radius: 8px;
-  border: 1px solid rgba(239, 230, 210, 0.3);
-  background: linear-gradient(160deg, rgba(58, 48, 30, 0.9), rgba(29, 25, 17, 0.95));
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
-}
-
-.art-card--1 {
-  right: 120px;
-  top: 60px;
-  transform: rotate(-12deg);
-}
-
-.art-card--2 {
-  right: 70px;
-  top: 100px;
-  transform: rotate(4deg);
-}
-
-.art-card--3 {
-  right: 150px;
-  top: 130px;
-  transform: rotate(14deg);
-}
-
-.portal-footer {
-  margin-top: 42px;
-  font-size: 12.5px;
-  color: rgba(239, 230, 210, 0.4);
-  letter-spacing: 0.06em;
-}
-
 /* ---------------- Brass 应用外壳（大厅/房间） ---------------- */
 
-.brass-app,
-.brass-shell {
+.brass-app {
   min-height: 100vh;
   background:
     radial-gradient(1000px 400px at 80% -10%, rgba(201, 162, 39, 0.1), transparent 60%),
@@ -306,43 +32,15 @@
   font-family: var(--b-font-body);
 }
 
-.brass-shell-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 18px clamp(18px, 4vw, 44px);
-  border-bottom: 1px solid rgba(201, 162, 39, 0.25);
-}
-
-.brass-brand {
-  font-family: var(--b-font-display);
-  font-weight: 700;
-  font-size: 18px;
-  color: var(--b-brass-bright);
-  text-decoration: none;
-  letter-spacing: 0.1em;
-}
-
-.brass-shell-room {
-  color: rgba(239, 230, 210, 0.7);
-  font-size: 14px;
-  letter-spacing: 0.08em;
-}
-
-.brass-room {
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 30px clamp(16px, 4vw, 40px) 60px;
-  display: grid;
-  gap: 18px;
-}
-
 .brass-panel {
   background: var(--b-paper);
   border: 1px solid rgba(138, 121, 93, 0.5);
   border-radius: var(--b-radius);
   padding: 20px 22px;
   box-shadow: 0 6px 18px rgba(15, 12, 6, 0.25);
+  /* 平台 :root 是 color-scheme: dark；羊皮纸面板必须显式声明浅色，
+     否则原生 input/select 会被渲染成深色主题的白字白底。 */
+  color-scheme: light;
 }
 
 .brass-panel h3 {
@@ -354,14 +52,6 @@
   padding-bottom: 8px;
 }
 
-.brass-invite-code {
-  font-family: var(--b-font-display);
-  font-size: 44px;
-  font-weight: 800;
-  letter-spacing: 0.3em;
-  color: var(--b-rust);
-  margin: 6px 0 8px;
-}
 
 .brass-hint {
   font-size: 13px;
@@ -376,33 +66,13 @@
   font-size: 12px;
 }
 
-.brass-seat-row,
-.brass-recovery-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px dashed rgba(138, 121, 93, 0.4);
-  flex-wrap: wrap;
-}
 
 .brass-seat-row:last-child {
   border-bottom: none;
 }
 
-.brass-seat-id {
-  font-weight: 700;
-  width: 44px;
-  color: var(--b-ink-soft);
-}
 
-.brass-seat-name {
-  flex: 1;
-}
 
-.brass-seat-name.dim {
-  color: #9a8c6d;
-}
 
 .brass-settings-row {
   display: flex;
@@ -472,37 +142,9 @@
   cursor: pointer;
 }
 
-.brass-join-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
 
-.brass-code-input {
-  font-family: var(--b-font-display);
-  font-size: 26px;
-  letter-spacing: 0.4em;
-  width: 180px;
-  padding: 10px 14px;
-  border: 2px solid rgba(138, 121, 93, 0.6);
-  border-radius: 10px;
-  background: var(--b-parchment);
-  color: var(--b-ink);
-  text-align: center;
-}
 
-.brass-name-input {
-  padding: 8px 12px;
-  border: 1px solid rgba(138, 121, 93, 0.6);
-  border-radius: 8px;
-  background: var(--b-parchment);
-  font-size: 14px;
-  max-width: 200px;
-}
 
-.brass-name-row {
-  margin-top: 12px;
-}
 
 .brass-inline {
   display: inline-flex;
@@ -547,16 +189,19 @@
 
 /* ---------------- 对局桌面 ---------------- */
 
+/* 桌面是一个固定视口壳：顶栏 / 主区 / 行动区三段，任何分辨率都不产生页面滚动。 */
 .brass-table {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  padding: 12px clamp(10px, 2vw, 24px) 12px;
+  height: 100dvh;
+  padding: 10px clamp(10px, 2vw, 24px) 12px;
   gap: 10px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .brass-topbar {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -614,6 +259,9 @@
 .brass-topbar-right .brass-ghost-btn {
   color: rgba(239, 230, 210, 0.8);
   border-color: rgba(239, 230, 210, 0.35);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
 }
 
 .brass-topbar-right .brass-ghost-btn:hover {
@@ -629,13 +277,15 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
   flex: 1;
   min-height: 0;
 }
 
 .brass-board-wrap {
   position: relative;
+  min-height: 0;
+  display: flex;
   background:
     radial-gradient(120% 90% at 50% 0%, rgba(201, 162, 39, 0.06), transparent 55%),
     #241d12;
@@ -648,8 +298,8 @@
 .brass-board {
   display: block;
   width: 100%;
-  height: calc(100vh - 232px);
-  min-height: 480px;
+  height: 100%;
+  min-height: 0;
   border-radius: 12px;
 }
 
@@ -753,6 +403,10 @@
   display: grid;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  align-content: start;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .brass-side .brass-panel {
@@ -837,9 +491,9 @@
 
 .brass-player-stats .stat i {
   font-style: normal;
-  font-size: 8.5px;
-  letter-spacing: 0.14em;
-  color: #9a8c6d;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  color: #8d8062;
   white-space: nowrap;
 }
 
@@ -913,13 +567,13 @@
 }
 
 .brass-market-slot {
-  width: 16px;
-  height: 16px;
-  border-radius: 4.5px;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
   border: 1px solid rgba(138, 121, 93, 0.6);
   display: grid;
   place-items: center;
-  font-size: 8.5px;
+  font-size: 10px;
   color: #9a8c6d;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.35), rgba(0, 0, 0, 0.04)), var(--b-parchment-deep);
 }
@@ -930,8 +584,8 @@
 }
 
 .brass-market-cube {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 2px;
   display: block;
 }
@@ -1030,6 +684,7 @@
 
 /* 行动区 */
 .brass-actionbar {
+  flex: none;
   background: var(--b-paper);
   border-radius: var(--b-radius);
   border: 1px solid rgba(138, 121, 93, 0.5);
@@ -1096,7 +751,7 @@
 }
 
 .brass-card-kind {
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.24em;
   color: #94866a;
   font-weight: 700;
@@ -1403,139 +1058,4 @@
 
 .brass-rules-body b {
   color: var(--b-rust);
-}
-
-/* ---------------- 门户 · 璀璨宝石卡片 ---------------- */
-
-.game-card--splendor {
-  background:
-    radial-gradient(420px 300px at 85% 20%, rgba(176, 48, 72, 0.20), transparent 65%),
-    radial-gradient(420px 300px at 70% 90%, rgba(31, 138, 85, 0.16), transparent 65%),
-    linear-gradient(160deg, rgba(58, 48, 30, 0.55), rgba(29, 25, 17, 0.9));
-}
-
-.game-card--splendor .game-card-cta {
-  background: linear-gradient(120deg, #f0d9a6, #cfa653);
-  color: #2e2007;
-}
-
-.game-card-art--splendor {
-  background: radial-gradient(320px 260px at 80% 34%, rgba(220, 174, 68, 0.16), transparent 70%);
-}
-
-.art-gem {
-  position: absolute;
-  border-radius: 50%;
-  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.5));
-}
-
-.art-gem::after {
-  content: "";
-  position: absolute;
-  left: 18%;
-  top: 12%;
-  width: 34%;
-  height: 24%;
-  border-radius: 50%;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0));
-}
-
-.art-gem--ruby {
-  width: 92px;
-  height: 92px;
-  right: 30px;
-  top: 30px;
-  background: radial-gradient(circle at 32% 27%, #ec8b98 0%, #b03048 46%, #5c1220 100%);
-  border: 3px solid rgba(240, 217, 166, 0.75);
-  animation: gem-float 7s ease-in-out infinite;
-}
-
-.art-gem--emerald {
-  width: 64px;
-  height: 64px;
-  right: 128px;
-  top: 96px;
-  background: radial-gradient(circle at 32% 27%, #79d8a2 0%, #1f8a55 46%, #0c4629 100%);
-  border: 3px solid rgba(240, 217, 166, 0.75);
-  animation: gem-float 8.5s ease-in-out infinite 0.6s;
-}
-
-.art-gem--sapphire {
-  width: 54px;
-  height: 54px;
-  right: 40px;
-  top: 150px;
-  background: radial-gradient(circle at 32% 27%, #8cc0ee 0%, #2a6db5 46%, #16395f 100%);
-  border: 3px solid rgba(240, 217, 166, 0.75);
-  animation: gem-float 9.5s ease-in-out infinite 1.2s;
-}
-
-.art-gem--diamond {
-  width: 40px;
-  height: 40px;
-  right: 146px;
-  top: 30px;
-  background: radial-gradient(circle at 32% 27%, #ffffff 0%, #e3e9ec 46%, #a8b8c2 100%);
-  border: 3px solid rgba(240, 217, 166, 0.75);
-  animation: gem-float 10s ease-in-out infinite 1.8s;
-}
-
-@keyframes gem-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-9px); }
-}
-
-/* ---------------- 门户 · 卡坦岛卡片（2026-09 新增第四款游戏） ---------------- */
-
-.game-card--catan {
-  border-color: rgba(163, 197, 190, 0.24);
-}
-
-.game-card--catan .game-card-cta {
-  color: #9fd0c4;
-}
-
-.game-card--catan:hover {
-  border-color: rgba(159, 208, 196, 0.6);
-}
-
-.game-card-art--catan .art-hex {
-  position: absolute;
-  width: 54px;
-  height: 60px;
-  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
-  box-shadow: inset 0 0 0 2px rgba(244, 232, 200, 0.25);
-}
-
-.game-card-art--catan .art-hex--forest {
-  left: 12%;
-  bottom: 16%;
-  background: linear-gradient(160deg, #5b8a4a, #2c4a29);
-  transform: rotate(-7deg);
-}
-
-.game-card-art--catan .art-hex--wheat {
-  left: 38%;
-  bottom: 30%;
-  background: linear-gradient(160deg, #e5c765, #a98432);
-  z-index: 1;
-}
-
-.game-card-art--catan .art-hex--ore {
-  left: 64%;
-  bottom: 14%;
-  background: linear-gradient(160deg, #a9a49b, #67635c);
-  transform: rotate(7deg);
-}
-
-.game-card-art--catan .art-hex-sail {
-  position: absolute;
-  right: 12%;
-  top: 20%;
-  width: 0;
-  height: 0;
-  border-left: 7px solid transparent;
-  border-right: 7px solid transparent;
-  border-bottom: 30px solid rgba(242, 232, 208, 0.9);
-  transform: rotate(16deg);
 }

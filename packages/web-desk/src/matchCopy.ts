@@ -203,7 +203,8 @@ function cliDisplayName(cli: "opencode" | "claude" | "stub"): string {
     case "claude":
       return "Claude Code";
     case "stub":
-      return "Stub";
+      // 面向玩家的措辞：stub_agent 座位在 UI 里统一叫「AI」。
+      return "AI";
   }
 }
 

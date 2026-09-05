@@ -32,7 +32,7 @@ describe("seatModelLabel", () => {
         cli: "stub",
         modelId: "stub/placeholder",
       }),
-      "Stub · 占位",
+      "AI · 占位",
     );
     assert.equal(
       seatModelLabel({
@@ -40,7 +40,7 @@ describe("seatModelLabel", () => {
         cli: "stub",
         modelId: null,
       }),
-      "Stub · 占位",
+      "AI · 占位",
     );
   });
 

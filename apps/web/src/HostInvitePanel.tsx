@@ -12,7 +12,7 @@ type HostInvitePanelProps = {
   displayNameDraft: string;
   onDisplayNameDraftChange: (value: string) => void;
   onRename: () => void;
-  onConfigure: (seatId: string, config: { kind: "open" } | { kind: "closed" }) => void;
+  onConfigure: (seatId: string, config: { kind: "open" } | { kind: "closed" } | { kind: "bot" }) => void;
   onStart: () => void;
   onResumeMatch?: () => void;
   onBack: () => void;
@@ -26,7 +26,7 @@ const TURN_TIME_OPTIONS = [0, 30, 60, 90, 120];
 async function applySeatPreset(
   seats: LobbySeat[],
   playerCount: number,
-  configure: (seatId: string, config: { kind: "open" } | { kind: "closed" }) => void,
+  configure: (seatId: string, config: { kind: "open" } | { kind: "closed" } | { kind: "bot" }) => void,
 ) {
   for (const seat of seats) {
     if (seat.seatId === "1") continue;

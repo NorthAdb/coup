@@ -506,7 +506,7 @@ export function App() {
 
   async function handleConfigure(
     seatId: string,
-    config: { kind: "open" } | { kind: "closed" },
+    config: { kind: "open" } | { kind: "closed" } | { kind: "bot" },
   ) {
     if (!room) return;
     // 乐观更新：预设会连发多次，等每个响应回来即可

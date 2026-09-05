@@ -14,6 +14,7 @@ import { roomInvitePayload, type RoomRecord } from "../roomRegistry.js";
 import type { RoomStore } from "../roomStore.js";
 import {
   startMatch as startCoupMatch,
+  submitAgentDecision,
   submitHumanDecision,
   toSeatView,
   type ActiveMatch,
@@ -21,6 +22,7 @@ import {
 } from "../matchRuntime.js";
 import type { MatchStore } from "../matchStore.js";
 import { planAutoDecision } from "../autoDecision.js";
+import { planCoupBotDecision } from "./coupBot.js";
 
 /**
  * Coup 游戏模块（ADR-0010）：把 @coup/domain + matchRuntime + matchStore
@@ -118,7 +120,7 @@ export const coupModule: GameModule<ActiveMatch> = {
       matchId,
       seats: seats.map((seat) => ({
         seatId: seat.seatId,
-        controller: seat.kind,
+        controller: seat.kind === "bot" ? "stub_agent" : seat.kind,
         displayName: seat.displayName,
       })),
       persistence: matchPersistence(store),
@@ -155,9 +157,35 @@ export const coupModule: GameModule<ActiveMatch> = {
     };
   },
 
+  planBotDecision(state, seatId) {
+    const decision = planCoupBotDecision(state, seatId);
+    if (!decision) return null;
+    return {
+      payload: {
+        protocolVersion: 1,
+        requestId: `bot-${state.stateVersion}-${seatId}`,
+        stateVersion: state.stateVersion,
+        decision,
+      } satisfies Partial<SeatDecision>,
+      kind: decision.type,
+    };
+  },
+
   async submitDecision(match, payload, options) {
     // 校验失败返回 ok:false；持久化故障抛错，由平台栈折算成
     // technical_abort + 502（与人类决策同通路）。
+    // 机器人座位（stub_agent）走专用通路：HTTP 决策永远只认人类凭证，
+    // 这里按 actingSeatId 的 controller 分流。
+    const seat = match.state.seats.find(
+      (entry) => entry.seatId === options.actingSeatId,
+    );
+    if (seat?.controller === "stub_agent") {
+      return submitAgentDecision(
+        match,
+        payload as SeatDecision,
+        { persistence: matchPersistence(options.store), actingSeatId: options.actingSeatId },
+      );
+    }
     return submitHumanDecision(match, payload as SeatDecision, {
       persistence: matchPersistence(options.store),
       actingSeatId: options.actingSeatId,

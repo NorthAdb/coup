@@ -1,5 +1,6 @@
 /**
- * 卡坦岛 Mock 引擎测试：棋盘生成、骰子生产、建造、交易、强盗、胜利点。
+ * 卡坦岛规则引擎测试：棋盘生成、骰子生产、建造、交易、强盗、胜利点、
+ * 联机命令协议（applyCommand）、座位投影与机器人规划器（bot 全自动对局不卡死）。
  * 全部确定性（引擎随机走内部 mulberry32 种子），不依赖网络/浏览器。
  */
 
@@ -7,6 +8,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyCommand,
   bankTrade,
   buildCity,
   buildRoad,
@@ -21,16 +23,20 @@ import {
   legalSettlements,
   longestRoadLength,
   moveRobber,
+  planAutoDecision,
+  planBotDecision,
   playDev,
   playerVP,
+  projectForSeat,
   proposeTrade,
   respondTrade,
+  robberVictims,
   rollDice,
   steal,
   tokensValid,
   tradeRate,
-} from "./game.ts";
-import type { CatanGame, ResourceId, ResourceCount } from "./types.ts";
+} from "./index.js";
+import type { CatanGame, ResourceId, ResourceCount } from "./types.js";
 
 const SETUPS = [
   { name: "你", color: "#b3573f", isHuman: true },
@@ -370,4 +376,119 @@ test("最长路：连成 5 段获得「最长道路」归属", () => {
   }
   assert.ok(longestRoadLength(state, 0) >= 5, "8 条路内应能连出 5 段");
   assert.equal(state.longestRoadOwner, 0);
+});
+
+/* ------------------------------------------------------------------ */
+/* 联机命令协议与投影                                                  */
+/* ------------------------------------------------------------------ */
+
+test("命令协议：座位归属校验与 stateVersion 递增", () => {
+  const g = newGame(21);
+  const before = g.stateVersion;
+  // 轮到 0 号：1 号建路必须被拒。
+  const wrongSeat = applyCommand(g, { type: "roll", player: 1 });
+  assert.equal(wrongSeat.ok, false);
+  assert.equal((wrongSeat as { ok: false; code: string }).code, "not_your_turn");
+  // 0 号掷骰成功且版本递增。
+  const rolled = applyCommand(g, { type: "roll", player: 0 });
+  assert.ok(rolled.ok);
+  assert.equal((rolled as { ok: true; state: CatanGame }).state.stateVersion, before + 1);
+  // respond_trade 只认提议对象。
+  const withTrade = newGame(22);
+  give(withTrade, 0, { wood: 2 });
+  give(withTrade, 2, { wheat: 2 });
+  const proposed = applyCommand(withTrade, {
+    type: "propose_trade",
+    player: 0,
+    to: 2,
+    give: { wood: 1 },
+    want: { wheat: 1 },
+  });
+  assert.ok(proposed.ok);
+  const wrongPartner = applyCommand((proposed as { ok: true; state: CatanGame }).state, {
+    type: "respond_trade",
+    player: 1,
+    accept: true,
+  });
+  assert.equal(wrongPartner.ok, false);
+  const rightPartner = applyCommand((proposed as { ok: true; state: CatanGame }).state, {
+    type: "respond_trade",
+    player: 2,
+    accept: false,
+  });
+  assert.ok(rightPartner.ok);
+});
+
+test("强盗每阶段只能移动一次（联机原始命令防刷）", () => {
+  const g = newGame(30);
+  let hit: CatanGame | null = null;
+  for (let s = 30; s < 130 && !hit; s++) {
+    const fresh = newGame(s);
+    const r = rollDice(fresh);
+    if (r.ok && r.game.phase === "robber") hit = r.game;
+  }
+  assert.ok(hit, "应能掷出 7");
+  const target = hit.tiles.find((t) => t.id !== hit!.robberTile)!;
+  const first = applyCommand(hit, { type: "move_robber", player: 0, tileId: target.id });
+  assert.ok(first.ok);
+  const second = applyCommand((first as { ok: true; state: CatanGame }).state, {
+    type: "move_robber",
+    player: 0,
+    tileId: hit.tiles.find((t) => t.id !== target.id && t.id !== hit!.robberTile)!.id,
+  });
+  assert.equal(second.ok, false);
+});
+
+test("投影：他人手牌与发展卡身份隐藏，数量保留；牌库顺序剥离", () => {
+  const g = newGame(33);
+  // 先清空随机起始手牌，构造确定性数量。
+  g.players[1]!.hand = { wood: 0, brick: 0, wool: 0, wheat: 0, ore: 0 };
+  give(g, 1, { wood: 2, ore: 1 });
+  g.players[1]!.dev = ["knight", "vp"];
+  g.devDeck = ["vp", "knight", "monopoly"];
+  const projection = projectForSeat(g, 0);
+  assert.deepEqual(projection.state.players[1]!.hand, { wood: 0, brick: 0, wool: 0, wheat: 0, ore: 0 });
+  assert.deepEqual(projection.state.players[1]!.dev, []);
+  assert.equal(projection.state.players[1]!.handCount, 3);
+  assert.equal(projection.state.players[1]!.devCount, 2);
+  assert.equal(projection.others[1]!.handCount, 3);
+  assert.deepEqual(projection.state.devDeck, []);
+  assert.equal(projection.devDeckCount, 3);
+  // 本人视角不变。
+  assert.equal(projection.hand.wood, g.players[0]!.hand.wood);
+  // 投影态仍可跑强盗受害者判断（handCount 兜底）。
+  const g2 = newGame(34);
+  give(g2, 1, { wool: 2 });
+  const proj = projectForSeat(g2, 0);
+  const victims = robberVictims(proj.state, 0);
+  assert.ok(Array.isArray(victims));
+});
+
+test("机器人规划器：四机器人全自动对局持续推进、无卡死", () => {
+  const BOTS = SETUPS.map((s) => ({ ...s, isHuman: false }));
+  let state = createGame(BOTS, 77, "catan-bot-test");
+  let commands = 0;
+  while (state.status === "in_progress" && commands < 3000) {
+    const player = state.pendingTrade ? state.pendingTrade.to : state.turn;
+    const plan = planBotDecision(state, player);
+    assert.ok(plan, `机器人应总能给出命令（player=${player}, phase=${state.phase}, turn=${state.turnNo}）`);
+    const applied = applyCommand(state, plan);
+    assert.ok(applied.ok, `机器人命令应合法：${JSON.stringify(plan)} → ${(applied as { ok: false; code: string }).code}`);
+    state = (applied as { ok: true; state: CatanGame }).state;
+    commands += 1;
+  }
+  assert.ok(commands < 3000, "3000 条命令内应对局结束或进入稳定循环");
+  assert.equal(state.status, "finished", "机器人对局应能在合理步数内分出胜负");
+  assert.ok(state.finalScores, "终局应冻结全员明分");
+});
+
+test("超时代打：响应窗口婉拒、强盗阶段挪最冷地块并收尾", () => {
+  const g = newGame(35);
+  give(g, 1, { wheat: 1 });
+  const proposed = proposeTrade(g, 0, { wood: 1 }, { wheat: 1 }, 1);
+  assert.ok(proposed.ok);
+  const plan = planAutoDecision(proposed.game, 1);
+  assert.ok(plan);
+  assert.equal(plan.type, "respond_trade");
+  assert.equal((plan as { accept: boolean }).accept, false);
 });

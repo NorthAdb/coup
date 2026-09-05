@@ -83,7 +83,7 @@ export function renameBrassSeat(code: string, seatId: string, displayName: strin
   return brass.renameSeat("", code, seatId, displayName);
 }
 
-export function configureBrassSeat(code: string, seatId: string, kind: "open" | "closed") {
+export function configureBrassSeat(code: string, seatId: string, kind: "open" | "closed" | "bot") {
   return brass.configureSeat("", code, seatId, { kind });
 }
 

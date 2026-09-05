@@ -1,7 +1,6 @@
 import type { ReactElement } from "react";
-import type { CatanGame, FloatChip, ResourceId } from "../mock/types.ts";
-import { RESOURCE_NAMES, TERRAIN_RESOURCE } from "../mock/types.ts";
-import { axialCenter, hexCornerOffset } from "../mock/game.ts";
+import { axialCenter, hexCornerOffset, RESOURCE_NAMES, TERRAIN_RESOURCE } from "@coup/catan-domain";
+import type { CatanGame, FloatChip, ResourceId } from "@coup/catan-domain";
 import {
   CityPiece,
   HarborScene,

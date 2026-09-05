@@ -55,6 +55,7 @@ export function projectForSeat(state: SplendorState, player: number | null): Spl
       nobleChoice: state.nobleChoice ? { ...state.nobleChoice } : null,
       winners: [...state.winners],
       log: state.log.map((entry) => ({ ...entry })),
+      botPlayers: state.botPlayers ? [...state.botPlayers] : undefined,
     },
     yourReserved,
     reservedCounts,

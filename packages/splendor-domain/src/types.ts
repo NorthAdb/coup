@@ -85,6 +85,8 @@ export interface SplendorState {
   nobleChoice: { player: number; candidates: string[] } | null;
   winners: number[];
   log: SplendorEvent[];
+  /** 联机 AI 座位（player 下标；平台层开局时写入，旧快照缺省视为无）。 */
+  botPlayers?: number[];
 }
 
 /** 投影给座位/观战视角的公开状态（裁剪牌库顺序与预留私有牌）。 */
@@ -108,7 +110,8 @@ export interface SplendorPublicState {
   discardExcess: number | null;
   nobleChoice: { player: number; candidates: string[] } | null;
   winners: number[];
-  log: SplendorEvent[];
+  log: SplendorEvent[];  /** 联机 AI 座位（与权威态一致，投影透传）。 */
+  botPlayers?: number[];
 }
 
 // ---------------------------------------------------------------------------

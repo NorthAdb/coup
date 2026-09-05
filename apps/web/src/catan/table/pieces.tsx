@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { DEV_NAMES, RESOURCE_NAMES, type DevCardKind, type ResourceId, type Terrain } from "../mock/types.ts";
+import { DEV_NAMES, RESOURCE_NAMES, type DevCardKind, type ResourceId, type Terrain } from "@coup/catan-domain";
 
 /**
  * 卡坦岛设计系统棋子：地形插画 / 数字 Token / 道路 / 村庄 / 城市 / 强盗 / 港口 /
@@ -11,7 +11,7 @@ import { DEV_NAMES, RESOURCE_NAMES, type DevCardKind, type ResourceId, type Terr
  */
 
 /** 玩家主题色（低饱和、彼此可区分，同时用于建筑/道路/徽章）。 */
-export const PLAYER_COLORS = ["#b3573f", "#3f6d8e", "#5d7048", "#c9973f"] as const;
+export { PLAYER_COLORS } from "@coup/catan-domain";
 export const PLAYER_COLOR_NAMES = ["陶红", "黛蓝", "橄榄", "赭金"] as const;
 
 export const RESOURCES: readonly ResourceId[] = ["wood", "brick", "wool", "wheat", "ore"];

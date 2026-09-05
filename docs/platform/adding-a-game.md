@@ -76,5 +76,10 @@ Board Game Platform
 - **状态版本号**：每次成功命令 `stateVersion` 必须递增，增量轮询依赖它。
 - **超时代打**：`planAutoDecision` 必须返回「破坏最小」的合法命令（coup→放弃/收入；
   brass→跳过/拆板），且与人类决策走同一 `submitDecision` 通路。
+- **AI 队友（可选钩子 `planBotDecision`，ADR-0013）**：提供该钩子后大厅即可把空位
+  配成 bot 座位（`{kind:"bot"}`），平台栈延迟 ~1–2s 以其名义提交、成功后续链。
+  座位→玩家的映射要写进对局状态（如 `state.botPlayers`）随 run 持久化，
+  且**座位投影必须透传 botPlayers**。落库判据是「stateVersion 是否递增」，
+  不是「有无新事件」——无事件命令（如婉拒交易）漏提交会让重启回滚。
 - **座位与玩家序号**：若前端按「座位号 = 玩家序号+1」渲染（brass 即如此），
   必须在 `beforeStart` 校验有效座位连续，否则会错位绑定。

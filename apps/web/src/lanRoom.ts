@@ -239,7 +239,7 @@ export async function renameSeat(
 export async function configureLobbySeat(
   code: string,
   seatId: string,
-  payload: { kind: "open" } | { kind: "closed" },
+  payload: { kind: "open" } | { kind: "closed" } | { kind: "bot" },
 ): Promise<{ seat: LobbySeat; seats: LobbySeat[] }> {
   try {
     return await coup.configureSeat("", code, seatId, payload);
@@ -340,6 +340,8 @@ export function seatKindLabel(kind: LobbySeat["kind"]): string {
       return "空位 · 可加入";
     case "closed":
       return "已关闭";
+    case "bot":
+      return "AI 队友";
   }
 }
 

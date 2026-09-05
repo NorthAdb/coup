@@ -112,7 +112,7 @@ export function gameApiPath(prefix: string, origin: string, path: string): strin
 
 export type LobbySeatLike = {
   seatId: string;
-  kind: "local_human" | "open" | "remote_human" | "closed";
+  kind: "local_human" | "open" | "remote_human" | "closed" | "bot";
   displayName: string | null;
   rematchStatus?: "awaiting" | "confirmed" | "left" | null;
 };
@@ -148,7 +148,7 @@ export type RoomClient = {
     origin: string,
     code: string,
     seatId: string,
-    payload: { kind: "open" } | { kind: "closed" },
+    payload: { kind: "open" } | { kind: "closed" } | { kind: "bot" },
   ): Promise<{ seat: LobbySeatLike; seats: LobbySeatLike[] }>;
   updateSettings(
     origin: string,

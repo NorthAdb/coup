@@ -6,7 +6,7 @@
 
 - 目标：让用户第一眼感觉是「商业化的高级数字桌游」——高级实体桌游被数字化后的在线桌面体验。视觉元素优先级：**地图 > 六边形地块 > 建筑 > 资源卡 > 玩家区域 > 交易 > UI 控件**。
 - 第一阶段刻意不做：完整规则（起始放置流程、>7 弃牌、出牌当轮限制）、后端、多人同步、持久化。刷新即重开；房间/座位是本地 Mock。
-- 正式联机化（第二阶段）走 ADR-0010 平台层：`packages/catan-domain`（规则引擎独立包）→ `apps/server/src/catan/catanModule.ts`（GameModule 适配器，参考 `brassModule.ts`）→ `createApp` 挂载 → 前端 `createRoomClient("/api/catan")` 薄壳替换 `mock/` 引擎。清单见 `docs/platform/adding-a-game.md`。
+- ✅ 已落地（2026-09，ADR-0013）：`packages/catan-domain` + `apps/server/src/catan/`（catanModule/catanRuntime/catanStore）+ `createApp` 挂载 + `createRoomClient("/api/catan")` 薄壳（`catanApi.ts`）；`mock/` 与 `useCatanGame` 已删除。同轮落地平台层 AI 队友座位（四款游戏大厅「加AI」，卡坦首页一键开局=建房+三AI）。
 
 ## 文件结构（全部在 `apps/web/src/catan/`）
 

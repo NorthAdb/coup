@@ -202,6 +202,42 @@ export async function submitHumanDecision(
     return { ok: false, reason: "not_human_seat" };
   }
 
+  return submitSeatDecision(match, seat.seatId, decision, options);
+}
+
+/**
+ * Agent（机器人 AI 队友）座位决策提交：仅接受 stub_agent 座位。
+ * 平台栈在欠决策座位为 bot 时以其名义调用；HTTP 通路永远到不了这里
+ * （resolveMatchSeatId 只认人类座位凭证）。
+ */
+export async function submitAgentDecision(
+  match: ActiveMatch,
+  decision: SeatDecision,
+  options: MatchRuntimeOptions & { actingSeatId?: string } = {},
+): Promise<{ ok: true; match: ActiveMatch } | { ok: false; reason: string }> {
+  if (decision.protocolVersion !== 1) {
+    return { ok: false, reason: "unsupported_protocol" };
+  }
+  if (!decision.requestId) {
+    return { ok: false, reason: "missing_request_id" };
+  }
+  if (decision.stateVersion !== match.state.stateVersion) {
+    return { ok: false, reason: "version_mismatch" };
+  }
+  const actingSeatId = options.actingSeatId ?? "";
+  const seat = match.state.seats.find((entry) => entry.seatId === actingSeatId);
+  if (!seat || seat.controller !== "stub_agent") {
+    return { ok: false, reason: "not_agent_seat" };
+  }
+  return submitSeatDecision(match, seat.seatId, decision, options);
+}
+
+async function submitSeatDecision(
+  match: ActiveMatch,
+  actingSeatId: string,
+  decision: SeatDecision,
+  options: MatchRuntimeOptions,
+): Promise<{ ok: true; match: ActiveMatch } | { ok: false; reason: string }> {
   const result = applyCommand(
     match.state,
     decisionToCommand(

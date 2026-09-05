@@ -11,7 +11,7 @@ import {
 
 export type RoomPhase = "lobby" | "match" | "rematch";
 
-export type LobbySeatKind = "local_human" | "open" | "remote_human" | "closed";
+export type LobbySeatKind = "local_human" | "open" | "remote_human" | "closed" | "bot";
 
 export type RematchSeatStatus = "awaiting" | "confirmed" | "left";
 
@@ -57,7 +57,7 @@ export type PublicLobbySeat = {
   rematchStatus: RematchSeatStatus | null;
 };
 
-export type ConfigureSeatInput = { kind: "open" } | { kind: "closed" };
+export type ConfigureSeatInput = { kind: "open" } | { kind: "closed" } | { kind: "bot" };
 
 export type RoomRegistry = {
   create(): RoomRecord;
@@ -212,6 +212,14 @@ export function publicSeats(room: RoomRecord): PublicLobbySeat[] {
   }));
 }
 
+/** AI 座位名：按座位号取「甲乙丙丁戊」，稳定可读（不同房间同名也无妨）。 */
+export function botDisplayNameFor(seatId: string): string {
+  const n = Number(seatId);
+  const names = ["甲", "乙", "丙", "丁", "戊", "己"];
+  const glyph = Number.isInteger(n) && n >= 2 && n - 2 < names.length ? names[n - 2]! : String(seatId);
+  return `机器人·${glyph}`;
+}
+
 export function createRoomRegistry(options?: CreateRoomRegistryOptions): RoomRegistry {
   const rooms = new Map<string, RoomRecord>();
   const seatCount = options?.seatCount ?? 6;
@@ -311,6 +319,11 @@ export function createRoomRegistry(options?: CreateRoomRegistryOptions): RoomReg
       if (input.kind === "open") {
         seat.kind = "open";
         seat.displayName = null;
+        seat.credentialHash = null;
+      } else if (input.kind === "bot") {
+        // AI 队友座位：无凭证、不可认领（claimSeat 只收 open），房主可随时撤回。
+        seat.kind = "bot";
+        seat.displayName = botDisplayNameFor(seatId);
         seat.credentialHash = null;
       } else {
         seat.kind = "closed";

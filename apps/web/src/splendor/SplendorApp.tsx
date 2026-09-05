@@ -336,6 +336,8 @@ export function SplendorApp() {
                   </>
                 ) : seat.kind === "remote_human" ? (
                   <span className="spl-seat-name">{seat.displayName ?? "客人"}</span>
+                ) : seat.kind === "bot" ? (
+                  <span className="spl-seat-name">🤖 {seat.displayName ?? "AI 队友"}</span>
                 ) : (
                   <span className="spl-seat-name spl-dim">{seat.kind === "open" ? "空位" : "已关闭"}</span>
                 )}
@@ -345,7 +347,11 @@ export function SplendorApp() {
                     className="spl-btn spl-btn--ghost spl-btn--sm"
                     onClick={async () => {
                       try {
-                        await configureSplendorSeat(room.code, seat.seatId, seat.kind === "open" ? "closed" : "open");
+                        await configureSplendorSeat(
+                          room.code,
+                          seat.seatId,
+                          seat.kind === "open" ? "bot" : "open",
+                        );
                         const invite = await fetchSplendorRoom(room.code);
                         setRoom(invite);
                       } catch (e) {
@@ -353,7 +359,7 @@ export function SplendorApp() {
                       }
                     }}
                   >
-                    {seat.kind === "open" ? "关闭" : "开放"}
+                    {seat.kind === "open" ? "加AI" : "撤下AI"}
                   </button>
                 ) : null}
                 {!isHost && seat.kind === "open" ? (

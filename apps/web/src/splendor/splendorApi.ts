@@ -83,7 +83,7 @@ export function renameSplendorSeat(code: string, seatId: string, displayName: st
   return splendor.renameSeat("", code, seatId, displayName);
 }
 
-export function configureSplendorSeat(code: string, seatId: string, kind: "open" | "closed") {
+export function configureSplendorSeat(code: string, seatId: string, kind: "open" | "closed" | "bot") {
   return splendor.configureSeat("", code, seatId, { kind });
 }
 

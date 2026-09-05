@@ -11,6 +11,7 @@ import { effectiveLobbySeats } from "../lobbyStart.js";
 import {
   activeDecidingPlayerOf,
   newBrassMatchId,
+  planBrassBot,
   playerToSeatId,
   seatIdToPlayer,
   startBrassMatch,
@@ -61,6 +62,7 @@ export const brassModule: GameModule<ActiveBrassMatch> = {
       seed: `brass-${randomUUID()}`,
       playerCount: playerCountFor(seats.length),
       displayNames: Object.fromEntries(seats.map((seat) => [seat.seatId, seat.displayName])),
+      botPlayers: botPlayersFor(seats),
       persistence: {
         onCreated(match, code) {
           if (!code) throw new Error("room_code_required");
@@ -96,10 +98,15 @@ export const brassModule: GameModule<ActiveBrassMatch> = {
   },
 
   seatFacts(state): GameSeatFact[] {
-    // 网络版 brass 全部是人类座位：1 号=房主（本地），其余=远程客人。
+    // 1 号=房主（本地）；botPlayers 中的座位=服务器机器人；其余=远程客人。
     return Array.from({ length: state.playerCount }, (_, player) => ({
       seatId: playerToSeatId(player),
-      controller: player === 0 ? "local_human" : "remote_human",
+      controller:
+        player === 0
+          ? "local_human"
+          : (state.botPlayers ?? []).includes(player)
+            ? "other"
+            : "remote_human",
       eliminated: false,
     }));
   },
@@ -123,6 +130,10 @@ export const brassModule: GameModule<ActiveBrassMatch> = {
       } satisfies BrassDecisionPayload,
       kind: command.type,
     };
+  },
+
+  planBotDecision(state, seatId) {
+    return planBrassBot(state, seatId);
   },
 
   submitDecision(match, payload, options) {
@@ -188,4 +199,12 @@ export const brassModule: GameModule<ActiveBrassMatch> = {
 
 function playerCountFor(effectiveSeatCount: number): 2 | 3 | 4 {
   return Math.min(4, Math.max(2, effectiveSeatCount)) as 2 | 3 | 4;
+}
+
+/** 开局座位里的 bot 座位 → player 下标（brass 座位号 = 序号 + 1）。 */
+function botPlayersFor(seats: Array<{ seatId: string; kind: string }>): number[] {
+  return seats
+    .filter((seat) => seat.kind === "bot")
+    .map((seat) => seatIdToPlayer(seat.seatId))
+    .filter((player): player is number => player !== null);
 }

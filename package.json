@@ -7,11 +7,11 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @coup/domain && npm run build -w @coup/brass-domain && npm run build -w @coup/splendor-domain && npm run build -w @coup/protocol && npm run build -w @coup/web-desk && npm run build -w @coup/web && npm run build -w @coup/server && npm run build -w @coup/web-local && npm run build -w @coup/server-local",
+    "build": "npm run build -w @coup/domain && npm run build -w @coup/brass-domain && npm run build -w @coup/splendor-domain && npm run build -w @coup/catan-domain && npm run build -w @coup/protocol && npm run build -w @coup/web-desk && npm run build -w @coup/web && npm run build -w @coup/server && npm run build -w @coup/web-local && npm run build -w @coup/server-local",
     "start": "npm run build -w @coup/web && npm run start -w @coup/server",
     "start:local": "npm run build -w @coup/web-local && npm run start -w @coup/server-local",
-    "typecheck": "npm run typecheck -w @coup/protocol && npm run typecheck -w @coup/domain && npm run typecheck -w @coup/brass-domain && npm run typecheck -w @coup/splendor-domain && npm run typecheck -w @coup/web-desk && npm run typecheck -w @coup/web && npm run typecheck -w @coup/server && npm run typecheck -w @coup/web-local && npm run typecheck -w @coup/server-local",
-    "test": "npm run test -w @coup/domain && npm run test -w @coup/brass-domain && npm run test -w @coup/splendor-domain && npm run test -w @coup/server && npm run test -w @coup/web-desk && npm run test -w @coup/web && npm run test -w @coup/server-local && npm run test -w @coup/web-local"
+    "typecheck": "npm run typecheck -w @coup/protocol && npm run typecheck -w @coup/domain && npm run typecheck -w @coup/brass-domain && npm run typecheck -w @coup/splendor-domain && npm run typecheck -w @coup/catan-domain && npm run typecheck -w @coup/web-desk && npm run typecheck -w @coup/web && npm run typecheck -w @coup/server && npm run typecheck -w @coup/web-local && npm run typecheck -w @coup/server-local",
+    "test": "npm run test -w @coup/domain && npm run test -w @coup/brass-domain && npm run test -w @coup/splendor-domain && npm run test -w @coup/catan-domain && npm run test -w @coup/server && npm run test -w @coup/web-desk && npm run test -w @coup/web && npm run test -w @coup/server-local && npm run test -w @coup/web-local"
   },
   "engines": {
     "node": ">=22"

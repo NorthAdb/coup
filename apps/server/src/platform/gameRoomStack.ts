@@ -69,6 +69,8 @@ export type GameStackDeps<M extends StackMatch<any>> = {
   presence?: SeatPresenceTracker;
   /** 测试注入口：复用调用方预建的房间注册表（仅 coup 场景使用）。 */
   registry?: RoomRegistry;
+  /** 测试注入口：机器人决策延迟（默认 900–2200ms 随机，模拟思考）。 */
+  botDecisionDelayMs?: () => number;
 };
 
 export type GameStackRuntime = {
@@ -82,6 +84,11 @@ export type GameStackRuntime = {
  * 没有它，房主关闭浏览器后的对局房间会永远占据房间上限。
  */
 export const LOCAL_SEAT_GONE_MS = 10 * 60_000;
+
+/** 机器人决策延迟：0.9–2.2 秒随机，模拟思考节奏。 */
+function defaultBotDelay(): number {
+  return 900 + Math.floor(Math.random() * 1300);
+}
 
 export function abortReasonFrom(error: unknown): string {
   if (!(error instanceof Error) || !error.message) {
@@ -163,6 +170,75 @@ export function createGameRoomStack<M extends StackMatch<any>>(
     armedForVersion: number;
   };
   const turnTimers = new Map<string, TurnTimerState>();
+
+  /*
+   * 机器人座位（AI 队友）驱动：欠决策座位为 bot 时延迟 ~1–2 秒提交决策，
+   * 与人类决策走同一条 submitDecision 通路（持久化/事件完全一致）。
+   * 每次成功后按新状态续链（bot 连续行动）；失败则交给回合计时器兜底。
+   */
+  const botTimers = new Map<string, { timeoutId: ReturnType<typeof setTimeout>; stateVersion: number }>();
+  const botDelay = deps.botDecisionDelayMs ?? defaultBotDelay;
+
+  function clearBotTimer(code: string) {
+    const timer = botTimers.get(code);
+    if (timer) clearTimeout(timer.timeoutId);
+    botTimers.delete(code);
+  }
+
+  function scheduleBotDecision(code: string) {
+    clearBotTimer(code);
+    if (!module.planBotDecision) return;
+    const match = matchesByRoom.get(code);
+    if (!match || match.state.status !== "in_progress") return;
+    const deciding = module.activeDecidingSeatId(match.state);
+    if (!deciding) return;
+    const fact = seatFactsOf(match).find((entry) => entry.seatId === deciding);
+    // 仅 bot 座位（投影为 controller "other"）由机器人驱动；人类超时走 turnTimer。
+    if (!fact || fact.controller !== "other") return;
+    const stateVersion = match.state.stateVersion;
+    const timeoutId = setTimeout(() => {
+      void fireBotDecision(code, stateVersion);
+    }, botDelay());
+    (timeoutId as { unref?: () => void }).unref?.();
+    botTimers.set(code, { timeoutId, stateVersion });
+  }
+
+  async function fireBotDecision(code: string, armedForVersion: number) {
+    botTimers.delete(code);
+    const match = matchesByRoom.get(code);
+    if (!match || match.state.status !== "in_progress") return;
+    if (match.state.stateVersion !== armedForVersion) return;
+    const seatId = module.activeDecidingSeatId(match.state);
+    if (!seatId) return;
+    const fact = seatFactsOf(match).find((entry) => entry.seatId === seatId);
+    if (!fact || fact.controller !== "other") return;
+
+    let plan = module.planBotDecision?.(match.state, seatId) ?? null;
+    if (!plan) {
+      // bot 规划器没有覆盖到（如缺额拆板等特殊阶段）→ 用超时代打计划兜底。
+      plan = module.planAutoDecision(match.state, seatId);
+    }
+    if (!plan) return;
+
+    let advanced = false;
+    try {
+      const result = await module.submitDecision(match, plan.payload, { store, actingSeatId: seatId });
+      if (result.ok) {
+        matchesByRoom.set(code, result.match);
+        lastAutoDecisions.set(code, {
+          seatId,
+          at: now(),
+          kind: plan.kind,
+          matchId: result.match.state.matchId,
+        });
+        advanced = true;
+      }
+    } catch {
+      // 持久化失败等：与超时代打同语义，静默放弃本次决策。
+    }
+    armTurnTimer(code);
+    if (advanced) scheduleBotDecision(code);
+  }
 
   const roomsBase = module.apiPrefix
     ? `/api/${module.apiPrefix}/rooms`
@@ -340,6 +416,7 @@ export function createGameRoomStack<M extends StackMatch<any>>(
       // 持久化失败等：交由下次决策路径的 technicalAbort 语义处理。
     }
     armTurnTimer(code);
+    scheduleBotDecision(code);
   }
 
   function resolveMatchSeatId(request: LikeRequest, code: string, match: M): string | null {
@@ -367,6 +444,7 @@ export function createGameRoomStack<M extends StackMatch<any>>(
       }
     }
     clearTurnTimer(code);
+    clearBotTimer(code);
     lastAutoDecisions.delete(code);
     lastLocalSeen.delete(code);
     registry.dissolve(code);
@@ -483,6 +561,7 @@ export function createGameRoomStack<M extends StackMatch<any>>(
           .map((fact) => fact.seatId);
         presence.grantRecoveryGrace(remoteSeatIds, room.code, now());
         armTurnTimer(room.code);
+        scheduleBotDecision(room.code);
       } else {
         if (room.phase === "rematch" && room.matchId) {
           const run = store.getRun(room.matchId);
@@ -511,6 +590,7 @@ export function createGameRoomStack<M extends StackMatch<any>>(
 
   app.addHook("onClose", async () => {
     for (const code of [...turnTimers.keys()]) clearTurnTimer(code);
+    for (const code of [...botTimers.keys()]) clearBotTimer(code);
   });
 
   app.addHook("onResponse", async (request, reply) => {
@@ -707,11 +787,11 @@ export function createGameRoomStack<M extends StackMatch<any>>(
         return reply.code(403).send({ error: "host_seat_required" });
       }
       const kind = request.body?.kind;
-      if (kind !== "open" && kind !== "closed") {
+      if (kind !== "open" && kind !== "closed" && kind !== "bot") {
         return reply.code(400).send({ error: "invalid_seat_kind" });
       }
       const result = registry.configureSeat(room.code, request.params.seatId, {
-        kind: kind === "open" ? "open" : "closed",
+        kind: kind === "open" ? "open" : kind === "bot" ? "bot" : "closed",
       });
       if (!result.ok) {
         if (result.reason === "room_not_found" || result.reason === "seat_not_found") {
@@ -788,8 +868,15 @@ export function createGameRoomStack<M extends StackMatch<any>>(
 
     const seats = effectiveLobbySeats(room).map((seat) => ({
       seatId: seat.seatId,
-      kind: seat.kind === "remote_human" ? ("remote_human" as const) : ("local_human" as const),
-      displayName: seat.displayName ?? (seat.kind === "local_human" ? "你" : "客人"),
+      kind:
+        seat.kind === "remote_human"
+          ? ("remote_human" as const)
+          : seat.kind === "bot"
+            ? ("bot" as const)
+            : ("local_human" as const),
+      displayName:
+        seat.displayName ??
+        (seat.kind === "local_human" ? "你" : seat.kind === "bot" ? "机器人" : "客人"),
     }));
 
     const matchId = module.newMatchId();
@@ -826,6 +913,7 @@ export function createGameRoomStack<M extends StackMatch<any>>(
     }
     lastAutoDecisions.delete(room.code);
     armTurnTimer(room.code);
+    scheduleBotDecision(room.code);
 
     return reply.send({
       ...module.seatView(match, "1"),
@@ -956,6 +1044,7 @@ export function createGameRoomStack<M extends StackMatch<any>>(
         persistActiveRoom();
         presence.clearRoom(room.code);
         clearTurnTimer(room.code);
+        clearBotTimer(room.code);
         lastAutoDecisions.delete(room.code);
         matchesByRoom.delete(room.code);
         return reply.send({ action: "technical_abort", aborted: true, matchId });
@@ -977,6 +1066,7 @@ export function createGameRoomStack<M extends StackMatch<any>>(
         persistActiveRoom();
         presence.clearSeat(room.code, seatId);
         armTurnTimer(room.code);
+        scheduleBotDecision(room.code);
         return reply.send({
           action: "force_eliminate",
           ...module.seatView(match, "1"),
@@ -1116,6 +1206,7 @@ export function createGameRoomStack<M extends StackMatch<any>>(
         presence.clearRoom(room.code);
       }
       armTurnTimer(room.code);
+      scheduleBotDecision(room.code);
       return reply.send({
         ...module.seatView(activeMatch, seatId, (body as { requestId?: string } | null)?.requestId),
         absences: presence.projectAll(room.code, now()),

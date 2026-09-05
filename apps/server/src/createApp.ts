@@ -28,6 +28,8 @@ import { brassGameStore, brassModule } from "./brass/brassModule.js";
 import { openBrassStore } from "./brass/brassStore.js";
 import { splendorGameStore, splendorModule } from "./splendor/splendorModule.js";
 import { openSplendorStore } from "./splendor/splendorStore.js";
+import { catanGameStore, catanModule } from "./catan/catanModule.js";
+import { openCatanStore } from "./catan/catanStore.js";
 import { createSeatPresenceTracker, type SeatPresenceTracker } from "./seatPresenceTracker.js";
 
 export type BindMode = "local" | "host";
@@ -60,6 +62,8 @@ export type CreateAppOptions = {
   presence?: SeatPresenceTracker;
   /** Room persistence (defaults to same dbPath as MatchStore). */
   roomStore?: RoomStore;
+  /** Injectable bot decision delay for all stacks (tests). */
+  botDecisionDelayMs?: () => number;
 };
 
 function defaultDbPath() {
@@ -85,6 +89,7 @@ export async function createApp(options: CreateAppOptions) {
   const roomStore = options.roomStore ?? openRoomStore(dbPath);
   const brassStore = openBrassStore(dbPath);
   const splendorStore = openSplendorStore(dbPath);
+  const catanStore = openCatanStore(dbPath);
   // 旧库迁移：把无 room_code 的历史 run 归位到其房间（须在栈恢复房间前执行）。
   store.migrateLegacyRuns(roomStore.loadRooms().rooms);
   const sessions = options.sessions ?? createSessionStore();
@@ -215,6 +220,7 @@ export async function createApp(options: CreateAppOptions) {
     now,
     presence: options.presence,
     registry: options.rooms,
+    botDecisionDelayMs: options.botDecisionDelayMs,
   });
   createGameRoomStack(app, {
     module: brassModule,
@@ -229,6 +235,7 @@ export async function createApp(options: CreateAppOptions) {
     getHostContext,
     hostingAvailable: options.hosting != null,
     now,
+    botDecisionDelayMs: options.botDecisionDelayMs,
   });
   createGameRoomStack(app, {
     module: splendorModule,
@@ -243,6 +250,22 @@ export async function createApp(options: CreateAppOptions) {
     getHostContext,
     hostingAvailable: options.hosting != null,
     now,
+    botDecisionDelayMs: options.botDecisionDelayMs,
+  });
+  createGameRoomStack(app, {
+    module: catanModule,
+    store: catanGameStore(catanStore),
+    roomPersistence: {
+      saveRoom: (room) => catanStore.saveCatanRoom(room),
+      clearRoom: (code) => catanStore.clearCatanRoom(code),
+      loadRooms: () => catanStore.loadCatanRooms(),
+    },
+    requireSession,
+    appendSetCookie,
+    getHostContext,
+    hostingAvailable: options.hosting != null,
+    now,
+    botDecisionDelayMs: options.botDecisionDelayMs,
   });
 
   app.addHook("onClose", async () => {
@@ -250,6 +273,7 @@ export async function createApp(options: CreateAppOptions) {
     roomStore.close();
     brassStore.close();
     splendorStore.close();
+    catanStore.close();
   });
 
   app.get("/api/session", async (request, reply) => {

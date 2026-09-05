@@ -1,9 +1,10 @@
 /**
- * 卡坦岛 Mock 引擎 —— 纯函数实现。
+ * 卡坦岛规则引擎 —— 纯函数实现。
  *
  * 所有随机性走内部 mulberry32（g.rngState），保证测试可复现；
  * 动作返回 { ok, game, events }，events 供 UI 做「行动 → 反馈 → 状态变化」动画。
- * 刻意最小化的规则：起始放置（Mock 为预置落位）、7 点弃牌、出牌当轮限制等，见 spec。
+ * 每次成功动作 stateVersion 递增（联机增量轮询依赖）。
+ * 刻意最小化的规则：起始放置（预置落位）、7 点弃牌、出牌当轮限制等，见 spec。
  */
 
 import {
@@ -14,6 +15,7 @@ import {
   emptyCount,
   type BuildingPiece,
   type CatanGame,
+  type CatanProjection,
   type CatanTile,
   type DevCardKind,
   type Edge,
@@ -21,12 +23,13 @@ import {
   type GameResult,
   type Harbor,
   type HarborKind,
+  type PlayerScore,
   type PlayerState,
   type ResourceCount,
   type ResourceId,
   type Terrain,
   type Vertex,
-} from "./types.ts";
+} from "./types.js";
 
 const SQRT3 = Math.sqrt(3);
 /** 六边形外接圆半径（布局单位）。 */
@@ -90,6 +93,7 @@ function pushLog(g: CatanGame, text: string, color?: string): void {
 }
 
 function ok(g: CatanGame, events: GameEvent[]): GameResult {
+  g.stateVersion += 1;
   return { ok: true, game: g, events };
 }
 
@@ -100,6 +104,7 @@ function fail(code: string): GameResult {
 function canAfford(hand: ResourceCount, cost: Partial<ResourceCount>): boolean {
   return (Object.keys(cost) as ResourceId[]).every((k) => hand[k] >= (cost[k] ?? 0));
 }
+export { canAfford };
 
 function pay(hand: ResourceCount, cost: Partial<ResourceCount>): void {
   for (const k of Object.keys(cost) as ResourceId[]) hand[k] -= cost[k] ?? 0;
@@ -320,6 +325,12 @@ export function playerVP(g: CatanGame, player: number): {
   return { total: buildings + vpCards + longestRoad + largestArmy, buildings, vpCards, longestRoad, largestArmy };
 }
 
+/** 公开胜利点（不含未打出的发展卡）——他人视角的计分板用。 */
+export function publicVP(g: CatanGame, player: number): number {
+  const vp = playerVP(g, player);
+  return vp.buildings + vp.longestRoad + vp.largestArmy;
+}
+
 /** 最长路（忽略对手建筑截断等细节，Trail DFS 足够 Mock）。 */
 export function longestRoadLength(g: CatanGame, player: number): number {
   const mine = g.roads.filter((r) => r.owner === player);
@@ -392,6 +403,18 @@ function checkWin(g: CatanGame, events: GameEvent[]): void {
     if (playerVP(g, p).total >= 10) {
       g.winner = p;
       g.phase = "over";
+      g.status = "finished";
+      g.finalScores = g.players.map((_, i) => {
+        const vp = playerVP(g, i);
+        return {
+          player: i,
+          total: vp.total,
+          buildings: vp.buildings,
+          vpCards: vp.vpCards,
+          longestRoad: vp.longestRoad,
+          largestArmy: vp.largestArmy,
+        } satisfies PlayerScore;
+      });
       events.push({ type: "win", player: p });
       pushLog(g, `${g.players[p]!.name} 达到 10 分，赢得对局！`, g.players[p]!.color);
       return;
@@ -407,10 +430,8 @@ export interface PlayerSetup {
   name: string;
   color: string;
   isHuman: boolean;
-}
-
-/** 6/8=5 分、5/9=4 分…用于挑选像样的开局落位。 */
-function pipScore(value: number | null): number {
+}/** 6/8=5 分、5/9=4 分…用于挑选像样的开局落位。 */
+export function pipScore(value: number | null): number {
   if (value == null) return 0;
   if (value === 6 || value === 8) return 5;
   if (value === 5 || value === 9) return 4;
@@ -419,9 +440,12 @@ function pipScore(value: number | null): number {
   return 1;
 }
 
-export function createGame(setups: PlayerSetup[], seed: number): CatanGame {
+export function createGame(setups: PlayerSetup[], seed: number, matchId = "catan-local"): CatanGame {
   const board = generateBoard(seed);
   const g: CatanGame = {
+    matchId,
+    stateVersion: 1,
+    status: "in_progress",
     tiles: board.tiles,
     vertices: board.vertices,
     edges: board.edges,
@@ -444,11 +468,14 @@ export function createGame(setups: PlayerSetup[], seed: number): CatanGame {
     turn: 0,
     turnNo: 1,
     phase: "roll",
+    robberMoved: false,
+    lastDice: null,
     freeRoads: 0,
     devDeck: [],
     longestRoadOwner: null,
     largestArmyOwner: null,
     pendingTrade: null,
+    finalScores: null,
     log: [],
     seq: 0,
     winner: null,
@@ -568,7 +595,8 @@ export function robberVictims(g: CatanGame, player: number): number[] {
   for (const b of g.buildings) {
     if (b.owner === player) continue;
     const v = g.vertices[b.vertex]!;
-    if (v.tiles.includes(tile.id) && countTotal(g.players[b.owner]!.hand) > 0) victims.add(b.owner);
+    const held = g.players[b.owner]!.handCount ?? countTotal(g.players[b.owner]!.hand);
+    if (v.tiles.includes(tile.id) && held > 0) victims.add(b.owner);
   }
   return [...victims];
 }
@@ -601,12 +629,14 @@ export function rollDice(input: CatanGame): GameResult {
   const a = 1 + randInt(g, 6);
   const b = 1 + randInt(g, 6);
   const sum = a + b;
+  g.lastDice = { a, b };
   const player = g.players[g.turn]!;
   const events: GameEvent[] = [{ type: "dice", a, b }];
   pushLog(g, `${player.name} 掷出 ${a} + ${b} = ${sum}`, player.color);
 
   if (sum === 7) {
     g.phase = "robber";
+    g.robberMoved = false;
     pushLog(g, "强盗出没 —— 必须移动强盗");
     return ok(g, events);
   }
@@ -735,6 +765,7 @@ export function playDev(
     pushLog(g, `${p.name} 打出骑士（第 ${p.knightsPlayed} 名）`, p.color);
     updateLargestArmy(g, player);
     g.phase = "robber";
+    g.robberMoved = false;
     pushLog(g, "骑士驱逐强盗 —— 选择新的落脚地块");
   } else if (card === "roadBuilding") {
     g.freeRoads += 2;
@@ -761,10 +792,12 @@ export function playDev(
 export function moveRobber(input: CatanGame, player: number, tileId: number): GameResult {
   const g = structuredClone(input);
   if (g.phase !== "robber") return fail("phase");
+  if (g.robberMoved) return fail("robber_moved");
   const tile = g.tiles.find((t) => t.id === tileId);
   if (!tile) return fail("no_tile");
   if (tileId === g.robberTile) return fail("same_tile");
   g.robberTile = tileId;
+  g.robberMoved = true;
   pushLog(g, `${g.players[player]!.name} 把强盗挪到了${tileName(g, tileId)}`, g.players[player]!.color);
   const events: GameEvent[] = [{ type: "robberMoved", tileId }];
   // 无人可抢则直接回到主阶段。
@@ -882,6 +915,7 @@ export function endTurn(input: CatanGame): GameResult {
   const cur = g.players[g.turn]!;
   pushLog(g, `${cur.name} 结束回合`, cur.color);
   g.freeRoads = 0;
+  g.robberMoved = false;
   g.turn = (g.turn + 1) % g.players.length;
   g.turnNo += 1;
   g.phase = "roll";
@@ -906,4 +940,32 @@ function countText(count: ResourceCount): string {
 export function tileName(g: CatanGame, tileId: number): string {
   const t = g.tiles.find((x) => x.id === tileId)!;
   return `${TERRAIN_RESOURCE[t.terrain] ? RESOURCE_NAMES[TERRAIN_RESOURCE[t.terrain]!] : "沙漠"}地块`;
+}
+
+/* ------------------------------------------------------------------ */
+/* 座位投影（联机）：他人手牌/发展卡身份隐藏，牌库顺序剥离              */
+/* ------------------------------------------------------------------ */
+
+export function projectForSeat(g: CatanGame, player: number | null): CatanProjection {
+  const state = structuredClone(g);
+  const hand = player != null ? state.players[player]!.hand : emptyCount();
+  const devCards = player != null ? [...state.players[player]!.dev] : [];
+  const others: CatanProjection["others"] = {};
+  for (const p of state.players) {
+    if (p.id === player) {
+      delete p.handCount;
+      delete p.devCount;
+      continue;
+    }
+    const handCount = countTotal(p.hand);
+    const devCount = p.dev.length;
+    others[p.id] = { handCount, devCount };
+    p.hand = emptyCount();
+    p.dev = [];
+    p.handCount = handCount;
+    p.devCount = devCount;
+  }
+  const devDeckCount = state.devDeck.length;
+  state.devDeck = [];
+  return { state, hand, devCards, devDeckCount, others };
 }

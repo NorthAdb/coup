@@ -38,7 +38,7 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 ### 迭代纪律（用户预期的工作方式）
 
 - 每轮改动：本地浏览器实测 → `npm test` + `npm run typecheck` 全绿 → 中文提交信息（写清动机）→ 部署 → 线上复验 → 中文汇报。
-- 测试规模基线：全仓 296 项（domain 23 / brass-domain 21 / splendor-domain 18 / server 115 / web-desk 32 / web 21 / server-local 62 / web-local 4），总数变化时更新 README。
+- 测试规模基线：全仓 307 项（domain 23 / brass-domain 21 / splendor-domain 18 / catan-domain 18 / server 121 / web-desk 32 / web 8 / server-local 62 / web-local 4），总数变化时更新 README。
 
 ### 公网安全与房间回收语义（2026-09 上线审计沉淀，决策记录见 `docs/adr/0012`）
 
@@ -53,24 +53,33 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 
 ### 平台层（ADR-0010，2026-09 落地）
 
-- **改游戏规则**去 `packages/domain` / `packages/brass-domain` / `packages/splendor-domain`；**改联机编排**去 `apps/server/src/platform/gameRoomStack.ts`（一款实现，两游戏共用）；两者之间只经 `platform/gameModule.ts` 的 `GameModule` 接缝，不要在栈里写游戏语义。新游戏接入清单：`docs/platform/adding-a-game.md`；splendor 接入记录：`docs/adr/0011`。
+- **改游戏规则**去 `packages/domain` / `packages/brass-domain` / `packages/splendor-domain` / `packages/catan-domain`；**改联机编排**去 `apps/server/src/platform/gameRoomStack.ts`（一款实现，四游戏共用）；两者之间只经 `platform/gameModule.ts` 的 `GameModule` 接缝，不要在栈里写游戏语义。新游戏接入清单：`docs/platform/adding-a-game.md`；splendor 接入记录：`docs/adr/0011`；catan 接入与 AI 座位：`docs/adr/0013`。
 - 新游戏接入清单：`docs/platform/adding-a-game.md`。核心步骤 = GameModule 适配器（约 200 行，参考 `apps/server/src/brass/brassModule.ts`）+ createApp 一行挂载 + 前端 `createRoomClient(prefix)` 薄壳 + API 集成测试（参考 `brassRoomApi.test.ts`）。
 - 前端传输统一走 `apps/web/src/platform/roomApi.ts`；`lanRoom.ts`/`brassApi.ts` 只留文案映射与类型。被 node `--experimental-strip-types` 测试链路引用的文件，import 说明符要用 `.ts` 后缀（vite/tsc 均兼容）。
 - coup 旧路径 `/api/rooms…`、`/api/room-recovery` 原样保留（响应多了 `game` 字段，向后兼容）；brass 走 `/api/brass/rooms…`，恢复清单键是 `items`（coup 是 `rooms`），由 `GameModule.recoveryListKey` 区分。
 
-### 卡坦岛视觉原型（2026-09，`/catan`，spec 见 `.scratch/catan/spec.md`）
+### 卡坦岛联机版（2026-09，`/catan`，ADR-0013，spec 见 `.scratch/catan/spec.md`）
 
-- 第一阶段纯前端 Mock：`apps/web/src/catan/`（引擎 `mock/game.ts` 纯函数 + `table/` UI），**未接 GameModule/后端**；路由在 `main.tsx`，门户第四张卡在 `Portal.tsx` + `brass.css` 尾部。服务端零改动（not-found 已回退 index.html）。
-- 深链：`/catan/play` 快速开局；`/catan/play#demo-win` 直接触发终局结算（走查用）。
-- 坑：SVG 里 CSS transform 会覆盖 attribute transform——需要动画的棋子（道路/建筑/飘卡）必须有内层包裹元素做 CSS 动画；交互热点不能被 DOM 末尾的全屏透明矩形遮挡（SVG 命中按绘制顺序）。
-- 引擎坑：`respondTrade` 验资失败也必须清 `pendingTrade`（否则提议永久挂起）；开局预置路的远端点与自家村庄相邻，永不满足建村距离——先修路才出建村位，是实体规则不是 bug。
-- 测试：catan 引擎 13 项随 `@coup/web` 跑（web 21 项），全仓基线 296。
+- 由视觉原型联机化：规则引擎在 `packages/catan-domain`（`applyCommand` 原子命令 + `projectForSeat` 座位投影 + `planAutoDecision`/`planBotDecision`），服务器 `apps/server/src/catan/`（catanModule/catanRuntime/catanStore），前端 `apps/web/src/catan/`（`catanApi.ts` 薄壳 + CatanApp 房间流程 + CatanTable 吃投影视图）。旧 `mock/` 与 `useCatanGame` 已删除。
+- 深链：`/catan/room/:code` 房间、`/catan/join?code=` 加入；首页「开始游戏」= 建房 + 三 AI 衡位 + 直接开局。**对局中「离开」回首页**（房间 phase 恒为 match，回房间大厅会被轮询弹回对局）。
+- 引擎坑：`respondTrade` 验资失败也必须清 `pendingTrade`；开局预置路的远端点与自家村庄相邻，永不满足建村距离——先修路才出建村位，是实体规则；强盗每阶段限挪一次（`robberMoved` 标记，防原始命令刷强盗）。
+- **掉库坑（已修，回归 catanRoomApi.test「重启恢复」）**：catanModule 落库守卫曾是 `newEvents.length === 0` 就跳过——婉拒交易/结束挪强盗这类**无事件命令**状态有变却不落库，重启回滚。结论：凡是 `stateVersion` 递增的命令一律 commitCommand，不能拿「有无事件」当「有无状态变化」的判据。
+- 坑：SVG 里 CSS transform 会覆盖 attribute transform——需要动画的棋子必须有内层包裹元素；交互热点不能被 DOM 末尾的全屏透明矩形遮挡。
+- 测试：catan 引擎 18 项随 `@coup/catan-domain` 跑 + catanRoomApi 3 项集成（AI 座位自动行动/投影不泄密/重启恢复）。
+
+### AI 队友座位（2026-09，ADR-0013）
+
+- 平台栈原生支持 bot 座位：`LobbySeatKind` 增 `"bot"`（房主在 `PATCH …/seats/:id/config` 里配 `{kind:"bot"}`，座位名「机器人·甲乙丙…」，不可认领、不参与心跳与空房判定——`seatFacts` 投影为 `controller:"other"`）。
+- 驱动循环在 `gameRoomStack.scheduleBotDecision/fireBotDecision`：欠决策座位为 bot 时延迟 0.9–2.2s 经 `GameModule.planBotDecision`（可选钩子）出一条命令走 `submitDecision` 人类同通路；成功后续链、失败用 `planAutoDecision` 兜底一次、再失败停链等回合计时器。开局/决策/超时代打/强制淘汰/重启恢复后都要 `scheduleBotDecision`，`dissolveRoom`/technical abort 要 `clearBotTimer`。
+- 测试注入口：`createApp` 的 `botDecisionDelayMs`（集成测试传 `() => 5`）。bot 集成测试的正确姿势：人类用各域的 `planAutoDecision` 推进自己回合，bot 自动交错行动，断言轮询体的 `autoDecision.seatId`（bot 座位行动的精确信号）。
+- 各游戏实现：catan 在 `catan-domain/autoPlan.ts`（城→村→路→发展卡启发式，全确定性，引擎单测里有四 bot 全自动对局不卡死回归）；brass 在 `brassRuntime.planBrassBot`（建造→铺路→贷款→跳过，资源就近私矿/工场优先市场兜底，思路来自 lobbybot.mjs）；splendor 在 `splendorRuntime.planSplendorBot`（买分牌优先→按需求拿宝石→预留）；coup 在 `games/coupBot.ts`（legalDecisions 里按 政变≥10→收税→偷最富→刺杀高影响→收入 挑，只拦偷窃、不轻信挑战、被抓自认；提交走 `matchRuntime.submitAgentDecision`，仅 stub_agent 座位可用）。
+- botPlayers 持久化在各域 state（brass/splendor 是 `state.botPlayers?: number[]`，catan 用 `PlayerState.isHuman`），随 run 快照自动恢复；**投影必须透传 botPlayers**（splendor 的 SplendorPublicState 是显式字段对象，新字段要手动加进投影）。
 
 ### 已知事实与坑
 
-- 入口路由：`/` 门户、`/brass` 伯明翰、`/splendor` 璀璨宝石、`/catan` 卡坦岛（Mock 原型）、`/coup` 与 `/join` 政变（`apps/web/src/main.tsx` 的 `route()`）。
+- 入口路由：`/` 门户、`/brass` 伯明翰、`/splendor` 璀璨宝石、`/catan` 卡坦岛、`/coup` 与 `/join` 政变（`apps/web/src/main.tsx` 的 `route()`）。
 - 本地 Brass/ splendor 房间上限各 10 个；满了用 node:sqlite 清库：`DELETE FROM brass_runs; DELETE FROM brass_rooms;`（splendor 对应 `splendor_runs`/`splendor_rooms`；注意：清库会毁掉进行中的本地对局）。无人问津的房间自 2026-09 起会在约 30 分钟后自动回收（ADR-0012），等一等也能腾出名额。
-- Brass 持久化为逐命令提交（`brassStore.commitCommand`）；**旧 brassRoutes 曾漏传 persistence 导致决策不落库、重启回滚**（2026-09 随平台化修复，brassRoomApi.test 锁定回归）——新游戏适配器务必在 `submitDecision` 里接 `options.store`。
+- Brass 持久化为逐命令提交（`brassStore.commitCommand`）；**旧 brassRoutes 曾漏传 persistence 导致决策不落库、重启回滚**（2026-09 随平台化修复，brassRoomApi.test 锁定回归）——新游戏适配器务必在 `submitDecision` 里接 `options.store`。catan 栈随后踩了同族坑的第二种形态：**「无新事件」的命令也必须落库**（见卡坦岛小节）。
 - 前端 spectator 标记在回席/建房/就座时必须复位（`BrassApp`），否则前观战者回到对局看不到手牌。
 - Brass 续局 join/leave 按座位凭证路由（`/rematch/join` 无 seatId 段，与 coup 一致）；旧实现路径不一致导致线上续局无法确认，已修并有回归测试。
 - Brass 以玩家序号映射座位（前端硬编码 seatId=序号+1），非连续占座开局会被 `seats_not_contiguous` 拒绝——这是刻意行为，不是 bug。

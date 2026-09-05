@@ -1,12 +1,23 @@
 import { randomUUID } from "node:crypto";
 import type {
+  DevCard,
+  GemColor,
   SplendorCommand,
   SplendorDecisionPayload,
   SplendorEvent,
   SplendorPublicState,
   SplendorState,
 } from "@coup/splendor-domain";
-import { applyCommand, createMatch, planAutoDecision, projectForSeat } from "@coup/splendor-domain";
+import {
+  applyCommand,
+  canAfford,
+  createMatch,
+  GEM_COLORS,
+  planAutoDecision,
+  projectForSeat,
+  RESERVED_LIMIT,
+  TABLE_SLOTS,
+} from "@coup/splendor-domain";
 
 /**
  * Splendor 对局运行时：与 coup 的 matchRuntime、brass 的 brassRuntime 同构。
@@ -123,6 +134,8 @@ export function startSplendorMatch(options: {
   seed: string;
   playerCount: 2 | 3 | 4;
   displayNames: Record<string, string>;
+  /** AI 座位（player 下标）；空缺视为全人类。 */
+  botPlayers?: number[];
   persistence?: SplendorMatchPersistence;
   roomCode?: string;
 }): ActiveSplendorMatch {
@@ -131,6 +144,9 @@ export function startSplendorMatch(options: {
     seed: options.seed,
     playerCount: options.playerCount,
   });
+  if (options.botPlayers && options.botPlayers.length > 0) {
+    created.botPlayers = [...options.botPlayers];
+  }
   const match: ActiveSplendorMatch = {
     state: created,
     events: [],
@@ -211,4 +227,143 @@ export function planSplendorAuto(
     },
     kind: command.type,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* 机器人启发式（AI 队友）                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Splendor 机器人：优先买分牌（分高、便宜者优先），其次按需求拿宝石，
+ * 快凑齐的高分牌用预留锁住；弃筹码/选贵族等特殊阶段交给超时代打计划兜底。
+ */
+export function planSplendorBot(
+  state: SplendorState,
+  seatId: string,
+): { payload: SplendorDecisionPayload; kind: string } | null {
+  const player = seatIdToPlayer(seatId);
+  if (player === null) return null;
+  if (state.status !== "in_progress") return null;
+  if (state.phase !== "action" || state.currentPlayer !== player) return null;
+
+  const expectedVersion = state.stateVersion;
+  const payload = (command: SplendorCommand): { payload: SplendorDecisionPayload; kind: string } => ({
+    payload: {
+      protocolVersion: SPLENDOR_PROTOCOL_VERSION,
+      requestId: `bot-${expectedVersion}-${seatId}`,
+      stateVersion: expectedVersion,
+      command,
+    },
+    kind: command.type,
+  });
+
+  const self = state.players[player]!;
+  const affordable = affordableCards(state, player);
+
+  // 1) 买：能买得起的牌里分最高者，平分时取最便宜。
+  if (affordable.length > 0) {
+    const best = [...affordable].sort(
+      (a, b) => b.card.points - a.card.points || totalCost(a.card) - totalCost(b.card),
+    )[0]!;
+    if (best.reserved) {
+      return payload({ type: "purchase_reserved", player, expectedVersion, cardId: best.card.id });
+    }
+    return payload({ type: "purchase_table", player, expectedVersion, level: best.level, slot: best.slot });
+  }
+
+  // 2) 拿宝石：挑「离买得起最近」的卡需要的颜色（缺得少的优先），取 3 散色。
+  const needOrder = needColors(state, player);
+  const poolColors = GEM_COLORS.filter((color) => state.pool[color] > 0);
+  const picks: GemColor[] = [];
+  for (const color of needOrder) {
+    if (picks.length >= 3) break;
+    if (picks.includes(color)) continue;
+    if (state.pool[color] > 0) picks.push(color);
+  }
+  for (const color of poolColors) {
+    if (picks.length >= 3) break;
+    if (!picks.includes(color)) picks.push(color);
+  }
+  if (picks.length === 3) {
+    return payload({ type: "take_gems", player, expectedVersion, gems: picks });
+  }
+  // 池子不足 3 色：拿 2 同色（≥4 枚）或预留。
+  const doubleColor = GEM_COLORS.find(
+    (color) => state.pool[color] >= 4 && needOrder.includes(color),
+  ) ?? GEM_COLORS.find((color) => state.pool[color] >= 4);
+  if (doubleColor) {
+    return payload({ type: "take_gems", player, expectedVersion, gems: [doubleColor, doubleColor] });
+  }
+
+  // 3) 预留：优先需求色在场的牌，其次 1 级明牌，再盲留。
+  if (self.reserved.length < RESERVED_LIMIT) {
+    for (const level of [1, 2, 3] as const) {
+      for (let slot = 0; slot < TABLE_SLOTS; slot += 1) {
+        const card = state.table[level][slot];
+        if (!card) continue;
+        if (needOrder.some((color) => card.cost[color] > 0 && self.gems[color] + self.cards[color] < card.cost[color])) {
+          return payload({ type: "reserve_table", player, expectedVersion, level, slot });
+        }
+      }
+    }
+    for (const level of [1, 2, 3] as const) {
+      if ((state.deckCounts[level] ?? 0) > 0) {
+        return payload({ type: "reserve_deck", player, expectedVersion, level });
+      }
+    }
+  }
+
+  return null;
+}
+
+function totalCost(card: DevCard): number {
+  return GEM_COLORS.reduce((sum, color) => sum + card.cost[color], 0);
+}
+
+type AffordableCard = {
+  level: 1 | 2 | 3;
+  slot: number;
+  card: DevCard;
+  reserved: boolean;
+};
+
+function affordableCards(state: SplendorState, player: number): AffordableCard[] {
+  const self = state.players[player]!;
+  const out: AffordableCard[] = [];
+  for (const level of [1, 2, 3] as const) {
+    for (let slot = 0; slot < TABLE_SLOTS; slot += 1) {
+      const card = state.table[level][slot];
+      if (card && canAfford(self, card)) {
+        out.push({ level, slot, card, reserved: false });
+      }
+    }
+  }
+  for (const card of self.reserved) {
+    if (canAfford(self, card)) out.push({ level: 1, slot: 0, card, reserved: true });
+  }
+  return out;
+}
+
+/** 各颜色「还缺多少」升序排（用 bonus 折算后）。 */
+function needColors(state: SplendorState, player: number): GemColor[] {
+  const self = state.players[player]!;
+  const missing = new Map<GemColor, number>();
+  for (const color of GEM_COLORS) missing.set(color, 0);
+  for (const level of [1, 2, 3] as const) {
+    for (let slot = 0; slot < TABLE_SLOTS; slot += 1) {
+      const card = state.table[level][slot];
+      if (!card) continue;
+      let gap = 0;
+      for (const color of GEM_COLORS) {
+        gap += Math.max(0, card.cost[color] - self.gems[color] - self.cards[color]);
+      }
+      for (const color of GEM_COLORS) {
+        const need = card.cost[color] - self.gems[color] - self.cards[color];
+        if (need > 0) missing.set(color, (missing.get(color) ?? 0) + need * (1 + gap / 6));
+      }
+    }
+  }
+  return [...GEM_COLORS].sort(
+    (a, b) => (missing.get(a) ?? 0) - (missing.get(b) ?? 0),
+  );
 }

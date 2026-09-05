@@ -201,6 +201,8 @@ export interface BrassState {
   winner: number | null;
   /** 终局结算摘要。 */
   finalScores: { player: number; vp: number; income: number; money: number }[] | null;
+  /** 联机 AI 座位（player 下标；平台层开局时写入，旧快照缺省视为无）。 */
+  botPlayers?: number[];
 }
 
 // ---------------------------------------------------------------------------

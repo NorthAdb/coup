@@ -329,6 +329,8 @@ export function BrassApp() {
                   </>
                 ) : seat.kind === "remote_human" ? (
                   <span className="brass-seat-name">{seat.displayName ?? "客人"}</span>
+                ) : seat.kind === "bot" ? (
+                  <span className="brass-seat-name">🤖 {seat.displayName ?? "AI 队友"}</span>
                 ) : (
                   <span className="brass-seat-name dim">{seat.kind === "open" ? "空位" : "已关闭"}</span>
                 )}
@@ -338,7 +340,11 @@ export function BrassApp() {
                     className="brass-ghost-btn"
                     onClick={async () => {
                       try {
-                        await configureBrassSeat(room.code, seat.seatId, seat.kind === "open" ? "closed" : "open");
+                        await configureBrassSeat(
+                          room.code,
+                          seat.seatId,
+                          seat.kind === "open" ? "bot" : "open",
+                        );
                         const invite = await fetchBrassRoom(room.code);
                         setRoom(invite);
                       } catch (e) {
@@ -346,7 +352,7 @@ export function BrassApp() {
                       }
                     }}
                   >
-                    {seat.kind === "open" ? "关闭" : "开放"}
+                    {seat.kind === "open" ? "加AI" : "撤下AI"}
                   </button>
                 ) : null}
                 {!isHost && seat.kind === "open" ? (

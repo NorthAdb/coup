@@ -1,7 +1,7 @@
 import type { LobbySeat } from "./lanRoom";
 import { seatKindLabel } from "./lanRoom";
 
-export type HostSeatConfig = { kind: "open" } | { kind: "closed" };
+export type HostSeatConfig = { kind: "open" } | { kind: "closed" } | { kind: "bot" };
 
 type LobbySeatListProps = {
   seats: LobbySeat[];
@@ -40,7 +40,8 @@ export function LobbySeatList({
             seat.kind !== "local_human" &&
             seat.seatId !== "1";
           const claimable = Boolean(onClaim) && seat.kind === "open" && !mySeatId;
-          const occupied = seat.kind === "local_human" || seat.kind === "remote_human";
+          const occupied =
+            seat.kind === "local_human" || seat.kind === "remote_human" || seat.kind === "bot";
           const initial = seat.displayName?.slice(0, 1) ?? String(seat.seatId);
           return (
             <li
@@ -97,13 +98,32 @@ export function LobbySeatList({
                 ) : null}
                 {configurable && onConfigure ? (
                   seat.kind === "open" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="mini-toggle"
+                        disabled={busy}
+                        onClick={() => onConfigure(seat.seatId, { kind: "bot" })}
+                      >
+                        加AI
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-toggle close"
+                        disabled={busy}
+                        onClick={() => onConfigure(seat.seatId, { kind: "closed" })}
+                      >
+                        关闭
+                      </button>
+                    </>
+                  ) : seat.kind === "bot" ? (
                     <button
                       type="button"
                       className="mini-toggle close"
                       disabled={busy}
-                      onClick={() => onConfigure(seat.seatId, { kind: "closed" })}
+                      onClick={() => onConfigure(seat.seatId, { kind: "open" })}
                     >
-                      关闭
+                      撤下AI
                     </button>
                   ) : (
                     <button

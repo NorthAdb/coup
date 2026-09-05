@@ -11,7 +11,7 @@ export type LobbyStartGateFailure =
 export function effectiveLobbySeats(room: RoomRecord): LobbySeat[] {
   return room.seats.filter(
     (seat) =>
-      seat.kind === "local_human" || seat.kind === "remote_human",
+      seat.kind === "local_human" || seat.kind === "remote_human" || seat.kind === "bot",
   );
 }
 
@@ -52,7 +52,12 @@ export function lobbySeatsToMatchSetup(
 ): MatchSetupSeatInput[] {
   return effectiveLobbySeats(room).map((seat) => ({
     seatId: seat.seatId,
-    controller: seat.kind === "remote_human" ? "remote_human" : "local_human",
-    displayName: seat.displayName ?? (seat.kind === "local_human" ? "你" : "客人"),
+    controller:
+      seat.kind === "remote_human"
+        ? "remote_human"
+        : seat.kind === "bot"
+          ? "stub_agent"
+          : "local_human",
+    displayName: seat.displayName ?? (seat.kind === "local_human" ? "你" : seat.kind === "bot" ? "机器人" : "客人"),
   }));
 }

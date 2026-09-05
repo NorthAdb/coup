@@ -1,35 +1,50 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactElement } from "react";
 import {
   BUILD_COSTS,
   DEV_NAMES,
+  PLAYER_COLORS,
   RESOURCE_NAMES,
   RESOURCES,
+  legalCities,
+  legalRoads,
+  legalSettlements,
+  publicVP,
+  playerVP,
+  robberVictims,
+  tradeRate,
+  type CatanCommand,
   type CatanGame,
   type DevCardKind,
   type FloatChip,
   type PlayerState,
   type ResourceCount,
   type ResourceId,
-} from "../mock/types.ts";
-import { playerVP, tradeRate } from "../mock/game.ts";
-import { BoardMap, ownedHarbors, type BuildMode, type ConfirmTarget } from "./BoardMap.js";
+} from "@coup/catan-domain";
+import { ownedHarbors, BoardMap, type BuildMode, type ConfirmTarget } from "./BoardMap.js";
 import { Dice, DevCardFace, ResourceCardFace, ResourceCostList, ResourceIcon } from "./pieces.js";
-import { useCatanGame } from "./useCatanGame.js";
+import type { CatanMatchPollBody, CatanSeatAbsence, CatanView } from "../catanApi.js";
 
 /**
  * 卡坦岛桌面：绿呢台面上的中央地图，玩家围坐四方，
  * 底部是你的手牌、发展卡、行动面板与骰子；交易与提示走轻量浮层。
+ * 状态来自服务器座位投影（ADR-0010 平台栈），每次行动经 submit 决策提交。
  */
 
 interface CatanTableProps {
-  playerName: string;
-  seatCount: 3 | 4;
   roomCode: string;
+  view: CatanView;
+  /** null = 观战。 */
+  mySeatId: string | null;
+  absences: CatanSeatAbsence[];
+  pausedSeatId: string | null;
+  turnDeadline: CatanMatchPollBody["turnDeadline"];
+  autoDecision: CatanMatchPollBody["autoDecision"];
+  onSubmit: (command: CatanCommand) => Promise<boolean>;
   onExit: () => void;
-  onRestart: () => void;
-  /** 演示模式：开局即 9 分 + 一手资源，用于走查胜利结算（仅 Mock）。 */
-  demoWin?: boolean;
+  onRematch: () => void;
+  onConfirmRematch: () => void;
+  onDeclineRematch: () => void;
 }
 
 interface ToastItem {
@@ -37,7 +52,28 @@ interface ToastItem {
   text: string;
 }
 
-export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart, demoWin }: CatanTableProps): ReactElement {
+interface DiceState {
+  a: number;
+  b: number;
+  rolling: boolean;
+}
+
+export function CatanTable({
+  roomCode,
+  view,
+  mySeatId,
+  pausedSeatId,
+  autoDecision,
+  onSubmit,
+  onExit,
+  onRematch,
+  onConfirmRematch,
+  onDeclineRematch,
+}: CatanTableProps): ReactElement {
+  const game = view.state;
+  const myIdx = mySeatId ? Number(mySeatId) - 1 : -1;
+  const isYou = view.isYourTurn && myIdx >= 0;
+
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastSeq = useRef(0);
   const announce = (text: string) => {
@@ -46,31 +82,100 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
     window.setTimeout(() => setToasts((cur) => cur.filter((t) => t.id !== id)), 3200);
   };
 
-  const { game, dice, hotTiles, floatChips, freshPiece, humanTurn, legal, canRespondAI, pendingFromHuman, actions } =
-    useCatanGame(playerName, seatCount, announce, { demoWin });
+  const [dice, setDice] = useState<DiceState>(() => ({
+    a: game.lastDice?.a ?? 3,
+    b: game.lastDice?.b ?? 4,
+    rolling: false,
+  }));
+  const [hotTiles, setHotTiles] = useState<ReadonlySet<number>>(new Set());
+  const [floatChips, setFloatChips] = useState<FloatChip[]>([]);
+  const [freshPiece, setFreshPiece] = useState<{ kind: "road" | "settlement" | "city"; key: number } | null>(null);
+  const chipSeq = useRef(0);
+  const seenEvents = useRef(0);
 
   const [buildTool, setBuildTool] = useState<"road" | "settlement" | "city" | null>(null);
   const [buildMenuOpen, setBuildMenuOpen] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState<ConfirmTarget | null>(null);
   const [tradeOpen, setTradeOpen] = useState(false);
-  const [victimChoice, setVictimChoice] = useState<number[] | null>(null);
   const [illegalHint, setIllegalHint] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [devReveal, setDevReveal] = useState(false);
   const [devPick, setDevPick] = useState<"yearOfPlenty" | "monopoly" | null>(null);
 
-  const me = game.players[0]!;
+  const me: PlayerState | null = myIdx >= 0 ? game.players[myIdx] ?? null : null;
   const current = game.players[game.turn]!;
+
+  // 事件流动画：按事件数差值处理新增事件（追加式，只增不减）。
+  useEffect(() => {
+    const events = view.events;
+    if (events.length < seenEvents.current) {
+      seenEvents.current = 0; // 恢复/重开：重置基准
+    }
+    const fresh = events.slice(seenEvents.current);
+    seenEvents.current = events.length;
+    const later = (ms: number, fn: () => void) => window.setTimeout(fn, ms);
+    for (const ev of fresh) {
+      if (ev.type === "dice") {
+        setDice({ a: ev.a, b: ev.b, rolling: false });
+      } else if (ev.type === "produce") {
+        const tileId = ev.tileId;
+        setHotTiles((cur) => new Set(cur).add(tileId));
+        later(2300, () => setHotTiles((cur) => { const next = new Set(cur); next.delete(tileId); return next; }));
+        const id = ++chipSeq.current;
+        setFloatChips((cur) => [...cur, { id, tileId, player: ev.player, resource: ev.resource, n: ev.n }]);
+        later(1700, () => setFloatChips((cur) => cur.filter((c) => c.id !== id)));
+      } else if (ev.type === "build") {
+        setFreshPiece({ kind: ev.kind, key: ev.key });
+        later(950, () => setFreshPiece(null));
+      } else if (ev.type === "steal") {
+        if (ev.from === myIdx) announce("强盗从你手中摸走了一张资源卡");
+        else if (ev.to === myIdx) announce("你从对手手中摸走了一张资源卡");
+      } else if (ev.type === "win") {
+        announce(ev.player === myIdx ? "你率先凑齐 10 分，赢得对局！" : `${game.players[ev.player]?.name ?? "有人"} 率先凑齐 10 分`);
+      }
+    }
+    // view 事件随轮询追加；以 events 数组引用变化为触发依据。
+  }, [view.events, myIdx, game.players]);
 
   // 回到你回合时的提示。
   const prevTurn = useRef(-1);
   useEffect(() => {
-    if (game.turn === 0 && game.turn !== prevTurn.current && game.phase !== "over" && !game.winner) {
+    if (isYou && game.turn !== prevTurn.current && game.phase !== "over") {
       announce("轮到你了 —— 掷骰子吧");
     }
     prevTurn.current = game.turn;
-  }, [game.turn, game.phase, game.winner]);
+  }, [isYou, game.turn, game.phase]);
+
+  // 掷骰的滚动动画：提交 roll 后滚动，直到骰子事件到达。
+  useEffect(() => {
+    if (game.phase !== "roll") return;
+    setDice((d) => (d.rolling ? { ...d, rolling: false, a: game.lastDice?.a ?? d.a, b: game.lastDice?.b ?? d.b } : d));
+  }, [game.phase, game.lastDice]);
+
+  const legal = useMemo(
+    () => ({
+      roads: new Set(myIdx >= 0 ? legalRoads(game, myIdx) : []),
+      settlements: new Set(myIdx >= 0 ? legalSettlements(game, myIdx) : []),
+      cities: new Set(myIdx >= 0 ? legalCities(game, myIdx) : []),
+    }),
+    [game, myIdx],
+  );
+
+  const pending = game.pendingTrade;
+  const canRespondTrade = pending != null && pending.to === myIdx && myIdx >= 0;
+  const pendingFromHuman = pending != null && pending.from === myIdx && myIdx >= 0;
+
+  // 掷 7 / 骑士之后：已挪强盗且轮到你 → 可抢的受害者（弹层选择）。
+  const robberVictimChoices =
+    game.phase === "robber" && game.robberMoved && isYou ? robberVictims(game, myIdx) : [];
+
+  const submit = async (command: CatanCommand, okHint?: string): Promise<boolean> => {
+    const sent = await onSubmit(command);
+    if (!sent) flashIllegal("这条行动现在不可行 —— 局面可能已变化");
+    else if (okHint) announce(okHint);
+    return sent;
+  };
 
   const clearTool = () => {
     setBuildTool(null);
@@ -82,9 +187,10 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
     window.setTimeout(() => setIllegalHint((cur) => (cur === text ? null : cur)), 1500);
   };
 
-  const buildMode: BuildMode = game.phase === "robber" && game.turn === 0 ? "robber" : buildTool;
+  const buildMode: BuildMode = game.phase === "robber" && isYou && !game.robberMoved ? "robber" : buildTool;
 
   const handleVertexClick = (vertexId: number) => {
+    if (!me) return;
     if (buildTool === "settlement") {
       setConfirmTarget({
         kind: "settlement",
@@ -105,45 +211,54 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
   };
 
   const handleEdgeClick = (edgeId: number) => {
+    if (!me) return;
     if (buildTool === "road") {
       setConfirmTarget({
         kind: "road",
         key: edgeId,
         title: "修建道路",
         cost: BUILD_COSTS.road,
-        affordable: canAfford(me.hand, BUILD_COSTS.road),
+        affordable: game.freeRoads > 0 || canAfford(me.hand, BUILD_COSTS.road),
       });
     }
   };
 
-  const handleConfirm = (accept: boolean) => {
+  const handleConfirm = async (accept: boolean) => {
     const target = confirmTarget;
     setConfirmTarget(null);
-    if (!target || !accept) return;
-    let ok = false;
-    if (target.kind === "road") ok = actions.buildRoad(target.key);
-    else if (target.kind === "settlement") ok = actions.buildSettlement(target.key);
-    else if (target.kind === "city") ok = actions.buildCity(target.key);
+    if (!target || !accept || myIdx < 0) return;
+    let command: CatanCommand | null = null;
+    if (target.kind === "road") command = { type: "build_road", player: myIdx, edgeId: target.key, free: game.freeRoads > 0 };
+    else if (target.kind === "settlement") command = { type: "build_settlement", player: myIdx, vertexId: target.key };
+    else if (target.kind === "city") command = { type: "build_city", player: myIdx, vertexId: target.key };
+    if (!command) return;
+    const ok = await submit(command);
     if (!ok) {
       flashIllegal("资源不足，无法建造");
       return;
     }
     if (target.kind !== "road") clearTool();
-    else if (!canAfford(me.hand, BUILD_COSTS.road)) clearTool();
+    else if (me && !canAfford(me.hand, BUILD_COSTS.road) && game.freeRoads <= 1) clearTool();
   };
 
   const handleTileClick = (tileId: number) => {
-    if (game.phase !== "robber" || game.turn !== 0) return;
-    const victims = actions.moveRobberTo(tileId);
-    if (victims && victims.length > 0) setVictimChoice(victims);
+    if (game.phase !== "robber" || !isYou || game.robberMoved) return;
+    void submit({ type: "move_robber", player: myIdx, tileId });
   };
 
   // 结束对局画面。
   if (game.winner != null) {
-    return <VictoryScreen game={game} onRestart={onRestart} onExit={onExit} />;
+    return (
+      <VictoryScreen
+        game={game}
+        myIdx={myIdx}
+        onRematch={onRematch}
+        onConfirmRematch={onConfirmRematch}
+        onDeclineRematch={onDeclineRematch}
+        onExit={onExit}
+      />
+    );
   }
-
-  const pending = game.pendingTrade;
 
   return (
     <div className="ct-game">
@@ -154,7 +269,7 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
             <span className="ct-plaque-dot" aria-hidden="true" />
             <span className="ct-plaque-round">第 {game.turnNo} 轮</span>
             <span className="ct-plaque-dot" aria-hidden="true" />
-            <span className="ct-plaque-whos">{humanTurn ? "你的回合" : `${current.name} 的回合`}</span>
+            <span className="ct-plaque-whos">{isYou ? "你的回合" : `${current.name} 的回合`}</span>
           </div>
           <div className="ct-tabletools">
             <button type="button" className="ct-toolbtn" onClick={() => setLogOpen((v) => !v)}>
@@ -183,7 +298,7 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
           <div className="ct-boardwrap">
             <BoardMap
               game={game}
-              myColor={me.color}
+              myColor={me?.color ?? PLAYER_COLORS[0]!}
               buildMode={buildMode}
               legalRoads={legal.roads}
               legalSettlements={legal.settlements}
@@ -191,31 +306,31 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
               hotTiles={hotTiles}
               floatChips={floatChips}
               freshPiece={freshPiece}
-              activeHarbors={ownedHarbors(game, 0)}
+              activeHarbors={ownedHarbors(game, myIdx)}
               confirmTarget={confirmTarget}
               onTileClick={handleTileClick}
               onEdgeClick={handleEdgeClick}
               onVertexClick={handleVertexClick}
-              onConfirm={handleConfirm}
+              onConfirm={(accept) => void handleConfirm(accept)}
               onVoidClick={() => {
                 if (confirmTarget) setConfirmTarget(null);
                 else if (buildTool) flashIllegal("这个位置现在不能建造");
               }}
             />
-            {game.phase === "robber" && game.turn === 0 ? (
+            {game.phase === "robber" && isYou && !game.robberMoved ? (
               <div className="ct-robberbar">
                 <span className="ct-robberbar-icon" aria-hidden="true">♞</span>
                 移动强盗 —— 点击任意地块安置他
               </div>
             ) : null}
             {illegalHint ? <div className="ct-illegal">{illegalHint}</div> : null}
-            {canRespondAI && pending ? (
+            {canRespondTrade && pending ? (
               <IncomingOffer
                 fromName={game.players[pending.from]!.name}
                 give={pending.give}
                 want={pending.want}
-                onAccept={() => actions.respondToAI(true)}
-                onReject={() => actions.respondToAI(false)}
+                onAccept={() => void submit({ type: "respond_trade", player: myIdx, accept: true }, "成交 —— 各取所需")}
+                onReject={() => void submit({ type: "respond_trade", player: myIdx, accept: false })}
               />
             ) : null}
           </div>
@@ -241,53 +356,62 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
           <TradePanel
             open={tradeOpen}
             game={game}
+            myIdx={myIdx}
             onClose={() => setTradeOpen(false)}
             pendingFromHuman={pendingFromHuman}
-            onCancel={() => actions.cancelProposal()}
-            onPropose={(to, give, want) => actions.proposeTo(to, give, want)}
-            onBank={(give, want) => actions.bankExchange(give, want)}
+            onCancel={() => void submit({ type: "cancel_trade", player: myIdx })}
+            onPropose={(to, give, want) => void submit({ type: "propose_trade", player: myIdx, to, give, want }, "提议已送出")}
+            onBank={(give, want) => void submit({ type: "bank_trade", player: myIdx, give, want })}
           />
         </div>
 
         <footer className="ct-bench">
           <section className="ct-me">
-            <PlayerBadge p={me} vp={playerVP(game, 0).total} isCurrent={game.turn === 0} isYou />
-            <span className="ct-me-stats">
-              <i title="道路">▰ {game.roads.filter((r) => r.owner === 0).length}</i>
-              <i title="村庄">⌂ {game.buildings.filter((b) => b.owner === 0 && !b.city).length}</i>
-              <i title="城市">◮ {game.buildings.filter((b) => b.owner === 0 && b.city).length}</i>
-            </span>
+            {me ? (
+              <>
+                <PlayerBadge p={me} vp={playerVP(game, myIdx).total} isCurrent={game.turn === myIdx} isYou />
+                <span className="ct-me-stats">
+                  <i title="道路">▰ {game.roads.filter((r) => r.owner === myIdx).length}</i>
+                  <i title="村庄">⌂ {game.buildings.filter((b) => b.owner === myIdx && !b.city).length}</i>
+                  <i title="城市">◮ {game.buildings.filter((b) => b.owner === myIdx && b.city).length}</i>
+                </span>
+              </>
+            ) : (
+              <PlayerBadge p={current} vp={publicVP(game, game.turn)} isCurrent={false} isYou={false} />
+            )}
           </section>
 
           <section className="ct-hand" aria-label="你的资源手牌">
-            {RESOURCES.filter((r) => me.hand[r] > 0).length === 0 ? (
-              <span className="ct-hand-empty">手牌空空 —— 等待产出，或做一笔交易吧</span>
-            ) : (
+            {me && RESOURCES.filter((r) => me.hand[r] > 0).length > 0 ? (
               RESOURCES.filter((r) => me.hand[r] > 0).map((r) => (
                 <div key={r} className="ct-hand-slot">
                   <ResourceCardFace res={r} count={me.hand[r]} />
                 </div>
               ))
+            ) : (
+              <span className="ct-hand-empty">手牌空空 —— 等待产出，或做一笔交易吧</span>
             )}
           </section>
 
           <section className="ct-devtray" aria-label="你的发展卡">
             <div className="ct-devtray-head">
               <span>发展卡</span>
-              <button type="button" className="ct-devpeek" onClick={() => setDevReveal((v) => !v)}>
-                {devReveal ? "扣回" : "查看"}
-              </button>
+              {me ? (
+                <button type="button" className="ct-devpeek" onClick={() => setDevReveal((v) => !v)}>
+                  {devReveal ? "扣回" : "查看"}
+                </button>
+              ) : null}
             </div>
             <div className="ct-devcards">
-              {me.dev.length === 0 ? (
+              {!me || view.devCards.length === 0 ? (
                 <div className="ct-devcards-empty">
                   <DevCardFace kind="knight" revealed={false} />
                   <span className="ct-devcount">0</span>
                 </div>
               ) : (
-                me.dev.map((kind, i) => {
+                view.devCards.map((kind, i) => {
                   // 牌多时自动收紧叠放（收进约 160px），避免牌堆溢出盖住相邻面板。
-                  const overlap = Math.max(0, (74 * me.dev.length - 160) / Math.max(1, me.dev.length - 1));
+                  const overlap = Math.max(0, (74 * view.devCards.length - 160) / Math.max(1, view.devCards.length - 1));
                   return (
                   <button
                     key={`${kind}-${i}`}
@@ -308,7 +432,7 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
                       }
                       if (kind === "vp") return;
                       if (kind === "knight" || kind === "roadBuilding") {
-                        actions.playDevCard(kind);
+                        void submit({ type: "play_dev", player: myIdx, card: kind });
                         setDevReveal(false);
                       } else {
                         setDevPick(kind);
@@ -320,30 +444,49 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
                   );
                 })
               )}
-              {me.playedDev.filter((k) => k === "knight").length > 0 ? (
+              {me && me.playedDev.filter((k) => k === "knight").length > 0 ? (
                 <span className="ct-devknights">骑士 ×{me.playedDev.filter((k) => k === "knight").length}</span>
               ) : null}
             </div>
           </section>
 
           <section className="ct-actions" aria-label="行动面板">
-            {humanTurn && game.phase === "robber" ? (
-              <div className="ct-actionrow ct-waitrow">
-                <span className="ct-waiting">
-                  <i className="ct-waitdot" aria-hidden="true" />
-                  强盗出没 —— 在地图上为他选择新驻地
-                </span>
-              </div>
-            ) : humanTurn && game.phase === "roll" ? (
+            {isYou && game.phase === "robber" ? (
+              game.robberMoved ? (
+                <div className="ct-actionrow ct-waitrow">
+                  <span className="ct-waiting">
+                    <i className="ct-waitdot" aria-hidden="true" />
+                    选择一位受害者摸牌，或放过这一程
+                  </span>
+                  <button type="button" className="ct-actbtn" onClick={() => void submit({ type: "end_robber_move", player: myIdx })}>
+                    放过
+                  </button>
+                </div>
+              ) : (
+                <div className="ct-actionrow ct-waitrow">
+                  <span className="ct-waiting">
+                    <i className="ct-waitdot" aria-hidden="true" />
+                    强盗出没 —— 在地图上为他选择新驻地
+                  </span>
+                </div>
+              )
+            ) : isYou && game.phase === "roll" ? (
                 <div className="ct-actionrow">
-                  <button type="button" className="ct-actbtn ct-actbtn--primary" onClick={() => actions.roll()}>
+                  <button
+                    type="button"
+                    className="ct-actbtn ct-actbtn--primary"
+                    onClick={() => {
+                      setDice((d) => ({ ...d, rolling: true }));
+                      void submit({ type: "roll", player: myIdx });
+                    }}
+                  >
                     掷骰子
                   </button>
                   <button type="button" className="ct-actbtn" onClick={() => setTradeOpen(true)}>
                     交易
                   </button>
                 </div>
-              ) : humanTurn ? (
+              ) : isYou && myIdx >= 0 ? (
                 <div className="ct-actionrow">
                   <div className="ct-buildmenu">
                     <button
@@ -365,8 +508,8 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
                         >
                           <b>道路</b>
                           <ResourceCostList cost={BUILD_COSTS.road} />
-                          <span className={`ct-afford${canAfford(me.hand, BUILD_COSTS.road) ? "" : " is-poor"}`}>
-                            {canAfford(me.hand, BUILD_COSTS.road) ? "可建" : "资源不足"}
+                          <span className={`ct-afford${game.freeRoads > 0 || canAfford(me!.hand, BUILD_COSTS.road) ? "" : " is-poor"}`}>
+                            {game.freeRoads > 0 ? "免费" : canAfford(me!.hand, BUILD_COSTS.road) ? "可建" : "资源不足"}
                           </span>
                         </button>
                         <button
@@ -379,8 +522,8 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
                         >
                           <b>村庄</b>
                           <ResourceCostList cost={BUILD_COSTS.settlement} />
-                          <span className={`ct-afford${canAfford(me.hand, BUILD_COSTS.settlement) ? "" : " is-poor"}`}>
-                            {canAfford(me.hand, BUILD_COSTS.settlement) ? "可建" : "资源不足"}
+                          <span className={`ct-afford${canAfford(me!.hand, BUILD_COSTS.settlement) ? "" : " is-poor"}`}>
+                            {canAfford(me!.hand, BUILD_COSTS.settlement) ? "可建" : "资源不足"}
                           </span>
                         </button>
                         <button
@@ -393,8 +536,8 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
                         >
                           <b>城市</b>
                           <ResourceCostList cost={BUILD_COSTS.city} />
-                          <span className={`ct-afford${canAfford(me.hand, BUILD_COSTS.city) ? "" : " is-poor"}`}>
-                            {canAfford(me.hand, BUILD_COSTS.city) ? "可升级" : "资源不足"}
+                          <span className={`ct-afford${canAfford(me!.hand, BUILD_COSTS.city) ? "" : " is-poor"}`}>
+                            {canAfford(me!.hand, BUILD_COSTS.city) ? "可升级" : "资源不足"}
                           </span>
                         </button>
                       </div>
@@ -406,9 +549,9 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
                   <button
                     type="button"
                     className="ct-actbtn"
-                    disabled={!canAfford(me.hand, BUILD_COSTS.dev) || game.devDeck.length === 0}
-                    title={game.devDeck.length === 0 ? "发展卡已被抽完" : "消耗 羊毛1 小麦1 矿石1"}
-                    onClick={() => actions.buyDev()}
+                    disabled={!canAfford(me!.hand, BUILD_COSTS.dev) || view.devDeckCount === 0}
+                    title={view.devDeckCount === 0 ? "发展卡已被抽完" : "消耗 羊毛1 小麦1 矿石1"}
+                    onClick={() => void submit({ type: "buy_dev", player: myIdx })}
                   >
                     买发展卡
                   </button>
@@ -418,7 +561,7 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
                     className="ct-actbtn ct-actbtn--end"
                     onClick={() => {
                       clearTool();
-                      actions.endTurn();
+                      void submit({ type: "end_turn", player: myIdx });
                     }}
                   >
                     结束回合
@@ -428,7 +571,7 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
                 <div className="ct-actionrow ct-waitrow">
                   <span className="ct-waiting">
                     <i className="ct-waitdot" aria-hidden="true" />
-                    {`${current.name} 正在行动…`}
+                    {pausedSeatId ? "有玩家离席，对局暂停…" : autoDecision ? `${current.name} 超时代打` : `${current.name} 正在行动…`}
                   </span>
                 </div>
               )}
@@ -442,22 +585,19 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
         </footer>
       </div>
 
-      {victimChoice ? (
+      {robberVictimChoices.length > 0 ? (
         <div className="ct-victims">
           <div className="ct-victims-card">
             <h3>从谁手中摸一张资源卡？</h3>
             <div className="ct-victims-row">
-              {victimChoice.map((v) => {
+              {robberVictimChoices.map((v) => {
                 const vp = game.players[v]!;
                 return (
                   <button
                     key={v}
                     type="button"
                     className="ct-victimbtn"
-                    onClick={() => {
-                      setVictimChoice(null);
-                      actions.stealFrom(v);
-                    }}
+                    onClick={() => void submit({ type: "steal", player: myIdx, victim: v })}
                   >
                     <i style={{ background: vp.color } as CSSProperties} aria-hidden="true" />
                     {vp.name}
@@ -474,7 +614,7 @@ export function CatanTable({ playerName, seatCount, roomCode, onExit, onRestart,
           kind={devPick}
           onClose={() => setDevPick(null)}
           onPick={(picks, resource) => {
-            actions.playDevCard(devPick, { picks, resource });
+            void submit({ type: "play_dev", player: myIdx, card: devPick, picks, resource });
             setDevPick(null);
             setDevReveal(false);
           }}
@@ -519,12 +659,13 @@ function PlayerBadge({ p, vp, isCurrent, isYou }: { p: PlayerState; vp: number; 
 }
 
 function seatStats(game: CatanGame, id: number) {
+  const p = game.players[id]!;
   return {
-    hand: RESOURCES.reduce((s, r) => s + game.players[id]!.hand[r], 0),
+    hand: p.handCount ?? RESOURCES.reduce((s, r) => s + p.hand[r], 0),
     roads: game.roads.filter((x) => x.owner === id).length,
     settlements: game.buildings.filter((x) => x.owner === id && !x.city).length,
     cities: game.buildings.filter((x) => x.owner === id && x.city).length,
-    knights: game.players[id]!.knightsPlayed,
+    knights: p.knightsPlayed,
   };
 }
 
@@ -541,15 +682,16 @@ function PlayerPanel({
   isCurrent: boolean;
 }): ReactElement {
   const p = game.players[id]!;
-  const vp = playerVP(game, id);
+  // 对手不公开发展卡分：只显示公开胜利点。
+  const vp = publicVP(game, id);
   const stats = seatStats(game, id);
   return (
     <aside className={`ct-seat ct-seat--${seat}${isCurrent ? " is-current" : ""}`}>
       <div className="ct-seat-name">
         <i className="ct-badge-chip" style={{ background: p.color } as CSSProperties} aria-hidden="true" />
         <b>{p.name}</b>
-        <span className="ct-seat-vp" title={`${vp.total} 胜利点`}>
-          {vp.total}
+        <span className="ct-seat-vp" title={`${vp} 胜利点（公开）`}>
+          {vp}
           <small>分</small>
         </span>
       </div>
@@ -658,6 +800,7 @@ function ResourcePickModal({
 function TradePanel({
   open,
   game,
+  myIdx,
   onClose,
   pendingFromHuman,
   onCancel,
@@ -666,34 +809,34 @@ function TradePanel({
 }: {
   open: boolean;
   game: CatanGame;
+  myIdx: number;
   onClose: () => void;
   pendingFromHuman: boolean;
   onCancel: () => void;
   onPropose: (to: number, give: Partial<ResourceCount>, want: Partial<ResourceCount>) => void;
   onBank: (give: ResourceId, want: ResourceId) => void;
 }): ReactElement | null {
-  const me = game.players[0]!;
+  const me = game.players[myIdx]!;
   const [tab, setTab] = useState<"player" | "bank">("player");
   const [give, setGive] = useState<ResourceCount>({ wood: 0, brick: 0, wool: 0, wheat: 0, ore: 0 });
   const [want, setWant] = useState<ResourceCount>({ wood: 0, brick: 0, wool: 0, wheat: 0, ore: 0 });
-  const [target, setTarget] = useState<number>(1);
+  const [target, setTarget] = useState<number>(myIdx === 0 ? 1 : 0);
   const [bankGive, setBankGive] = useState<ResourceId>("wood");
   const [bankWant, setBankWant] = useState<ResourceId>("ore");
 
   if (!open) return null;
-  const targets = game.players.filter((p) => p.id !== 0);
+  const targets = game.players.filter((p) => p.id !== myIdx);
   const targetOk = targets.some((p) => p.id === target) ? target : targets[0]!.id;
   const giveTotal = RESOURCES.reduce((s, r) => s + give[r], 0);
   const wantTotal = RESOURCES.reduce((s, r) => s + want[r], 0);
   const offerOk = !pendingFromHuman && giveTotal > 0 && wantTotal > 0 && RESOURCES.every((r) => give[r] <= me.hand[r]);
 
-  const rate = tradeRate(game, 0, bankGive);
+  const rate = tradeRate(game, myIdx, bankGive);
 
   const step = (which: "give" | "want", r: ResourceId, d: number, cap: number) => {
     const set = which === "give" ? setGive : setWant;
     set((cur) => ({ ...cur, [r]: Math.max(0, Math.min(cap, cur[r] + d)) }));
   };
-
   return (
     <aside className="ct-trade is-open" aria-label="交易面板">
       <header className="ct-trade-head">
@@ -846,16 +989,23 @@ function TradeRows({
 
 function VictoryScreen({
   game,
-  onRestart,
+  myIdx,
+  onRematch,
+  onConfirmRematch,
+  onDeclineRematch,
   onExit,
 }: {
   game: CatanGame;
-  onRestart: () => void;
+  myIdx: number;
+  onRematch: () => void;
+  onConfirmRematch: () => void;
+  onDeclineRematch: () => void;
   onExit: () => void;
 }): ReactElement {
   const winner = game.players[game.winner!]!;
-  const vp = playerVP(game, game.winner!);
-  const isYou = game.winner === 0;
+  const scores = game.finalScores ?? [];
+  const myScore = scores.find((s) => s.player === myIdx);
+  const isYou = game.winner === myIdx;
   return (
     <div className={`ct-victory${isYou ? " is-you" : " is-other"}`}>
       <div className="ct-victory-card">
@@ -864,46 +1014,66 @@ function VictoryScreen({
         </div>
         <h1 className="ct-victory-title">{isYou ? "胜 利" : "对局结束"}</h1>
         <p className="ct-victory-name">
-          {winner.name} · <span>{vp.total} VP</span>
+          {winner.name} · <span>{myScore?.total ?? scores.find((s) => s.player === game.winner)?.total ?? 10} VP</span>
         </p>
         <div className="ct-victory-rule" aria-hidden="true" />
-        <dl className="ct-victory-break">
-          <div>
-            <dt>村庄与城市</dt>
-            <dd>{vp.buildings} 分</dd>
-          </div>
-          <div>
-            <dt>胜利点卡</dt>
-            <dd>{vp.vpCards} 分</dd>
-          </div>
-          <div>
-            <dt>最长道路</dt>
-            <dd>{vp.longestRoad} 分</dd>
-          </div>
-          <div>
-            <dt>最大骑士军团</dt>
-            <dd>{vp.largestArmy} 分</dd>
-          </div>
-        </dl>
+        {myScore ? (
+          <dl className="ct-victory-break">
+            <div>
+              <dt>村庄与城市</dt>
+              <dd>{myScore.buildings} 分</dd>
+            </div>
+            <div>
+              <dt>胜利点卡</dt>
+              <dd>{myScore.vpCards} 分</dd>
+            </div>
+            <div>
+              <dt>最长道路</dt>
+              <dd>{myScore.longestRoad} 分</dd>
+            </div>
+            <div>
+              <dt>最大骑士军团</dt>
+              <dd>{myScore.largestArmy} 分</dd>
+            </div>
+          </dl>
+        ) : null}
         <table className="ct-victory-board">
           <tbody>
-            {game.players.map((p) => (
-              <tr key={p.id} className={p.id === game.winner ? " is-winner" : ""}>
-                <td>
-                  <i style={{ background: p.color } as CSSProperties} aria-hidden="true" />
-                  {p.name}
-                </td>
-                <td>{playerVP(game, p.id).total} VP</td>
-              </tr>
-            ))}
+            {scores
+              .slice()
+              .sort((a, b) => b.total - a.total)
+              .map((s) => {
+                const p = game.players[s.player];
+                if (!p) return null;
+                return (
+                  <tr key={s.player} className={s.player === game.winner ? " is-winner" : ""}>
+                    <td>
+                      <i style={{ background: p.color } as CSSProperties} aria-hidden="true" />
+                      {p.name}
+                    </td>
+                    <td>{s.total} VP</td>
+                  </tr>
+                );
+              })}
           </tbody>
         </table>
         <div className="ct-victory-btns">
-          <button type="button" className="ct-actbtn ct-actbtn--primary" onClick={onRestart}>
-            再来一局
-          </button>
+          {myIdx === 0 ? (
+            <button type="button" className="ct-actbtn ct-actbtn--primary" onClick={onRematch}>
+              再来一局
+            </button>
+          ) : myIdx >= 0 ? (
+            <>
+              <button type="button" className="ct-actbtn ct-actbtn--primary" onClick={onConfirmRematch}>
+                确认续局
+              </button>
+              <button type="button" className="ct-actbtn" onClick={onDeclineRematch}>
+                离开
+              </button>
+            </>
+          ) : null}
           <button type="button" className="ct-actbtn" onClick={onExit}>
-            回到大厅
+            回到首页
           </button>
         </div>
       </div>
@@ -939,5 +1109,3 @@ export function RulesModal({ onClose }: { onClose: () => void }): ReactElement {
     </div>
   );
 }
-
-export type { FloatChip };

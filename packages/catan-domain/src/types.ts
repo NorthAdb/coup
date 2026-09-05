@@ -1,9 +1,8 @@
 /**
- * 卡坦岛 Mock 引擎 —— 类型定义。
+ * 卡坦岛规则引擎 —— 类型定义。
  *
- * 第一阶段为纯前端 Mock：引擎是纯函数（无 IO、无 React、无 DOM），
- * 只负责「看起来像一局真实的卡坦岛」所需的最小规则集——
- * 棋盘生成、骰子生产、建造合法性与花费、交易、强盗、发展卡、胜利点。
+ * 纯函数、无 IO、无 React、无 DOM。覆盖棋盘生成、骰子生产、建造合法性与花费、
+ * 交易、强盗、发展卡、胜利点，以及联机所需的命令协议与座位投影（protocol.ts）。
  * 完整规则（起始放置流程、>7 弃牌、出牌限制等）刻意不做，见 .scratch/catan/spec.md。
  */
 
@@ -102,6 +101,7 @@ export interface PlayerState {
   name: string;
   /** 玩家主题色（低饱和，同时用于建筑/道路/徽章）。 */
   color: string;
+  /** 联机版里 false 表示服务器机器人座位。 */
   isHuman: boolean;
   hand: ResourceCount;
   /** 未打出的发展卡。 */
@@ -109,6 +109,9 @@ export interface PlayerState {
   /** 已打出（公开）的发展卡。 */
   playedDev: DevCardKind[];
   knightsPlayed: number;
+  /** 仅座位投影填充：他人手牌/发展卡隐藏后仍可读数量。权威态不依赖。 */
+  handCount?: number;
+  devCount?: number;
 }
 
 export interface RoadPiece {
@@ -138,7 +141,20 @@ export interface PendingTrade {
 
 export type GamePhase = "roll" | "main" | "robber" | "over";
 
+export interface PlayerScore {
+  player: number;
+  total: number;
+  buildings: number;
+  vpCards: number;
+  longestRoad: number;
+  largestArmy: number;
+}
+
 export interface CatanGame {
+  matchId: string;
+  stateVersion: number;
+  /** 平台栈语义的对局状态；finished 与 phase === "over" 同步。 */
+  status: "in_progress" | "finished";
   tiles: CatanTile[];
   vertices: Vertex[];
   edges: Edge[];
@@ -151,12 +167,18 @@ export interface CatanGame {
   turn: number;
   turnNo: number;
   phase: GamePhase;
+  /** 本阶段强盗是否已被移动过（每阶段限一次；防原始命令重复挪动）。 */
+  robberMoved: boolean;
+  /** 最近一次掷骰结果（联机视图展示用）。 */
+  lastDice: { a: number; b: number } | null;
   /** 「道路建设」剩余免费道路数。 */
   freeRoads: number;
   devDeck: DevCardKind[];
   longestRoadOwner: number | null;
   largestArmyOwner: number | null;
   pendingTrade: PendingTrade | null;
+  /** 终局时冻结的全员明分（含隐藏的发展卡分），结算页用。 */
+  finalScores: PlayerScore[] | null;
   log: LogEntry[];
   seq: number;
   winner: number | null;
@@ -185,6 +207,9 @@ export const BUILD_COSTS = {
   dev: { wool: 1, wheat: 1, ore: 1 } as Partial<ResourceCount>,
 };
 
+/** 玩家主题色（低饱和）：联机与本地共用，建筑/道路/徽章同色系。 */
+export const PLAYER_COLORS: readonly string[] = ["#b3573f", "#3f6d8e", "#5d7048", "#c9973f"];
+
 /** 产出飘卡动画的载荷（UI 用；从某地块向某玩家飘 n 张资源）。 */
 export interface FloatChip {
   id: number;
@@ -192,4 +217,59 @@ export interface FloatChip {
   player: number;
   resource: ResourceId;
   n: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* 联机命令协议与座位投影                                              */
+/* ------------------------------------------------------------------ */
+
+export const CATAN_PROTOCOL_VERSION = 1;
+
+/**
+ * 原子命令（ADR-0009 经验：一次提交整动作全部参数）。
+ * player 为玩家下标；大多数命令要求 player === g.turn（respond_trade 例外，
+ * 归属 pendingTrade.to；cancel_trade 归属 pendingTrade.from）。
+ */
+export type CatanCommand =
+  | { type: "roll"; player: number }
+  | { type: "build_road"; player: number; edgeId: number; free?: boolean }
+  | { type: "build_settlement"; player: number; vertexId: number }
+  | { type: "build_city"; player: number; vertexId: number }
+  | { type: "buy_dev"; player: number }
+  | { type: "play_dev"; player: number; card: DevCardKind; picks?: [ResourceId, ResourceId]; resource?: ResourceId }
+  | { type: "move_robber"; player: number; tileId: number }
+  | { type: "steal"; player: number; victim: number }
+  | { type: "end_robber_move"; player: number }
+  | { type: "propose_trade"; player: number; to: number; give: Partial<ResourceCount>; want: Partial<ResourceCount> }
+  | { type: "respond_trade"; player: number; accept: boolean }
+  | { type: "cancel_trade"; player: number }
+  | { type: "bank_trade"; player: number; give: ResourceId; want: ResourceId }
+  | { type: "end_turn"; player: number };
+
+export type CatanApplyResult =
+  | { ok: true; state: CatanGame; events: GameEvent[] }
+  | { ok: false; code: string };
+
+export type CatanDecisionPayload = {
+  protocolVersion: number;
+  requestId: string;
+  stateVersion: number;
+  command: CatanCommand;
+};
+
+/**
+ * 座位投影：他人手牌与发展卡身份隐藏（保留数量），牌库顺序剥离。
+ * 投影态仍可跑 legalRoads/legalSettlements 等公开查询（robberVictims 依赖
+ * handCount 兜底）。player 为 null 时按观战投影（hand 为空计数）。
+ */
+export interface CatanProjection {
+  state: CatanGame;
+  /** 本人手牌（观战为全零）。 */
+  hand: ResourceCount;
+  /** 本人未打出的发展卡（观战为空）。 */
+  devCards: DevCardKind[];
+  /** 牌库剩余张数（顺序不外泄）。 */
+  devDeckCount: number;
+  /** 他人公开信息（handCount/devCount 已填进投影后的 players）。 */
+  others: Record<number, { handCount: number; devCount: number }>;
 }

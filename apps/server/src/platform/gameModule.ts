@@ -71,7 +71,7 @@ export type GameSeatFact = {
 /** 开局时平台栈交给模块的座位清单（来自大厅有效座位）。 */
 export type GameSeatInput = {
   seatId: string;
-  kind: "local_human" | "remote_human";
+  kind: "local_human" | "remote_human" | "bot";
   displayName: string;
 };
 
@@ -121,6 +121,15 @@ export type GameModule<M extends StackMatch<any> = StackMatch<any>> = {
   activeDecidingSeatId(state: M["state"]): string | null;
   /** 超时代打计划：payload 会原样走 submitDecision，与人类决策同通路。 */
   planAutoDecision(
+    state: M["state"],
+    seatId: string,
+  ): { payload: unknown; kind: string } | null;
+  /**
+   * 机器人座位决策计划（AI 队友）。提供该钩子的游戏，大厅可把空位配置成
+   * bot 座位；平台栈在欠决策座位为 bot 时延迟调用本钩子并经 submitDecision
+   * 提交（与人类决策同通路）。未提供时 bot 座位没有 AI 行为。
+   */
+  planBotDecision?(
     state: M["state"],
     seatId: string,
   ): { payload: unknown; kind: string } | null;

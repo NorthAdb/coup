@@ -1,38 +1,42 @@
 import { randomUUID } from "node:crypto";
-import type { SplendorState } from "@coup/splendor-domain";
-import type { GameMatchStore, GameModule, GameSeatFact } from "../platform/gameModule.js";
+import type { CatanGame, GameEvent } from "@coup/catan-domain";
+import type {
+  GameMatchStore,
+  GameModule,
+  GameSeatFact,
+} from "../platform/gameModule.js";
 import { publicSeats, type RoomRecord, type RoomRegistry } from "../roomRegistry.js";
 import { effectiveLobbySeats } from "../lobbyStart.js";
 import {
   activeDecidingPlayerOf,
-  newSplendorMatchId,
-  planSplendorAuto,
-  planSplendorBot,
+  newCatanMatchId,
+  planCatanAuto,
+  planCatanBot,
   playerToSeatId,
-  seatIdToPlayer,
-  startSplendorMatch,
-  submitSplendorDecision,
-  toSplendorSeatView,
-  toSplendorSpectatorView,
-  type ActiveSplendorMatch,
-  type SplendorDecisionPayloadLike,
-} from "./splendorRuntime.js";
-import type { SplendorStore } from "./splendorStore.js";
+  startCatanMatch,
+  submitCatanDecision,
+  toCatanSeatView,
+  toCatanSpectatorView,
+  type ActiveCatanMatch,
+  type CatanSubmitPayload,
+} from "./catanRuntime.js";
+import type { CatanStore } from "./catanStore.js";
 
 /**
- * Splendor 游戏模块（ADR-0010）：把 @coup/splendor-domain + splendorRuntime +
- * splendorStore 适配到平台栈的 GameModule 接口。
+ * Catan 游戏模块（ADR-0010）：把 @coup/catan-domain + catanRuntime + catanStore
+ * 适配到平台栈的 GameModule 接口。规则之外的一切（房间、心跳、计时、续局、
+ * 恢复、AI 座位驱动）都由 platform/gameRoomStack 提供。
  */
 
-export function splendorGameStore(store: SplendorStore): GameMatchStore<SplendorState> {
+export function catanGameStore(store: CatanStore): GameMatchStore<CatanGame> {
   return {
     createRun: (input) =>
       store.createRun({
         ...input,
-        events: input.events as Parameters<SplendorStore["createRun"]>[0]["events"],
+        events: input.events as Parameters<CatanStore["createRun"]>[0]["events"],
       }),
     commitCommand: (matchId, state, newEvents) =>
-      store.commitCommand(matchId, state, newEvents as Parameters<SplendorStore["commitCommand"]>[2]),
+      store.commitCommand(matchId, state, newEvents as Parameters<CatanStore["commitCommand"]>[2]),
     getRun: (matchId) => store.getRun(matchId),
     technicalAbort: (matchId, reason) => {
       store.technicalAbort(matchId, reason);
@@ -43,9 +47,9 @@ export function splendorGameStore(store: SplendorStore): GameMatchStore<Splendor
   };
 }
 
-export const splendorModule: GameModule<ActiveSplendorMatch> = {
-  id: "splendor",
-  apiPrefix: "splendor",
+export const catanModule: GameModule<ActiveCatanMatch> = {
+  id: "catan",
+  apiPrefix: "catan",
   seatCount: 4,
   maxRooms: 10,
   createRequiresLanHost: false,
@@ -53,15 +57,13 @@ export const splendorModule: GameModule<ActiveSplendorMatch> = {
   throttleRoomLookup: true,
   recoveryListKey: "items",
 
-  newMatchId: newSplendorMatchId,
+  newMatchId: newCatanMatchId,
 
   startMatch({ matchId, roomCode, seats, store }) {
-    return startSplendorMatch({
+    return startCatanMatch({
       matchId,
-      seed: `splendor-${randomUUID()}`,
-      playerCount: playerCountFor(seats.length),
-      displayNames: Object.fromEntries(seats.map((seat) => [seat.seatId, seat.displayName])),
-      botPlayers: botPlayersFor(seats),
+      seed: `catan-${randomUUID()}`,
+      seats,
       persistence: {
         onCreated(match, code) {
           if (!code) throw new Error("room_code_required");
@@ -74,13 +76,8 @@ export const splendorModule: GameModule<ActiveSplendorMatch> = {
             events: match.events,
           });
         },
-        onCommitted(match, newEvents) {
-          if (newEvents.length === 0) return;
-          store.commitCommand(
-            match.state.matchId,
-            match.state,
-            newEvents as Parameters<SplendorStore["commitCommand"]>[2],
-          );
+        onCommitted(match) {
+          store.commitCommand(match.state.matchId, match.state, []);
         },
       },
       roomCode,
@@ -90,22 +87,17 @@ export const splendorModule: GameModule<ActiveSplendorMatch> = {
   matchFromRun(run) {
     return {
       state: run.state,
-      events: run.events as ActiveSplendorMatch["events"],
+      events: run.events as ActiveCatanMatch["events"],
       humanSeatId: run.humanSeatId,
       displayNames: run.displayNames,
     };
   },
 
   seatFacts(state): GameSeatFact[] {
-    // 1 号=房主（本地）；botPlayers 中的座位=服务器机器人；其余=远程客人。
-    return Array.from({ length: state.playerCount }, (_, player) => ({
-      seatId: playerToSeatId(player),
-      controller:
-        player === 0
-          ? "local_human"
-          : (state.botPlayers ?? []).includes(player)
-            ? "other"
-            : "remote_human",
+    // 1 号=房主（本地）；机器人座位（isHuman=false）=other；其余=远程客人。
+    return state.players.map((player) => ({
+      seatId: playerToSeatId(player.id),
+      controller: player.id === 0 ? "local_human" : player.isHuman ? "remote_human" : "other",
       eliminated: false,
     }));
   },
@@ -116,11 +108,11 @@ export const splendorModule: GameModule<ActiveSplendorMatch> = {
   },
 
   planAutoDecision(state, seatId) {
-    return planSplendorAuto(state, seatId);
+    return planCatanAuto(state, seatId);
   },
 
   planBotDecision(state, seatId) {
-    return planSplendorBot(state, seatId) ?? planSplendorAuto(state, seatId);
+    return planCatanBot(state, seatId);
   },
 
   submitDecision(match, payload, options) {
@@ -129,11 +121,12 @@ export const splendorModule: GameModule<ActiveSplendorMatch> = {
     }
     // 校验失败返回 ok:false；持久化故障抛错，由平台栈折算成
     // technical_abort + 502。store 逐命令提交（见 brass 模块的回归教训）。
-    return submitSplendorDecision(match, payload as SplendorDecisionPayloadLike, {
+    return submitCatanDecision(match, payload as CatanSubmitPayload, {
       persistence: {
-        onCommitted(next, newEvents) {
-          if (newEvents.length === 0) return;
-          options.store.commitCommand(next.state.matchId, next.state, newEvents);
+        // 注意：不能以「无新事件」跳过落库——婉拒交易/结束挪强盗等命令
+        // 状态有变但不产生事件（stateVersion 已递增），漏提交会让重启回滚。
+        onCommitted(next) {
+          options.store.commitCommand(next.state.matchId, next.state, []);
         },
         onCreated() {},
       },
@@ -142,15 +135,15 @@ export const splendorModule: GameModule<ActiveSplendorMatch> = {
   },
 
   seatView(match, seatId, requestId) {
-    return { view: toSplendorSeatView(match, seatId, requestId) };
+    return { view: toCatanSeatView(match, seatId, requestId) };
   },
 
   spectatorView(match) {
-    return { view: toSplendorSpectatorView(match) };
+    return { view: toCatanSpectatorView(match) };
   },
 
   beforeStart(room: RoomRecord, registry: RoomRegistry) {
-    // 大厅开局：剩余空位自动关闭（splendor 2-4 人即可开局）。
+    // 大厅开局：剩余空位自动关闭（catan 2-4 人即可开局）。
     if (room.phase === "lobby" && effectiveLobbySeats(room).length >= 2) {
       for (const seat of room.seats) {
         if (seat.kind === "open") {
@@ -171,25 +164,13 @@ export const splendorModule: GameModule<ActiveSplendorMatch> = {
     return {
       code: room.code,
       phase: room.phase,
-      game: "splendor" as const,
+      game: "catan" as const,
       seats: publicSeats(room),
       turnTimeLimitSec: room.turnTimeLimitSec,
-      joinUrl: lanHost ? `http://${lanHost}:${host.port}/splendor/join?code=${room.code}` : null,
+      joinUrl: lanHost ? `http://${lanHost}:${host.port}/catan/join?code=${room.code}` : null,
       lanOrigin: lanHost ? `http://${lanHost}:${host.port}` : null,
       bindMode: host.bindMode,
       error: lanHost ? null : ("no_lan_ipv4" as const),
     };
   },
 };
-
-function playerCountFor(effectiveSeatCount: number): 2 | 3 | 4 {
-  return Math.min(4, Math.max(2, effectiveSeatCount)) as 2 | 3 | 4;
-}
-
-/** 开局座位里的 bot 座位 → player 下标（座位号 = 序号 + 1）。 */
-function botPlayersFor(seats: Array<{ seatId: string; kind: string }>): number[] {
-  return seats
-    .filter((seat) => seat.kind === "bot")
-    .map((seat) => seatIdToPlayer(seat.seatId))
-    .filter((player): player is number => player !== null);
-}

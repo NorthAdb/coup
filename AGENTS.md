@@ -20,6 +20,7 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 - 服务器重启后浏览器必须硬导航（先 about:blank 再进目标 URL），否则拿到旧页面/旧 bundle。
 - **跑 `npm test` 前必须停掉本地服务器**（startServer 测试要占 8787 端口）。测试套件全部用临时 DB，不会污染 `~/.coup/coup.sqlite`。
 - 浏览器手动验证时 60 秒回合计时器会不断"自动代打"吃掉回合：开局前把限时设为不限时；或在页面上下文里用 fetch 直接 POST 决策——先 `GET /api/session` 拿 CSRF，`POST .../matches/current/decision` 带 `x-csrf-token` 头，遇 `version_mismatch` 就重取版本重试。
+- 用 curl 打 API 探针的坑：无负载的请求不要带 `content-type: application/json`（Fastify 对空 JSON body 回 400）；`curl -d` 隐式 POST，打 PATCH 路由必须显式 `-X PATCH`；中文 payload 在 Git Bash 里可能被按 GBK 发出导致 400，探针用 ASCII 显示名。
 
 ### 机器人对局测试
 
@@ -39,7 +40,7 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 - 每轮改动：本地浏览器实测 → `npm test` + `npm run typecheck` 全绿 → 中文提交信息（写清动机）→ 部署 → 线上复验 → 中文汇报。
 - 测试规模基线：全仓 283 项（domain 23 / brass-domain 21 / splendor-domain 18 / server 115 / web-desk 32 / web 8 / server-local 62 / web-local 4），总数变化时更新 README。
 
-### 公网安全与房间回收语义（2026-09 上线审计沉淀）
+### 公网安全与房间回收语义（2026-09 上线审计沉淀，决策记录见 `docs/adr/0012`）
 
 - `GET /api(/<game>)/room-recovery` 需要会话（防房号枚举绕过限速门禁）；前端 `roomApi.fetchRecovery` 已先 `ensureSession` 再带 CSRF。
 - `POST …/room-recovery/abandon` 拒绝 `restored`（活）房间（409 `restored_room_active`）——活房间交给空房回收或对局内处置，不能凭会话+房号杀局；failed/migration 条目仍可 abandon。
@@ -60,7 +61,7 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 ### 已知事实与坑
 
 - 入口路由：`/` 门户、`/brass` 伯明翰、`/splendor` 璀璨宝石、`/coup` 与 `/join` 政变（`apps/web/src/main.tsx` 的 `route()`）。
-- 本地 Brass/ splendor 房间上限各 10 个；满了用 node:sqlite 清库：`DELETE FROM brass_runs; DELETE FROM brass_rooms;`（splendor 对应 `splendor_runs`/`splendor_rooms`；注意：清库会毁掉进行中的本地对局）。
+- 本地 Brass/ splendor 房间上限各 10 个；满了用 node:sqlite 清库：`DELETE FROM brass_runs; DELETE FROM brass_rooms;`（splendor 对应 `splendor_runs`/`splendor_rooms`；注意：清库会毁掉进行中的本地对局）。无人问津的房间自 2026-09 起会在约 30 分钟后自动回收（ADR-0012），等一等也能腾出名额。
 - Brass 持久化为逐命令提交（`brassStore.commitCommand`）；**旧 brassRoutes 曾漏传 persistence 导致决策不落库、重启回滚**（2026-09 随平台化修复，brassRoomApi.test 锁定回归）——新游戏适配器务必在 `submitDecision` 里接 `options.store`。
 - 前端 spectator 标记在回席/建房/就座时必须复位（`BrassApp`），否则前观战者回到对局看不到手牌。
 - Brass 续局 join/leave 按座位凭证路由（`/rematch/join` 无 seatId 段，与 coup 一致）；旧实现路径不一致导致线上续局无法确认，已修并有回归测试。

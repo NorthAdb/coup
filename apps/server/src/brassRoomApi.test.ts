@@ -242,10 +242,11 @@ describe("brass room api (platform stack)", () => {
     // 重启：房间逐房恢复 + 对局恢复到已提交的最新状态（而非开局初始态）。
     const second = await createApp({ ...hostAppOptions(dbPath), webRoot: await tempWebRoot() });
     try {
+      const viewer = await openSession(second, "http://192.168.1.42:8787");
       const recovery = await second.inject({
         method: "GET",
         url: "/api/brass/room-recovery",
-        headers: { origin: "http://192.168.1.42:8787" },
+        headers: headersWith(viewer),
       });
       assert.equal(recovery.statusCode, 200);
       const items = (recovery.json() as { items: Array<{ code: string; status: string; game: string; phase: string }> }).items;
@@ -383,11 +384,12 @@ describe("brass room api (platform stack)", () => {
     }
   });
 
-  it("does not throttle unknown brass room lookups", async () => {
+  it("throttles unknown brass room lookups per IP (public-deployment hardening)", async () => {
     const dbPath = await tempDbPath();
     const app = await createApp({ ...hostAppOptions(dbPath), webRoot: await tempWebRoot() });
     try {
-      for (let i = 0; i < 12; i += 1) {
+      // 前 10 次未命中正常 404，之后按 IP 限速 429（与 coup 房号门禁一致）。
+      for (let i = 0; i < 10; i += 1) {
         const miss = await app.inject({
           method: "GET",
           url: "/api/brass/rooms/9999",
@@ -395,6 +397,12 @@ describe("brass room api (platform stack)", () => {
         });
         assert.equal(miss.statusCode, 404);
       }
+      const blocked = await app.inject({
+        method: "GET",
+        url: "/api/brass/rooms/9999",
+        headers: { origin: "http://192.168.1.42:8787" },
+      });
+      assert.equal(blocked.statusCode, 429);
     } finally {
       await app.close();
     }

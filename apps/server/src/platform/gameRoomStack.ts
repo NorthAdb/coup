@@ -75,6 +75,13 @@ export type GameStackRuntime = {
   dissolve: (code: string) => void;
 };
 
+/**
+ * 本地座位（房主浏览器）超过该时长未被看见（GET matches/current），
+ * 且全部远程座位均已离席时，对局房间视为空房可回收。
+ * 没有它，房主关闭浏览器后的对局房间会永远占据房间上限。
+ */
+export const LOCAL_SEAT_GONE_MS = 10 * 60_000;
+
 export function abortReasonFrom(error: unknown): string {
   if (!(error instanceof Error) || !error.message) {
     return "technical_failure";
@@ -136,6 +143,8 @@ export function createGameRoomStack<M extends StackMatch<any>>(
   const now = deps.now;
   const matchesByRoom = new Map<string, M>();
   const roomActivity = new Map<string, { lastActivityAt: number; emptySince: number | null }>();
+  // 房主浏览器在场标记：对局内以本地人凭证 GET/POST matches/current 时刷新。
+  const lastLocalSeen = new Map<string, number>();
   const lastAutoDecisions = new Map<string, { seatId: string; at: number; kind: string; matchId: string }>();
   const recovery = new Map<string, {
     code: string;
@@ -184,16 +193,27 @@ export function createGameRoomStack<M extends StackMatch<any>>(
   }
 
   function isRoomEmpty(room: RoomRecord, match: M | null): boolean {
+    // 大厅/续局等待阶段没有心跳租约可依据：一律按「可回收」处理，
+    // 靠活跃度（任意 GET/POST 刷新 emptySince）维持存活——页面有人轮询就不回收，
+    // 所有人离开后 30 分钟清扫掉，避免「客人占座后失联」的房间永久占坑。
     if (room.phase !== "match") {
-      return !room.seats.some((seat) => seat.kind === "remote_human");
+      return true;
     }
     if (!match) {
-      return !room.seats.some(
-        (seat) => seat.kind === "local_human" || seat.kind === "remote_human",
-      );
+      // 对局阶段但内存中已无进行中的对局（如技术性中止后等待重开）：
+      // 与大厅同语义，靠活跃度维持存活，避免僵尸壳房间永久占坑。
+      return true;
     }
+    let localSeatSeen = false;
     for (const fact of seatFactsOf(match)) {
-      if (fact.controller === "local_human") return false;
+      if (fact.controller === "local_human") {
+        // 房主浏览器仍在对局页轮询 → 房间不空；超过宽限未见 → 视同离开。
+        const seenAt = lastLocalSeen.get(room.code);
+        if (seenAt !== undefined && now() - seenAt < LOCAL_SEAT_GONE_MS) {
+          localSeatSeen = true;
+        }
+        continue;
+      }
       if (fact.controller !== "remote_human") continue;
       if (fact.eliminated) continue;
       const current = presence.get(room.code, fact.seatId);
@@ -201,7 +221,7 @@ export function createGameRoomStack<M extends StackMatch<any>>(
         return false;
       }
     }
-    return true;
+    return !localSeatSeen;
   }
 
   function markRoomActive(code: string) {
@@ -270,6 +290,17 @@ export function createGameRoomStack<M extends StackMatch<any>>(
     turnTimers.set(code, { timeoutId, seatId: deciding, deadlineAt, durationMs, armedForVersion });
   }
 
+  /**
+   * 仅当房间当前没有武装计时器时补武装。用于回席/心跳等「状态恢复」路径：
+   * 欠决策座位离席会把计时器拆除，回席后必须重新倒计时，
+   * 否则该回合失去超时代打保护（回席者可以无限期思考）。
+   * 不能无条件调用 armTurnTimer——那会以 now() 重置 deadline，等于无限顺延。
+   */
+  function ensureTurnTimer(code: string) {
+    if (turnTimers.has(code)) return;
+    armTurnTimer(code);
+  }
+
   async function fireTurnTimeout(code: string, armedForVersion: number) {
     const match = matchesByRoom.get(code);
     if (!match || match.state.stateVersion !== armedForVersion) {
@@ -327,11 +358,16 @@ export function createGameRoomStack<M extends StackMatch<any>>(
 
   function dissolveRoom(code: string, matchId?: string | null, abortReason = "room_idle_reclaimed") {
     const activeMatchId = matchId ?? matchesByRoom.get(code)?.state.matchId;
-    if (activeMatchId && store.getRun(activeMatchId)?.runStatus === "in_progress") {
-      store.technicalAbort(activeMatchId, abortReason);
+    if (activeMatchId) {
+      const run = store.getRun(activeMatchId);
+      // 仅中止本房间的对局；损坏恢复条目可能指向别的房间的 run，不能误伤。
+      if (run && run.runStatus === "in_progress" && run.roomCode === code) {
+        store.technicalAbort(activeMatchId, abortReason);
+      }
     }
     clearTurnTimer(code);
     lastAutoDecisions.delete(code);
+    lastLocalSeen.delete(code);
     registry.dissolve(code);
     deps.roomPersistence.clearRoom(code);
     matchesByRoom.delete(code);
@@ -350,7 +386,9 @@ export function createGameRoomStack<M extends StackMatch<any>>(
       if (!empty) {
         activity.emptySince = null;
       } else if (activity.emptySince === null) {
-        activity.emptySince = activity.lastActivityAt;
+        // 空置时长从「首次观察到空房」起算，而不是最后活动时间：
+        // 这样「房主仍在轮询（活动已停但人在）」与「确实全员离开」可以区分。
+        activity.emptySince = current;
       }
       if (empty && activity.emptySince !== null && current - activity.emptySince >= IDLE_ROOM_RECLAIM_MS) {
         dissolveRoom(code);
@@ -485,7 +523,10 @@ export function createGameRoomStack<M extends StackMatch<any>>(
   // 路由
   // ------------------------------------------------------------------
 
-  app.get(recoveryBase, async (_request, reply) => {
+  app.get(recoveryBase, async (request, reply) => {
+    // 恢复清单枚举所有存续房号（含座位与阶段），不能匿名获取——
+    // 否则等于绕过房号限速门禁（ADR-0007）直接广播全部房号。
+    if (!deps.requireSession(request, reply)) return;
     const items = [...recovery.values()].map((item) => ({
       code: item.code,
       status: item.status,
@@ -506,6 +547,11 @@ export function createGameRoomStack<M extends StackMatch<any>>(
     }
     const item = recovery.get(roomCode);
     if (!item) return reply.code(404).send({ error: "recovery_room_not_found" });
+    if (item.status === "restored") {
+      // 活房间不接受「放弃」：任何持会话者都不能凭 4 位房号终止他人对局
+      // （ABANDON 曾是无门禁的杀局通道）。活房交给空房回收或对局内处置。
+      return reply.code(409).send({ error: "restored_room_active" });
+    }
     dissolveRoom(roomCode, item.room?.matchId, "host_restart_abandoned");
     recovery.delete(roomCode);
     return reply.send({ status: "none", abandoned: true, roomCode });
@@ -767,6 +813,9 @@ export function createGameRoomStack<M extends StackMatch<any>>(
     presence.trackSeat(room.code, holder.seatId);
     presence.noteHeartbeat(room.code, holder.seatId, t);
     tickPresence(room.code);
+    // 心跳若把 reconnecting 座位恢复在场，而计时器此前已被拆除（缺席暂停），
+    // 这里补武装；计时器仍在时不动作（不重置 deadline）。
+    ensureTurnTimer(room.code);
     return reply.send({ ok: true, absences: presence.projectAll(room.code, now()) });
   });
 
@@ -826,6 +875,8 @@ export function createGameRoomStack<M extends StackMatch<any>>(
     deps.appendSetCookie(reply, serializeCookie(SEAT_COOKIE, issued.token));
     presence.resume(room.code, holder.seatId);
     presence.noteHeartbeat(room.code, holder.seatId, now());
+    // 回席后若该座位仍欠决策且计时器已被缺席暂停拆除，重新倒计时。
+    ensureTurnTimer(room.code);
     return reply.send({
       resumed: true,
       seat: { seatId: holder.seatId, kind: holder.kind, displayName: holder.displayName },
@@ -947,6 +998,11 @@ export function createGameRoomStack<M extends StackMatch<any>>(
       if (!seatId && !wantsSpectate) {
         return reply.code(403).send({ error: "seat_credential_required" });
       }
+      // 本地人（房主浏览器）仍在轮询对局 → 刷新在场标记（空房回收依据之一）。
+      if (seatId) {
+        const fact = seatFactsOf(activeMatch).find((entry) => entry.seatId === seatId);
+        if (fact?.controller === "local_human") lastLocalSeen.set(room.code, now());
+      }
       tickPresence(room.code);
       const tail = sharedTail(room.code);
 
@@ -979,6 +1035,11 @@ export function createGameRoomStack<M extends StackMatch<any>>(
       if (!activeMatch) return reply.code(404).send({ error: "no_active_match" });
       const seatId = resolveMatchSeatId(request, room.code, activeMatch);
       if (!seatId) return reply.code(403).send({ error: "seat_credential_required" });
+      // 提交决策本身即在场证明（房主或客人都适用；客人另有心跳租约）。
+      {
+        const fact = seatFactsOf(activeMatch).find((entry) => entry.seatId === seatId);
+        if (fact?.controller === "local_human") lastLocalSeen.set(room.code, now());
+      }
       tickPresence(room.code);
       const absence = presence.get(room.code, seatId);
       if (absence && (absence.phase === "absent" || absence.phase === "timed_out")) {

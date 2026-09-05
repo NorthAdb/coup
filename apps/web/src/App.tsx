@@ -537,8 +537,14 @@ export function App() {
           }
         }
       }
-    } catch {
-      /* ignore poll errors */
+    } catch (err) {
+      // 404 → 房间已被清扫/解散：明确告知并退回首页，避免停在死房间页。
+      if ((err as { status?: number }).status === 404) {
+        setRoom(null);
+        setView(null);
+        setScreen("home");
+        setError("房间已解散或已被回收");
+      }
     }
   }
 
@@ -570,7 +576,14 @@ export function App() {
         if (cancelled) return;
         setRoom(found);
         setLobbySeats(found.seats ?? []);
-      } catch {
+      } catch (err) {
+        if ((err as { status?: number }).status === 404) {
+          setRoom(null);
+          setView(null);
+          setScreen("home");
+          setError("房间已解散或已被回收");
+          return;
+        }
         /* keep waiting */
       }
     };

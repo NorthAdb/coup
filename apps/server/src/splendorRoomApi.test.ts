@@ -311,10 +311,11 @@ describe("splendor room api (platform stack)", () => {
     // 重启：房间逐房恢复 + 对局恢复到已提交的最新状态（而非开局初始态）。
     const second = await createApp({ ...hostAppOptions(dbPath), webRoot: await tempWebRoot() });
     try {
+      const viewer = await openSession(second, "http://192.168.1.42:8787");
       const recovery = await second.inject({
         method: "GET",
         url: "/api/splendor/room-recovery",
-        headers: { origin: "http://192.168.1.42:8787" },
+        headers: headersWith(viewer),
       });
       assert.equal(recovery.statusCode, 200);
       const items = (recovery.json() as { items: Array<{ code: string; status: string; game: string; phase: string }> }).items;

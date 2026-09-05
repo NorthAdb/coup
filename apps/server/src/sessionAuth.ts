@@ -14,16 +14,25 @@ export type SessionStore = {
   get(id: string): SessionRecord | null;
 };
 
-export function createSessionStore(): SessionStore {
-  const sessions = new Map<string, SessionRecord>();
+/** 公网部署防内存泄漏：会话总数上限（匿名会话无需注销，超限按创建序驱逐）。 */
+export const MAX_SESSIONS = 10_000;
+
+export function createSessionStore(cap: number = MAX_SESSIONS): SessionStore {
+  const sessions = new Map<string, SessionRecord & { createdAt: number }>();
   return {
     create() {
-      const record: SessionRecord = {
+      while (sessions.size >= cap) {
+        const oldest = sessions.keys().next().value;
+        if (oldest === undefined) break;
+        sessions.delete(oldest);
+      }
+      const record: SessionRecord & { createdAt: number } = {
         id: randomBytes(24).toString("base64url"),
         csrfToken: randomBytes(24).toString("base64url"),
+        createdAt: Date.now(),
       };
       sessions.set(record.id, record);
-      return record;
+      return { id: record.id, csrfToken: record.csrfToken };
     },
     get(id) {
       return sessions.get(id) ?? null;

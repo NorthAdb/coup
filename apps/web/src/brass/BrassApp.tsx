@@ -123,15 +123,22 @@ export function BrassApp() {
         if (invite.phase === "match") {
           setScreen("play");
         }
-      } catch {
-        // 404 → 房间已被清扫
+      } catch (e) {
+        // 404 → 房间已被清扫/解散：明确告知并退回首页，避免停在死房间页。
+        if (!alive) return;
+        if ((e as { status?: number }).status === 404) {
+          setRoom(null);
+          setScreen("home");
+          showToast("房间已解散或已被回收");
+          window.history.replaceState(null, "", "/brass");
+        }
       }
     }, 1500);
     return () => {
       alive = false;
       clearInterval(timer);
     };
-  }, [screen, room?.code]);
+  }, [screen, room?.code, showToast]);
 
   // 对局轮询（增量）。
   useEffect(() => {

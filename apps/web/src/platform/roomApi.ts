@@ -230,8 +230,13 @@ export function createRoomClient(prefix: string): RoomClient {
     async declineRematch(origin, code) {
       return sendJson("POST", path(origin, `/rooms/${code}/rematch/leave`));
     },
-    fetchRecovery(origin = "") {
-      return getJson(path(origin, "/room-recovery"));
+    async fetchRecovery(origin = "") {
+      // 恢复清单需要会话（服务端已收紧）；首次访问先引导建立会话再携带 CSRF。
+      const base = origin.startsWith("http") ? origin : "";
+      await ensureSession(base);
+      const response = await authedFetch(path(origin, "/room-recovery"));
+      if (!response.ok) await parseErrorResponse(response);
+      return (await response.json()) as unknown;
     },
     async abandonRecovery(origin, roomCode) {
       return sendJson("POST", path(origin, "/room-recovery/abandon"), { roomCode });

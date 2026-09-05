@@ -37,7 +37,16 @@ Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 ### 迭代纪律（用户预期的工作方式）
 
 - 每轮改动：本地浏览器实测 → `npm test` + `npm run typecheck` 全绿 → 中文提交信息（写清动机）→ 部署 → 线上复验 → 中文汇报。
-- 测试规模基线：全仓 272 项（domain 23 / brass-domain 21 / splendor-domain 18 / server 104 / web-desk 32 / web 8 / server-local 62 / web-local 4），总数变化时更新 README。
+- 测试规模基线：全仓 279 项（domain 23 / brass-domain 21 / splendor-domain 18 / server 111 / web-desk 32 / web 8 / server-local 62 / web-local 4），总数变化时更新 README。
+
+### 公网安全与房间回收语义（2026-09 上线审计沉淀）
+
+- `GET /api(/<game>)/room-recovery` 需要会话（防房号枚举绕过限速门禁）；前端 `roomApi.fetchRecovery` 已先 `ensureSession` 再带 CSRF。
+- `POST …/room-recovery/abandon` 拒绝 `restored`（活）房间（409 `restored_room_active`）——活房间交给空房回收或对局内处置，不能凭会话+房号杀局；failed/migration 条目仍可 abandon。
+- 空房回收（`gameRoomStack.isRoomEmpty`）：大厅/续局/「对局阶段但内存无对局」一律按可回收，靠活跃度（任意 GET/POST 刷新 emptySince）续命；对局中要求「全部远程座位离席 + 本地座位 10 分钟未见」（`LOCAL_SEAT_GONE_MS`，由 GET/POST matches/current 以本地凭证刷新）。空置从「首次观察到」起算 30 分钟。测试断言存活要用 `/presence`（`GET /:code` 本身算活动）。
+- 回席/心跳必须 `ensureTurnTimer` 补武装回合计时器（缺席暂停会拆计时器）；不能用 `armTurnTimer` 无条件重置 deadline（等于无限顺延）。回归：turnTimerApi.test「re-arms after resume」。
+- 会话存储有上限（`MAX_SESSIONS=10000`，FIFO 驱逐）；brass/splendor 房号查询限速已开（与 coup 一致，10 次未命中/分钟 → 429）。
+- 三端大厅轮询 404 会提示「房间已解散或已被回收」并退回首页（coup/brass/splendor App）。
 
 ### 平台层（ADR-0010，2026-09 落地）
 

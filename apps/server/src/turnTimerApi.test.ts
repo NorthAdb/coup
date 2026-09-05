@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import { createApp } from "./createApp.js";
+import { GRACE_MS } from "./seatAbsence.js";
+import { HEARTBEAT_LEASE_MS } from "./seatPresenceTracker.js";
 
 const tempDirs: string[] = [];
 
@@ -311,6 +313,120 @@ describe("turn deadline & auto decision", () => {
       });
       const body = first.json() as { turnDeadline: unknown };
       assert.equal(body.turnDeadline, null);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("absence pause & resume", () => {
+  it("re-arms the turn deadline after the deciding seat resumes from absence", async () => {
+    let clock = 1_000_000;
+    const app = await createApp({
+      webRoot: await tempWebRoot(),
+      dbPath: await tempDbPath(),
+      hosting: HOSTING,
+      listNetworkInterfaces: IFACES,
+      now: () => clock,
+    });
+    try {
+      const { code, host, guest } = await setupTwoPlayerRoom(app, {
+        turnTimeLimitSec: 2,
+      });
+
+      // 房主宣布 steal 指向 2 号座位 → 响应窗口由客人（远程座位）欠决策。
+      const first = await app.inject({
+        method: "GET",
+        url: `/api/rooms/${code}/matches/current`,
+        headers: { origin: "http://192.168.1.42:8787", cookie: host.cookie },
+      });
+      assert.equal(first.statusCode, 200);
+      const firstBody = first.json() as { view: { stateVersion: number } };
+      const declared = await app.inject({
+        method: "POST",
+        url: `/api/rooms/${code}/matches/current/decision`,
+        headers: {
+          origin: "http://192.168.1.42:8787",
+          cookie: host.cookie,
+          "x-csrf-token": host.csrfToken,
+          "content-type": "application/json",
+        },
+        payload: {
+          protocolVersion: 1,
+          requestId: "declare-steal",
+          stateVersion: firstBody.view.stateVersion,
+          decision: {
+            type: "declare_action",
+            action: { type: "steal", targetSeatId: "2" },
+          },
+        },
+      });
+      assert.equal(declared.statusCode, 200);
+      const declaredBody = declared.json() as {
+        turnDeadline: { seatId: string } | null;
+      };
+      assert.equal(declaredBody.turnDeadline?.seatId, "2");
+
+      // 客人报一次心跳后失联：租约过期 → 重连宽限 → 离席（注入时钟推进）。
+      const beat = await app.inject({
+        method: "POST",
+        url: `/api/rooms/${code}/heartbeat`,
+        headers: {
+          origin: "http://192.168.1.42:8787",
+          cookie: guest.cookie,
+          "x-csrf-token": guest.csrfToken,
+        },
+      });
+      assert.equal(beat.statusCode, 200);
+      clock += HEARTBEAT_LEASE_MS + 1;
+      clock += GRACE_MS + 1;
+      const presence = await app.inject({
+        method: "GET",
+        url: `/api/rooms/${code}/presence`,
+        headers: { origin: "http://192.168.1.42:8787", cookie: guest.cookie },
+      });
+      const absences = (presence.json() as {
+        absences: Array<{ seatId: string; phase: string }>;
+      }).absences;
+      assert.equal(
+        absences.find((a) => a.seatId === "2")?.phase,
+        "absent",
+      );
+
+      // 离席暂停：真实计时器到点后应被拆除（turnDeadline 清空），对局不推进。
+      await new Promise((resolve) => setTimeout(resolve, 2300));
+      const whileAbsent = await app.inject({
+        method: "GET",
+        url: `/api/rooms/${code}/matches/current`,
+        headers: { origin: "http://192.168.1.42:8787", cookie: host.cookie },
+      });
+      assert.equal(whileAbsent.statusCode, 200);
+      assert.equal(
+        (whileAbsent.json() as { turnDeadline: unknown }).turnDeadline,
+        null,
+      );
+
+      // 回席：凭证轮换 + 计时器必须重新武装（否则该回合失去超时代打保护）。
+      const resumed = await app.inject({
+        method: "POST",
+        url: `/api/rooms/${code}/resume-seat`,
+        headers: {
+          origin: "http://192.168.1.42:8787",
+          cookie: guest.cookie,
+          "x-csrf-token": guest.csrfToken,
+        },
+      });
+      assert.equal(resumed.statusCode, 200);
+      const rearmed = await app.inject({
+        method: "GET",
+        url: `/api/rooms/${code}/matches/current`,
+        headers: { origin: "http://192.168.1.42:8787", cookie: host.cookie },
+      });
+      const rearmedBody = rearmed.json() as {
+        turnDeadline: { seatId: string; durationMs: number } | null;
+      };
+      assert.equal(rearmedBody.turnDeadline?.seatId, "2");
+      assert.equal(rearmedBody.turnDeadline?.durationMs, 2000);
     } finally {
       await app.close();
     }

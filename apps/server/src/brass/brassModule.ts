@@ -49,7 +49,8 @@ export const brassModule: GameModule<ActiveBrassMatch> = {
   seatCount: 4,
   maxRooms: 10,
   createRequiresLanHost: false,
-  throttleRoomLookup: false,
+  // 公网部署：未知房号查询按 IP 限速，防止 4 位房号被快速穷举（与 coup 一致）。
+  throttleRoomLookup: true,
   recoveryListKey: "items",
 
   newMatchId: newBrassMatchId,

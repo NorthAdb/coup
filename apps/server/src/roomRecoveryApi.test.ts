@@ -176,6 +176,26 @@ async function startMatchFromLobby(
 }
 
 describe("host restart room recovery", () => {
+  it("requires a session for the recovery list (no anonymous code enumeration)", async () => {
+    const webRoot = await tempWebRoot();
+    const dbPath = await tempDbPath();
+    const app = await createApp({
+      webRoot,
+      dbPath,
+      ...hostAppOptions(),
+    });
+    try {
+      const anonymous = await app.inject({
+        method: "GET",
+        url: "/api/room-recovery",
+        headers: { origin: "http://192.168.1.42:8787" },
+      });
+      assert.equal(anonymous.statusCode, 401);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("restores lobby room after process restart (same db)", async () => {
     const webRoot = await tempWebRoot();
     const dbPath = await tempDbPath();
@@ -194,10 +214,15 @@ describe("host restart room recovery", () => {
       ...hostAppOptions(),
     });
     try {
+      const viewer = await openSession(second, "http://192.168.1.42:8787");
       const recovery = await second.inject({
         method: "GET",
         url: "/api/room-recovery",
-        headers: { origin: "http://192.168.1.42:8787" },
+        headers: {
+          origin: viewer.origin,
+          cookie: viewer.cookie,
+          "x-csrf-token": viewer.csrfToken,
+        },
       });
       assert.equal(recovery.statusCode, 200);
       const body = recovery.json() as {
@@ -266,10 +291,15 @@ describe("host restart room recovery", () => {
       ...hostAppOptions(),
     });
     try {
+      const viewer = await openSession(second, "http://192.168.1.42:8787");
       const recovery = await second.inject({
         method: "GET",
         url: "/api/room-recovery",
-        headers: { origin: "http://192.168.1.42:8787" },
+        headers: {
+          origin: viewer.origin,
+          cookie: viewer.cookie,
+          "x-csrf-token": viewer.csrfToken,
+        },
       });
       assert.equal(recovery.statusCode, 200);
       const body = recovery.json() as {
@@ -452,7 +482,7 @@ describe("host restart room recovery", () => {
     }
   });
 
-  it("blocks creating a new room while a restored room is active until abandoned", async () => {
+  it("refuses to abandon a restored (live) room; create stays available", async () => {
     const webRoot = await tempWebRoot();
     const dbPath = await tempDbPath();
 
@@ -470,27 +500,22 @@ describe("host restart room recovery", () => {
       ...hostAppOptions(),
     });
     try {
+      const host = await openSession(second, "http://192.168.1.42:8787");
       const recovery = await second.inject({
         method: "GET",
         url: "/api/room-recovery",
-      });
-      assert.equal(
-        (recovery.json() as { rooms: Array<{ status: string }> }).rooms[0]?.status,
-        "restored",
-      );
-
-      const host = await openSession(second, "http://192.168.1.42:8787");
-      const blocked = await second.inject({
-        method: "POST",
-        url: "/api/rooms",
         headers: {
           origin: host.origin,
           cookie: host.cookie,
           "x-csrf-token": host.csrfToken,
         },
       });
-      assert.equal(blocked.statusCode, 200);
+      assert.equal(
+        (recovery.json() as { rooms: Array<{ status: string }> }).rooms[0]?.status,
+        "restored",
+      );
 
+      // 活房间不可凭会话+房号放弃（否则等于开放的杀局通道）。
       const abandoned = await second.inject({
         method: "POST",
         url: "/api/room-recovery/abandon",
@@ -502,14 +527,19 @@ describe("host restart room recovery", () => {
         },
         payload: { roomCode: ctx.code },
       });
-      assert.equal(abandoned.statusCode, 200);
+      assert.equal(abandoned.statusCode, 409);
+      assert.equal(
+        (abandoned.json() as { error: string }).error,
+        "restored_room_active",
+      );
 
       const oldRoom = await second.inject({
         method: "GET",
         url: `/api/rooms/${ctx.code}`,
       });
-      assert.equal(oldRoom.statusCode, 404);
+      assert.equal(oldRoom.statusCode, 200);
 
+      // 多房制下新房间照常可建。
       const created = await second.inject({
         method: "POST",
         url: "/api/rooms",
@@ -549,9 +579,15 @@ describe("host restart room recovery", () => {
       ...hostAppOptions(),
     });
     try {
+      const host = await openSession(second, "http://192.168.1.42:8787");
       const recovery = await second.inject({
         method: "GET",
         url: "/api/room-recovery",
+        headers: {
+          origin: host.origin,
+          cookie: host.cookie,
+          "x-csrf-token": host.csrfToken,
+        },
       });
       assert.equal(recovery.statusCode, 200);
       const recoveryBody = recovery.json() as {
@@ -560,7 +596,6 @@ describe("host restart room recovery", () => {
       assert.equal(recoveryBody.rooms[0]?.status, "failed");
       assert.equal(recoveryBody.rooms[0]?.reason, "corrupt");
 
-      const host = await openSession(second, "http://192.168.1.42:8787");
       const blocked = await second.inject({
         method: "POST",
         url: "/api/rooms",
@@ -641,7 +676,16 @@ describe("host restart room recovery", () => {
       ...hostAppOptions(),
     });
     try {
-      const recovery = await app.inject({ method: "GET", url: "/api/room-recovery" });
+      const host = await openSession(app, "http://192.168.1.42:8787");
+      const recovery = await app.inject({
+        method: "GET",
+        url: "/api/room-recovery",
+        headers: {
+          origin: host.origin,
+          cookie: host.cookie,
+          "x-csrf-token": host.csrfToken,
+        },
+      });
       assert.equal(recovery.statusCode, 200);
       const body = recovery.json() as { rooms: Array<{ code: string; status: string; reason: string }> };
       assert.deepEqual(body.rooms, [{
@@ -654,7 +698,6 @@ describe("host restart room recovery", () => {
         seats: [],
       }]);
 
-      const host = await openSession(app, "http://192.168.1.42:8787");
       const abandoned = await app.inject({
         method: "POST",
         url: "/api/room-recovery/abandon",
@@ -667,7 +710,20 @@ describe("host restart room recovery", () => {
         payload: { roomCode: "migration:corrupt" },
       });
       assert.equal(abandoned.statusCode, 200);
-      assert.deepEqual((await app.inject({ method: "GET", url: "/api/room-recovery" })).json(), { rooms: [] });
+      assert.deepEqual(
+        (
+          await app.inject({
+            method: "GET",
+            url: "/api/room-recovery",
+            headers: {
+              origin: host.origin,
+              cookie: host.cookie,
+              "x-csrf-token": host.csrfToken,
+            },
+          })
+        ).json(),
+        { rooms: [] },
+      );
     } finally {
       await app.close();
     }
@@ -696,9 +752,15 @@ describe("host restart room recovery", () => {
       ...hostAppOptions(),
     });
     try {
+      const host = await openSession(second, "http://192.168.1.42:8787");
       const recovery = await second.inject({
         method: "GET",
         url: "/api/room-recovery",
+        headers: {
+          origin: host.origin,
+          cookie: host.cookie,
+          "x-csrf-token": host.csrfToken,
+        },
       });
       assert.equal(recovery.statusCode, 200);
       const body = recovery.json() as {
@@ -715,7 +777,6 @@ describe("host restart room recovery", () => {
       assert.ok(restored);
       assert.notEqual(failed.code, restored.code);
 
-      const host = await openSession(second, "http://192.168.1.42:8787");
       const abandoned = await second.inject({
         method: "POST",
         url: "/api/room-recovery/abandon",
@@ -732,6 +793,11 @@ describe("host restart room recovery", () => {
       const after = await second.inject({
         method: "GET",
         url: "/api/room-recovery",
+        headers: {
+          origin: host.origin,
+          cookie: host.cookie,
+          "x-csrf-token": host.csrfToken,
+        },
       });
       const afterBody = after.json() as {
         rooms: Array<{ code: string; status: string }>;

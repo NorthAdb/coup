@@ -236,7 +236,12 @@ export function HostInvitePanel({
                 <p className="gate-hint ok">
                   {inRematch
                     ? "全员已确认。点「开始新对局」正式开新局。"
-                    : "门禁通过：有效座 2–6，无空位遗留。"}
+                    : (() => {
+                        const bots = seats.filter((seat) => seat.kind === "bot").length;
+                        return bots > 0
+                          ? `门禁通过：${occupiedCount} 个有效座位（含 ${bots} 个 AI 队友），无空位遗留。`
+                          : "门禁通过：有效座 2–6，无空位遗留。";
+                      })()}
                 </p>
               )}
             </>

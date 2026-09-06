@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties, ReactElement } from "react";
+import type { ReactElement } from "react";
 import type { CatanCommand } from "@coup/catan-domain";
 import { CatanTable, RulesModal } from "./table/CatanTable.js";
+import { GameRoomScreen } from "../platform/RoomUi.js";
 import {
   catanErrorText,
   claimCatanSeat,
@@ -20,7 +21,6 @@ import {
   startCatanMatchOn,
   submitCatanCommand,
   updateCatanSettings,
-  type CatanLobbySeat,
   type CatanMatchPollBody,
   type CatanRoomInvite,
   type CatanView,
@@ -34,7 +34,6 @@ import {
 
 type Screen = "home" | "room" | "play";
 
-const TURN_TIME_CHOICES = [0, 30, 60, 90, 120];
 const NAME_KEY = "catan.playerName";
 
 function initialScreen(): { screen: Screen; code: string | null } {
@@ -407,143 +406,85 @@ export function CatanApp(): ReactElement {
 
   if (screen === "room" && room) {
     const isHost = mySeatId === "1";
-    const seats = room.seats ?? [];
-    const filled = seats.filter((s) => s.kind === "local_human" || s.kind === "remote_human" || s.kind === "bot").length;
-    const openRemain = seats.some((s) => s.kind === "open");
-    const rematchStatus = room.phase === "rematch";
     return (
-      <div className="ct-app">
-        <div className="ct-app-glow" aria-hidden="true" />
-        <main className="ct-lobby">
-          <p className="ct-lobby-kicker">卡坦岛 · 房间号</p>
-          <h1 className="ct-lobby-code">
-            <b>{room.code}</b>
-          </h1>
-          <p className="ct-lobby-hint">
-            把四位房号告诉朋友，访问 <code>{`${window.location.origin}/catan/join?code=${room.code}`}</code> 入座；
-            缺的座位可以交给 AI 船长。
-          </p>
-          <div className="ct-lobbybtns" style={{ justifyContent: "center" }}>
-            <button
-              type="button"
-              className="ct-actbtn"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(`${window.location.origin}/catan/join?code=${room.code}`);
-                  showToast("邀请链接已复制");
-                } catch {
-                  showToast("复制失败，请手动复制房号");
-                }
-              }}
-            >
-              复制邀请链接
-            </button>
-          </div>
-          <ul className="ct-lobbyseats">
-            {seats.map((seat) => (
-              <LobbySeatRow
-                key={seat.seatId}
-                seat={seat}
-                isHost={isHost}
-                isMe={mySeatId === seat.seatId}
-                onClaim={() => void handleClaimSeat(seat.seatId)}
-                onConfigure={(kind) => void handleConfigure(seat.seatId, kind)}
-                onLeave={() => void handleLeaveSeat()}
-                displayName={displayName || "旅人"}
-                onRename={async (name) => {
-                  setDisplayName(name);
-                  saveName(name);
-                  try {
-                    await renameCatanSeat(room.code, seat.seatId, name);
-                  } catch {
-                    /* 改名失败不打扰 */
-                  }
-                }}
-              />
-            ))}
-          </ul>
-          {rematchStatus ? (
-            mySeatId != null && mySeatId !== "1" ? (
-              <div className="ct-lobbybtns">
-                <button
-                  type="button"
-                  className="ct-actbtn ct-actbtn--primary"
-                  onClick={async () => {
-                    try {
-                      await confirmCatanRematch(room.code);
-                      showToast("已确认续局，等房主开局");
-                    } catch (e) {
-                      showToast(catanErrorText(e));
-                    }
-                  }}
-                >
-                  确认加入续局
-                </button>
-                <button
-                  type="button"
-                  className="ct-actbtn"
-                  onClick={async () => {
-                    try {
-                      await declineCatanRematch(room.code);
-                      showToast("已离开续局等待");
-                    } catch (e) {
-                      showToast(catanErrorText(e));
-                    }
-                  }}
-                >
-                  离开
-                </button>
-              </div>
-            ) : (
-              <p className="ct-lobby-hint">等待客人确认加入续局…</p>
-            )
-          ) : isHost && room.phase === "lobby" ? (
-            <div className="ct-lobbybtns">
-              <label className="ct-timelimit" title="回合限时">
-                回合限时
-                <select
-                  value={String(room.turnTimeLimitSec ?? 60)}
-                  onChange={(e) => void handleSettings(Number(e.target.value))}
-                >
-                  {TURN_TIME_CHOICES.map((sec) => (
-                    <option key={sec} value={String(sec)}>
-                      {sec === 0 ? "不限时" : `${sec} 秒`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                className="ct-actbtn ct-actbtn--primary"
-                disabled={busy}
-                title={openRemain ? "仍有开放空位，开局时会自动关闭" : "全体就绪"}
-                onClick={() => void handleStart()}
-              >
-                开始游戏
-              </button>
-              <button
-                type="button"
-                className="ct-actbtn"
-                onClick={() => {
-                  setRoom(null);
-                  setMySeatId(null);
-                  setScreen("home");
-                  window.history.replaceState(null, "", "/catan");
-                }}
-              >
-                解散并离开
-              </button>
-            </div>
-          ) : (
-            <p className="ct-lobby-hint">
-              {filled > 0 ? `已有 ${filled} 位就座` : "等待房主开局…"}
-              {mySeatId == null ? " —— 点「就座」加入" : ""}
-            </p>
-          )}
-        </main>
-        {rulesOpen ? <RulesModal onClose={() => setRulesOpen(false)} /> : null}
+      <>
+        <GameRoomScreen
+          game="catan"
+          homeHref="/catan"
+          title="卡坦岛"
+          code={room.code}
+          seats={room.seats ?? []}
+          phase={room.phase}
+          isHost={isHost}
+          mySeatId={mySeatId}
+          busy={busy}
+          displayName={displayName}
+          onDisplayNameChange={(name) => {
+            setDisplayName(name);
+            saveName(name);
+          }}
+          onRename={async () => {
+            if (!mySeatId) return;
+            try {
+              await renameCatanSeat(room.code, mySeatId, displayName);
+            } catch {
+              /* 改名失败不打扰 */
+            }
+          }}
+          onClaim={(seatId) => void handleClaimSeat(seatId)}
+          onConfigure={(seatId, kind) => void handleConfigure(seatId, kind)}
+          onLeaveSeat={() => void handleLeaveSeat()}
+          onStart={() => void handleStart()}
+          startLabel="开始游戏"
+          minSeats={3}
+          turnTimeLimitSec={room.turnTimeLimitSec ?? 60}
+          onTurnTimeLimitChange={(sec) => void handleSettings(sec)}
+          hostHint="空位将在开局时自动关闭；缺的座位也可以交给 AI 船长。"
+          waitingNote="保持本页打开，掉线 15 秒内回到本页可自动回席。"
+          rematchSlot={
+            <section className="proom-panel">
+              <h3 className="proom-panel-title">续局等待</h3>
+              {isHost ? (
+                <p className="proom-hint">等待客人确认加入续局；全员确认后点「开始游戏」开新局。</p>
+              ) : (
+                <div className="proom-chiprow">
+                  <button
+                    type="button"
+                    className="proom-btn proom-btn--primary"
+                    disabled={busy}
+                    onClick={async () => {
+                      try {
+                        await confirmCatanRematch(room.code);
+                        showToast("已确认续局，等房主开局");
+                      } catch (e) {
+                        showToast(catanErrorText(e));
+                      }
+                    }}
+                  >
+                    确认加入续局
+                  </button>
+                  <button
+                    type="button"
+                    className="proom-btn"
+                    disabled={busy}
+                    onClick={async () => {
+                      try {
+                        await declineCatanRematch(room.code);
+                        showToast("已离开续局等待");
+                      } catch (e) {
+                        showToast(catanErrorText(e));
+                      }
+                    }}
+                  >
+                    离开
+                  </button>
+                </div>
+              )}
+            </section>
+          }
+        />
         {error ? <div className="ct-toast ct-toast--fixed">{error}</div> : null}
-      </div>
+      </>
     );
   }
 
@@ -608,95 +549,5 @@ export function CatanApp(): ReactElement {
       {rulesOpen ? <RulesModal onClose={() => setRulesOpen(false)} /> : null}
       {error ? <div className="ct-toast ct-toast--fixed">{error}</div> : null}
     </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* 大厅座位卡                                                          */
-/* ------------------------------------------------------------------ */
-
-function LobbySeatRow({
-  seat,
-  isHost,
-  isMe,
-  onClaim,
-  onConfigure,
-  onLeave,
-  displayName,
-  onRename,
-}: {
-  seat: CatanLobbySeat;
-  isHost: boolean;
-  isMe: boolean;
-  onClaim: () => void;
-  onConfigure: (kind: "open" | "closed" | "bot") => void;
-  onLeave: () => void;
-  displayName: string;
-  onRename: (name: string) => void;
-}): ReactElement {
-  const isYou = seat.kind === "local_human";
-  const label =
-    seat.kind === "local_human"
-      ? "房主（你）"
-      : seat.kind === "remote_human"
-        ? `${seat.displayName ?? "客人"}${isMe ? "（你）" : ""}`
-        : seat.kind === "bot"
-          ? `🤖 ${seat.displayName ?? "AI 队友"}`
-          : seat.kind === "open"
-            ? "虚位以待"
-            : "已关闭";
-  return (
-    <li className={`ct-lobbyseat${seat.kind !== "open" && seat.kind !== "closed" ? " is-filled" : ""}${isYou || (isMe && seat.kind === "remote_human") ? " is-you" : ""}${seat.kind === "bot" ? " is-bot" : ""}`}>
-      <i className="ct-lobbyseat-chip" style={{ "--ci": Number(seat.seatId) - 1 } as CSSProperties} aria-hidden="true" />
-      <b className={seat.kind === "open" || seat.kind === "closed" ? "is-empty" : ""}>{label}</b>
-      {isYou ? (
-        <input
-          className="ct-lobbyseat-name"
-          value={displayName}
-          maxLength={12}
-          onChange={(e) => onRename(e.target.value)}
-          aria-label="你的名字"
-        />
-      ) : null}
-      {seat.rematchStatus === "confirmed" ? <span className="ct-badge-you">已确认</span> : null}
-      {isHost && seat.seatId !== "1" && seat.kind === "open" ? (
-        <span className="ct-lobbyseat-actions">
-          <button type="button" className="ct-actbtn ct-actbtn--small" onClick={onConfigure.bind(null, "bot")}>
-            加AI
-          </button>
-          <button type="button" className="ct-actbtn ct-actbtn--small" onClick={onConfigure.bind(null, "closed")}>
-            关闭
-          </button>
-        </span>
-      ) : null}
-      {isHost && seat.kind === "bot" ? (
-        <span className="ct-lobbyseat-actions">
-          <button type="button" className="ct-actbtn ct-actbtn--small" onClick={onConfigure.bind(null, "open")}>
-            撤下AI
-          </button>
-        </span>
-      ) : null}
-      {isHost && seat.kind === "closed" ? (
-        <span className="ct-lobbyseat-actions">
-          <button type="button" className="ct-actbtn ct-actbtn--small" onClick={onConfigure.bind(null, "open")}>
-            重新开放
-          </button>
-        </span>
-      ) : null}
-      {!isHost && seat.kind === "open" && !isMe ? (
-        <span className="ct-lobbyseat-actions">
-          <button type="button" className="ct-actbtn ct-actbtn--small" onClick={onClaim}>
-            就座
-          </button>
-        </span>
-      ) : null}
-      {isMe && seat.kind === "remote_human" ? (
-        <span className="ct-lobbyseat-actions">
-          <button type="button" className="ct-actbtn ct-actbtn--small" onClick={onLeave}>
-            让出座位
-          </button>
-        </span>
-      ) : null}
-    </li>
   );
 }

@@ -847,6 +847,16 @@ button:disabled {
   --pr-bg-2: #150d06;
 }
 
+.proom[data-game="catan"] {
+  --pr-accent: #c9a35c;
+  --pr-accent-bright: #eed9a4;
+  --pr-accent-soft: rgba(201, 163, 92, 0.16);
+  --pr-glow: rgba(201, 163, 92, 0.12);
+  --pr-bg-0: #22150a;
+  --pr-bg-1: #1a1109;
+  --pr-bg-2: #120b05;
+}
+
 .proom-top {
   display: flex;
   align-items: center;

@@ -177,7 +177,7 @@ export function GameHomeScreen(props: {
 }
 
 export function GameRoomScreen(props: {
-  game: "brass" | "splendor";
+  game: "brass" | "splendor" | "catan";
   homeHref: string;
   title: string;
   code: string;
@@ -201,6 +201,10 @@ export function GameRoomScreen(props: {
   spectateAvailable?: boolean;
   onSpectate?: () => void;
   waitingNote?: string;
+  /** 开局所需最少有效座位（人类 + AI）；默认 2，卡坦为 3。 */
+  minSeats?: number;
+  /** 续局阶段的自定义面板（如卡坦的客人确认按钮）；phase 为 rematch 时替换左侧设置/等待面板。 */
+  rematchSlot?: ReactNode;
 }): ReactElement {
   const {
     game,
@@ -227,6 +231,8 @@ export function GameRoomScreen(props: {
     spectateAvailable = true,
     onSpectate,
     waitingNote,
+    minSeats = 2,
+    rematchSlot,
   } = props;
   const joinUrl = `${window.location.origin}${homeHref}/join?code=${code}`;
   const occupiedCount = seats.filter(
@@ -282,12 +288,12 @@ export function GameRoomScreen(props: {
                 <button
                   type="button"
                   className="proom-btn proom-btn--primary proom-start"
-                  disabled={busy || occupiedCount < 2}
+                  disabled={busy || occupiedCount < minSeats}
                   title={
                     openCount > 0
                       ? "仍有开放空位：开局时将自动关闭"
-                      : occupiedCount < 2
-                        ? "至少需要 2 个有效座位（人类或 AI）"
+                      : occupiedCount < minSeats
+                        ? `至少需要 ${minSeats} 个有效座位（人类或 AI）`
                         : "全体就绪"
                   }
                   onClick={onStart}
@@ -296,6 +302,8 @@ export function GameRoomScreen(props: {
                 </button>
                 {hostHint ? <p className="proom-hint">{hostHint}</p> : null}
               </section>
+            ) : phase === "rematch" && rematchSlot ? (
+              rematchSlot
             ) : (
               <section className="proom-panel">
                 <h3 className="proom-panel-title">等待房主开局</h3>
@@ -332,6 +340,8 @@ export function GameRoomScreen(props: {
                 )}
               </section>
             )}
+            {/* 房主在续局阶段：设置/开局面板保留（全员确认后点「开局」开新局），其下附加续局状态面板。 */}
+            {isHost && phase === "rematch" && rematchSlot ? rematchSlot : null}
           </div>
 
           <section className="proom-panel proom-seats">
